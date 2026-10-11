@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python ${{ matrix.python }}
+      - run: uv pip install -e ".[dev]"
+      - run: uv run --no-sync pytest -q
+      - name: CLI smoke
+        env:
+          COMMONS_DB: ${{ runner.temp }}/ci.db
+        run: |
+          uv run --no-sync commons init
+          uv run --no-sync commons index . --project commons-memory
+          uv run --no-sync commons export-graph --format mermaid --no-items -o graph.mmd
+          uv run --no-sync commons stats

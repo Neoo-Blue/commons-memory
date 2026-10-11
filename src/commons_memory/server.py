@@ -1,0 +1,300 @@
+"""MCP gateway: one server any AI client (Claude, Cursor, ChatGPT connectors, custom agents) connects to.
+
+Transports: stdio (default) and streamable HTTP (`commons serve --transport http`).
+Identity: pass ``api_key`` (from register_agent) on calls, or set COMMONS_API_KEY / COMMONS_AGENT for stdio.
+With COMMONS_REQUIRE_KEYS=1 (default for HTTP), writes without a valid key are rejected.
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from . import a2a
+from .codeindex import code_impact as _impact
+from .codeindex import code_symbols as _symbols
+from .codeindex import index_repo
+from .graphexport import export as _export
+from .secrets import Broker
+from .store import CommonsError, Store
+
+INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
+1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
+2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
+3) session_start → checkpoint → handoff so another AI can resume(). Use inbox() to pick up delegated tasks.
+4) Never write secret values; reference them as env://NAME, vault://path#key, op://vault/item/field."""
+
+
+def _fmt(obj: Any, fmt: str = "text") -> str:
+    if fmt == "text" and isinstance(obj, dict) and "text" in obj:
+        return obj["text"]
+    return json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int = 8765,
+                 require_keys: bool | None = None) -> FastMCP:
+    store = store or Store()
+    broker = Broker(store)
+    if require_keys is None:
+        require_keys = os.environ.get("COMMONS_REQUIRE_KEYS", "0") == "1"
+    mcp = FastMCP("commons", instructions=INSTRUCTIONS, host=host, port=port)
+    mcp.store = store  # type: ignore[attr-defined]
+    mcp.broker = broker  # type: ignore[attr-defined]
+
+    def who(agent: str | None, api_key: str | None, write: bool = True) -> tuple[str | None, bool]:
+        key = api_key or os.environ.get("COMMONS_API_KEY")
+        if key:
+            a = store.authenticate(key)
+            if not a:
+                raise CommonsError("invalid api_key")
+            store.x("UPDATE agents SET last_seen=strftime('%s','now') WHERE id=?", (a["id"],))
+            return a["id"], True
+        if require_keys and write:
+            raise CommonsError("this server requires an api_key for writes (register_agent first)")
+        name = agent or os.environ.get("COMMONS_AGENT")
+        return (store.ensure_agent(name) if name else None), False
+
+    # ---------------------------------------------------------------- memory
+    @mcp.tool()
+    def remember(content: str, title: str = "", project: str = "", tags: list[str] | None = None,
+                 entities: list[str] | None = None, kind: str = "memory", related_ids: list[str] | None = None,
+                 subject: str = "", predicate: str = "", value: str = "", session_id: str = "",
+                 agent: str = "", api_key: str = "") -> str:
+        """Store a memory (note, observation, fact). For facts give subject/predicate/value to enable conflict
+        detection. entities: names or ids to link in the graph. Secrets are auto-redacted; store refs like env://X."""
+        aid, auth = who(agent, api_key)
+        return _fmt(store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
+                                   entities=entities, related_ids=related_ids, subject=subject or None,
+                                   predicate=predicate or None, value=value or None, session_id=session_id or None,
+                                   authenticated=auth), "json")
+
+    @mcp.tool()
+    def search(query: str = "", mode: str = "hybrid", project: str = "", agent_filter: str = "",
+               tags: list[str] | None = None, kinds: list[str] | None = None, entity: str = "", since: str = "",
+               until: str = "", limit: int = 20, max_tokens: int = 600, format: str = "text") -> str:
+        """Hybrid search (mode: hybrid|keyword|semantic). Filters: project, agent_filter, tags, kinds
+        (memory|fact|decision|checkpoint|handoff), entity (name or id), since/until (ISO or '7d','12h').
+        Returns compact one-line summaries with ids within max_tokens; call expand(id) for detail."""
+        return _fmt(store.search(query, mode=mode, project=project or None, agent=agent_filter or None, tags=tags,
+                                 kinds=kinds, entity=entity or None, since=since or None, until=until or None,
+                                 limit=limit, max_tokens=max_tokens), format)
+
+    @mcp.tool()
+    def expand(id: str, depth: int = 0, max_tokens: int = 2000) -> str:
+        """Fetch the full record for any id (memory, decision, entity, session, task, agent). depth>0 adds graph edges."""
+        return _fmt(store.expand(id, depth=depth, max_tokens=max_tokens), "json")
+
+    @mcp.tool()
+    def timeline(project: str = "", entity: str = "", agent_filter: str = "", since: str = "", until: str = "",
+                 kinds: list[str] | None = None, limit: int = 50, max_tokens: int = 800, format: str = "text") -> str:
+        """Chronological activity (oldest→newest) for a project/entity/agent within a time range."""
+        return _fmt(store.timeline(project or None, entity or None, agent_filter or None, since or None,
+                                   until or None, kinds, limit, max_tokens), format)
+
+    @mcp.tool()
+    def conflicts(resolve_id: str = "", keep_id: str = "", agent: str = "", api_key: str = "") -> str:
+        """List open contradicting facts; or resolve one by passing resolve_id + keep_id (the other is superseded)."""
+        if resolve_id:
+            aid, _ = who(agent, api_key)
+            return _fmt(store.resolve_conflict(resolve_id, keep_id, aid), "json")
+        return _fmt(store.list_conflicts(), "json")
+
+    # ---------------------------------------------------------------- graph
+    @mcp.tool()
+    def graph_query(name: str = "", type: str = "", project: str = "", rel_type: str = "", depth: int = 1,
+                    limit: int = 100) -> str:
+        """Find entities by name substring/type/project and expand along relations (rel_type e.g. calls,
+        imports, defines, mentions, related_to, contradicts)."""
+        return _fmt(store.graph_query(name or None, type or None, project or None, rel_type or None, depth, limit), "json")
+
+    @mcp.tool()
+    def neighbors(id: str, depth: int = 1, rel_types: list[str] | None = None, direction: str = "both",
+                  limit: int = 60, format: str = "text") -> str:
+        """Edges around any id (direction: in|out|both)."""
+        return _fmt(store.neighbors(id, depth, rel_types, direction, limit), format)
+
+    @mcp.tool()
+    def export_graph(format: str = "mermaid", project: str = "", include_items: bool = True, path: str = "") -> str:
+        """Export graph as mermaid|graphml|json|html. If path is given, write to that file and return the path."""
+        out = _export(store.export_graph(project or None, include_items), format)
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(out)
+            return json.dumps({"written": path, "bytes": len(out)})
+        return out
+
+    # ---------------------------------------------------------------- code
+    @mcp.tool()
+    def index_code(path: str, project: str = "", agent: str = "", api_key: str = "") -> str:
+        """Index a local repo (Python + JS/TS): files, symbols, imports, calls → graph. Re-indexing is idempotent."""
+        aid, _ = who(agent, api_key)
+        return _fmt(index_repo(store, path, project or None, aid), "json")
+
+    @mcp.tool()
+    def code_symbols(name: str = "", project: str = "", types: list[str] | None = None, path: str = "",
+                     limit: int = 30) -> str:
+        """Find functions/classes/methods by (partial) name, with file:line, signature and docstring."""
+        return _fmt(_symbols(store, name, project or None, types, path or None, limit), "json")
+
+    @mcp.tool()
+    def code_impact(symbol: str, project: str = "", depth: int = 3, limit: int = 100, format: str = "text") -> str:
+        """What depends on a symbol/file (reverse calls/imports, transitive) plus memories linked to it."""
+        return _fmt(_impact(store, symbol, project or None, depth, limit), format)
+
+    # ---------------------------------------------------------------- sessions
+    @mcp.tool()
+    def session_start(goal: str, project: str = "", state: dict | None = None, agent: str = "", api_key: str = "") -> str:
+        """Open a work session. Returns session_id to use with checkpoint/handoff."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.session_start(goal, aid, project or None, state), "json")
+
+    @mcp.tool()
+    def checkpoint(session_id: str, note: str, state: dict | None = None, related_ids: list[str] | None = None,
+                   agent: str = "", api_key: str = "") -> str:
+        """Save progress in a session (note + merged structured state)."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.checkpoint(session_id, note, state, aid, related_ids), "json")
+
+    @mcp.tool()
+    def handoff(session_id: str, summary: str, state: str = "", decisions: list[str] | None = None,
+                next_steps: list[str] | None = None, open_questions: list[str] | None = None,
+                relevant_ids: list[str] | None = None, to_agent: str = "", goal: str = "",
+                agent: str = "", api_key: str = "") -> str:
+        """Write a structured handoff packet (goal, state, decisions, next steps, open questions, relevant ids).
+        If to_agent is set, a task is posted to that agent's inbox."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.handoff(session_id, summary=summary, state=state, decisions=decisions, next_steps=next_steps,
+                                  open_questions=open_questions, relevant_ids=relevant_ids, to_agent=to_agent or None,
+                                  agent_id=aid, goal=goal or None), "json")
+
+    @mcp.tool()
+    def resume(session_id: str = "", project: str = "", max_tokens: int = 1200, agent: str = "", api_key: str = "") -> str:
+        """Pick up a session (or the latest one in a project): handoff packet, state, session items, recent context."""
+        aid, _ = who(agent, api_key, write=False)
+        return _fmt(store.resume(session_id or None, project or None, aid, max_tokens), "json")
+
+    # ---------------------------------------------------------------- reasoning
+    @mcp.tool()
+    def record_decision(what: str, why: str, alternatives: list[str] | None = None, evidence: list[str] | None = None,
+                        project: str = "", session_id: str = "", related_ids: list[str] | None = None,
+                        entities: list[str] | None = None, tags: list[str] | None = None,
+                        agent: str = "", api_key: str = "") -> str:
+        """Log a decision with rationale so other AIs can later ask why(). Link code/memory ids via related_ids."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.record_decision(what, why, alternatives, aid, project or None, session_id or None,
+                                          related_ids, evidence, entities, tags), "json")
+
+    @mcp.tool()
+    def why(query: str, project: str = "", max_tokens: int = 800) -> str:
+        """Explain the logic behind something: query is free text or any id (symbol, memory, session)."""
+        r = store.why(query, project or None, max_tokens)
+        return _fmt({"text": r["text"], "decisions": r["decisions"]}, "json")
+
+    # ---------------------------------------------------------------- agents & inbox
+    @mcp.tool()
+    def register_agent(name: str, vendor: str = "", model: str = "", description: str = "",
+                       capabilities: list[str] | None = None, a2a_url: str = "") -> str:
+        """Register (or re-key) an agent identity. Returns an api_key shown once; use it on writes."""
+        if require_keys and store.get_agent(name) and store.get_agent(name).get("key_hash"):
+            raise CommonsError("agent already registered; re-key via CLI `commons register-agent`")
+        return _fmt(store.register_agent(name, vendor, model, description, capabilities, a2a_url), "json")
+
+    @mcp.tool()
+    def list_agents() -> str:
+        """Known agents with vendor/model/capabilities and last activity."""
+        return _fmt(store.list_agents(), "json")
+
+    @mcp.tool()
+    def ask_agent(to_agent: str, question: str, context_ids: list[str] | None = None, project: str = "",
+                  agent: str = "", api_key: str = "") -> str:
+        """Ask another agent a question via the shared inbox (use '*' for any agent). Poll get_task for the answer.
+        If the target agent has an a2a_url it is also sent over A2A."""
+        aid, _ = who(agent, api_key)
+        res = store.post_task(aid, to_agent, question, "question", context_ids, project or None)
+        target = store.get_agent(to_agent)
+        if target and target.get("a2a_url"):
+            try:
+                res["a2a"] = a2a.send_message(target["a2a_url"], question)
+            except Exception as e:  # noqa: BLE001
+                res["a2a_error"] = str(e)
+        return _fmt(res, "json")
+
+    @mcp.tool()
+    def delegate(to_agent: str, task: str, context_ids: list[str] | None = None, project: str = "",
+                 agent: str = "", api_key: str = "") -> str:
+        """Delegate a task to another agent's inbox (or '*' for any agent)."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.post_task(aid, to_agent, task, "task", context_ids, project or None), "json")
+
+    @mcp.tool()
+    def inbox(status: str = "open", claim: bool = False, limit: int = 20, agent: str = "", api_key: str = "") -> str:
+        """Tasks/questions addressed to you (or '*'). claim=True marks them claimed by you."""
+        aid, _ = who(agent, api_key, write=claim)
+        if not aid:
+            raise CommonsError("identify yourself with agent or api_key")
+        return _fmt(store.inbox(aid, status, claim, limit), "json")
+
+    @mcp.tool()
+    def respond_task(task_id: str, result: str, status: str = "done", agent: str = "", api_key: str = "") -> str:
+        """Answer/complete an inbox task (status: done|failed|claimed)."""
+        aid, _ = who(agent, api_key)
+        return _fmt(store.respond_task(task_id, result, status, aid), "json")
+
+    @mcp.tool()
+    def get_task(task_id: str) -> str:
+        """Check status/result of a task you posted."""
+        return _fmt(store.get_task(task_id), "json")
+
+    @mcp.tool()
+    def a2a_send(url: str, message: str) -> str:
+        """Send a message to an external A2A agent endpoint (JSON-RPC message/send). Secrets are redacted first."""
+        return _fmt(a2a.send_message(url, message), "json")
+
+    # ---------------------------------------------------------------- secrets (references only)
+    @mcp.tool()
+    def secret_register(ref: str, description: str = "", project: str = "", allowed_agents: list[str] | None = None,
+                        max_ttl: int = 3600, agent: str = "", api_key: str = "") -> str:
+        """Register a secret *reference* (env://NAME, vault://mount/path#key, op://vault/item/field). Never a value."""
+        aid, _ = who(agent, api_key)
+        return _fmt(broker.register(ref, description, project or None, allowed_agents, max_ttl, aid), "json")
+
+    @mcp.tool()
+    def secret_list(project: str = "") -> str:
+        """List registered secret references (no values)."""
+        return _fmt(broker.list_refs(project or None), "json")
+
+    @mcp.tool()
+    def secret_request(ref: str, scope: str = "read", purpose: str = "", ttl: int = 300,
+                       agent: str = "", api_key: str = "") -> str:
+        """Get a short-lived lease handle for a secret ref. The value is NOT returned; it is injected at execution
+        time (`commons secret-exec <lease> --as VAR -- cmd`). Audited."""
+        aid, _ = who(agent, api_key)
+        if not aid:
+            raise CommonsError("identify yourself with agent or api_key")
+        return _fmt(broker.request(ref, aid, scope, purpose, ttl), "json")
+
+    @mcp.tool()
+    def secret_revoke(lease_id: str = "", ref: str = "", agent: str = "", api_key: str = "") -> str:
+        """Revoke a lease (or all of your leases / all leases for a ref)."""
+        aid, _ = who(agent, api_key)
+        return _fmt(broker.revoke(lease_id or None, aid if not lease_id else None, ref or None), "json")
+
+    @mcp.tool()
+    def secret_audit(ref: str = "", limit: int = 50) -> str:
+        """Audit trail of secret registration/lease/resolve/revoke events."""
+        return _fmt(broker.audit_log(limit, ref or None), "json")
+
+    @mcp.tool()
+    def stats() -> str:
+        """Counts of items/entities/relations/etc. and the active embedder."""
+        return _fmt(store.stats(), "json")
+
+    return mcp
+
+
+def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db: str | None = None,
+        require_keys: bool | None = None) -> None:
+    server = build_server(Store(db), host=host, port=port, require_keys=require_keys)
+    server.run("streamable-http" if transport in ("http", "streamable-http") else "stdio")
