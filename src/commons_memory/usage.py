@@ -74,9 +74,13 @@ class Usage:
 
     def summary(self, by: str = "agent", since: float | None = None) -> list[dict]:
         col = {"agent": "u.agent_id", "project": "u.project_id", "job": "u.job_id", "model": "u.model",
-               "day": "date(u.ts,'unixepoch')"}[by]
+               "day": ("to_char(to_timestamp(u.ts) AT TIME ZONE 'UTC', 'YYYY-MM-DD')" if self.s.dialect == "postgres"
+                       else "date(u.ts,'unixepoch')")}[by]
+        src = ("(SELECT ts, agent_id, project_id, job_id, model, tokens_in, tokens_out, cost, seconds, 1 AS calls FROM usage "
+               "UNION ALL SELECT ts, NULLIF(agent_id,''), NULLIF(project_id,''), NULL, NULLIF(model,''), tokens_in, "
+               "tokens_out, cost, seconds, calls FROM usage_daily)")  # pruned rows live on as daily rollups
         rows = self.s.q(f"SELECT {col} k, SUM(tokens_in) tin, SUM(tokens_out) tout, SUM(cost) cost, SUM(seconds) secs,"
-                        f" COUNT(*) n FROM usage u WHERE ts>=? GROUP BY k ORDER BY cost DESC", (since or 0,))
+                        f" SUM(calls) n FROM {src} u WHERE ts>=? GROUP BY k ORDER BY cost DESC", (since or 0,))
         out = []
         for r in rows:
             label = r["k"]

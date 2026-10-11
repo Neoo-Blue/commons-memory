@@ -11,13 +11,14 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 from typing import Protocol
 
 from .ids import iso, new_id, now
 from .store import CommonsError, Store
 
-REF_RE = re.compile(r"^(vault|env|op|infisical)://[A-Za-z0-9_./#:@-]+$")
+REF_RE = re.compile(r"^(vault|vault-dyn|env|op|infisical)://[A-Za-z0-9_./#:@?=&-]+$")
 DEFAULT_TTL = 300
 MAX_TTL = 3600
 
@@ -43,26 +44,93 @@ class EnvBackend:
 
 
 class VaultBackend:
-    """vault://<mount>/<path>#<key> via HashiCorp Vault / OpenBao KV v2 HTTP API.
+    """HashiCorp Vault / OpenBao.
 
-    Uses VAULT_ADDR (or BAO_ADDR) and VAULT_TOKEN (or BAO_TOKEN). For dynamic secrets engines
-    (database/, aws/) the response's lease is honoured by the broker TTL.
+    vault://<mount>/<path>#<key>       KV v2 static secret (default)
+    vault://<mount>/<path>?kv=1#<key>  KV v1
+    vault-dyn://<mount>/<path>#<key>   dynamic secret (database/creds/<role>, aws/creds/<role>, ...): every broker lease
+                                       gets its own backend credential + Vault lease, revoked when the broker lease is
+                                       revoked or expires (reaped by the background loop).
+    Auth: VAULT_ADDR/VAULT_TOKEN (or BAO_*), or AppRole via VAULT_ROLE_ID/VAULT_SECRET_ID. VAULT_NAMESPACE supported.
     """
     scheme = "vault"
+    dynamic_scheme = "vault-dyn"
 
     def __init__(self, addr: str | None = None, token: str | None = None):
-        self.addr = (addr or os.environ.get("VAULT_ADDR") or os.environ.get("BAO_ADDR") or "").rstrip("/")
-        self.token = token or os.environ.get("VAULT_TOKEN") or os.environ.get("BAO_TOKEN")
+        self._addr, self._token = addr, token
+        self._dyn: dict[str, dict] = {}  # broker lease id -> {data, lease_id} (process memory only)
+
+    @property
+    def addr(self) -> str:
+        return (self._addr or os.environ.get("VAULT_ADDR") or os.environ.get("BAO_ADDR") or "").rstrip("/")
+
+    @property
+    def token(self) -> str | None:
+        return self._token or os.environ.get("VAULT_TOKEN") or os.environ.get("BAO_TOKEN")
+
+    @token.setter
+    def token(self, v: str | None) -> None:
+        self._token = v
+
+    def _req(self, method: str, path: str, body: dict | None = None) -> dict:
+        if not self.addr:
+            raise CommonsError("VAULT_ADDR (or BAO_ADDR) not configured")
+        if not self.token and os.environ.get("VAULT_ROLE_ID"):
+            r = self._raw("POST", "/v1/auth/approle/login", {"role_id": os.environ["VAULT_ROLE_ID"],
+                                                             "secret_id": os.environ.get("VAULT_SECRET_ID", "")}, auth=False)
+            self.token = r["auth"]["client_token"]
+        if not self.token:
+            raise CommonsError("VAULT_TOKEN (or AppRole VAULT_ROLE_ID/VAULT_SECRET_ID) not configured")
+        return self._raw(method, path, body)
+
+    def _raw(self, method: str, path: str, body: dict | None = None, auth: bool = True) -> dict:
+        h = {"Content-Type": "application/json"}
+        if auth and self.token:
+            h["X-Vault-Token"] = self.token
+        if os.environ.get("VAULT_NAMESPACE"):
+            h["X-Vault-Namespace"] = os.environ["VAULT_NAMESPACE"]
+        req = urllib.request.Request(self.addr + path, data=json.dumps(body).encode() if body is not None else None,
+                                     method=method, headers=h)
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 - operator-configured URL
+            raw = r.read()
+        return json.loads(raw) if raw else {}
+
+    @staticmethod
+    def _parse(ref: str) -> tuple[str, str, str, dict]:
+        body = ref.split("://", 1)[1]
+        body, _, key = body.partition("#")
+        path, _, qs = body.partition("?")
+        opts = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        mount, _, rest = path.partition("/")
+        return mount, rest, key, opts
 
     def resolve(self, ref: str) -> str:
-        if not self.addr or not self.token:
-            raise CommonsError("VAULT_ADDR/VAULT_TOKEN (or BAO_*) not configured")
-        path, _, key = ref.split("://", 1)[1].partition("#")
-        mount, _, rest = path.partition("/")
-        req = urllib.request.Request(f"{self.addr}/v1/{mount}/data/{rest}", headers={"X-Vault-Token": self.token})
-        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 - operator-configured URL
-            data = json.loads(r.read())["data"]["data"]
+        mount, rest, key, opts = self._parse(ref)
+        if opts.get("kv") == "1":
+            data = self._req("GET", f"/v1/{mount}/{rest}")["data"]
+        else:
+            data = self._req("GET", f"/v1/{mount}/data/{rest}")["data"]["data"]
         return data[key] if key else json.dumps(data)
+
+    # dynamic secrets ---------------------------------------------------------
+    def issue(self, ref: str, broker_lease: str) -> dict:
+        mount, rest, _key, _ = self._parse(ref)
+        r = self._req("GET", f"/v1/{mount}/{rest}")
+        self._dyn[broker_lease] = {"data": r.get("data") or {}, "lease_id": r.get("lease_id"),
+                                   "duration": r.get("lease_duration")}
+        return {"backend_lease": r.get("lease_id"), "duration": r.get("lease_duration")}
+
+    def resolve_lease(self, ref: str, broker_lease: str) -> str:
+        if broker_lease not in self._dyn:
+            raise CommonsError("dynamic credential not available in this process (request a new lease)")
+        data = self._dyn[broker_lease]["data"]
+        key = self._parse(ref)[2]
+        return data[key] if key else json.dumps(data)
+
+    def revoke_backend(self, backend_lease: str | None, broker_lease: str | None = None) -> None:
+        self._dyn.pop(broker_lease or "", None)
+        if backend_lease:
+            self._req("PUT", "/v1/sys/leases/revoke", {"lease_id": backend_lease})
 
 
 class OnePasswordBackend:
@@ -76,18 +144,62 @@ class OnePasswordBackend:
 
 
 class InfisicalBackend:
-    """infisical://<project>/<env>/<NAME> — adapter interface (v2). Plug in the Infisical SDK here."""
+    """infisical://<projectId>/<environment>/<optional/folder/path/>NAME via the Infisical REST API.
+
+    Auth: Universal Auth machine identity (INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET -> POST
+    /api/v1/auth/universal-auth/login) or a ready token (INFISICAL_TOKEN). Host: INFISICAL_HOST
+    (default https://app.infisical.com; use https://eu.infisical.com or your self-hosted URL).
+    Reads with GET /api/v4/secrets/{name}?projectId=&environment=&secretPath= .
+    """
     scheme = "infisical"
 
+    def __init__(self, host: str | None = None):
+        self.host = (host or os.environ.get("INFISICAL_HOST") or "https://app.infisical.com").rstrip("/")
+        self._tok: tuple[str, float] | None = None
+
+    def _token(self) -> str:
+        if os.environ.get("INFISICAL_TOKEN"):
+            return os.environ["INFISICAL_TOKEN"]
+        if self._tok and self._tok[1] > now() + 30:
+            return self._tok[0]
+        cid, sec = os.environ.get("INFISICAL_CLIENT_ID"), os.environ.get("INFISICAL_CLIENT_SECRET")
+        if not cid or not sec:
+            raise CommonsError("set INFISICAL_TOKEN or INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET (universal auth)")
+        req = urllib.request.Request(f"{self.host}/api/v1/auth/universal-auth/login", method="POST",
+                                     data=json.dumps({"clientId": cid, "clientSecret": sec}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310
+            d = json.loads(r.read())
+        self._tok = (d["accessToken"], now() + float(d.get("expiresIn") or 600))
+        return self._tok[0]
+
     def resolve(self, ref: str) -> str:
-        raise CommonsError("Infisical adapter not implemented in v1; register a custom backend")
+        import urllib.parse
+        parts = ref.split("://", 1)[1].split("/")
+        if len(parts) < 3:
+            raise CommonsError("infisical ref must be infisical://<projectId>/<env>/[path/]NAME")
+        project, env, name, folder = parts[0], parts[1], parts[-1], "/" + "/".join(parts[2:-1])
+        qs = urllib.parse.urlencode({"projectId": project, "environment": env, "secretPath": folder or "/"})
+        req = urllib.request.Request(f"{self.host}/api/v4/secrets/{urllib.parse.quote(name)}?{qs}",
+                                     headers={"Authorization": f"Bearer {self._token()}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310
+                return json.loads(r.read())["secret"]["secretValue"]
+        except urllib.error.HTTPError as e:
+            raise CommonsError(f"infisical: HTTP {e.code} for {name}") from None
+
+
+_VAULT = VaultBackend()  # process-wide: dynamic credentials live only in this process's memory
 
 
 class Broker:
     def __init__(self, store: Store, backends: list[SecretBackend] | None = None):
         self.store = store
-        self.backends = {b.scheme: b for b in (backends or [EnvBackend(), VaultBackend(), OnePasswordBackend(),
+        self.backends = {b.scheme: b for b in (backends or [EnvBackend(), _VAULT, OnePasswordBackend(),
                                                              InfisicalBackend()])}
+        for b in list(self.backends.values()):
+            if getattr(b, "dynamic_scheme", None):
+                self.backends[b.dynamic_scheme] = b
 
     def register(self, ref: str, description: str = "", project: str | None = None,
                  allowed_agents: list[str] | None = None, max_ttl: int = MAX_TTL, agent_id: str | None = None) -> dict:
@@ -120,7 +232,12 @@ class Broker:
         ttl = max(1, min(int(ttl), r[0]["max_ttl"] or MAX_TTL))
         lid = new_id("lea")
         exp = now() + ttl
-        self.store.x("INSERT INTO leases VALUES(?,?,?,?,?,?,?,?)", (lid, ref, agent_id, scope, purpose, exp, 0, now()))
+        self.store.x("INSERT INTO leases(id,ref,agent_id,scope,purpose,expires_at,revoked,created_at) VALUES(?,?,?,?,?,?,?,?)", (lid, ref, agent_id, scope, purpose, exp, 0, now()))
+        scheme = ref.split("://", 1)[0]
+        b = self.backends.get(scheme)
+        if scheme == "vault-dyn" and b is not None:  # fresh backend credential per lease
+            info = b.issue(ref, lid)
+            self.store.x("UPDATE leases SET backend_lease=? WHERE id=?", (info.get("backend_lease"), lid))
         from .graphlinks import link_lease
         link_lease(self.store, lid)
         self.store.audit(agent_id, "secret.lease", ref, {"lease": lid, "scope": scope, "ttl": ttl, "purpose": purpose})
@@ -148,7 +265,7 @@ class Broker:
         backend = self.backends.get(scheme)
         if not backend:
             raise CommonsError(f"no backend for {scheme}://")
-        value = backend.resolve(lease["ref"])
+        value = backend.resolve_lease(lease["ref"], lease_id) if scheme == "vault-dyn" else backend.resolve(lease["ref"])
         self.store.audit(lease["agent_id"], "secret.resolve", lease["ref"], {"lease": lease_id})
         return value
 
@@ -165,8 +282,26 @@ class Broker:
         self.store.audit(None, "secret.resolve.internal", ref, {"purpose": purpose})
         return value
 
+    def _revoke_backend(self, rows) -> None:
+        for r in rows:
+            if (r["ref"] or "").startswith("vault-dyn://") and self.backends.get("vault-dyn"):
+                try:
+                    self.backends["vault-dyn"].revoke_backend(r["backend_lease"], r["id"])
+                    self.store.audit(None, "secret.backend_revoke", r["ref"], {"lease": r["id"]})
+                except Exception as e:  # noqa: BLE001
+                    self.store.audit(None, "secret.backend_revoke.error", r["ref"], {"lease": r["id"], "error": str(e)[:200]})
+
+    def reap_expired(self) -> int:
+        """Revoke backend credentials of expired dynamic leases (called by the background loop)."""
+        rows = self.store.q("SELECT * FROM leases WHERE revoked=0 AND expires_at<?", (now(),))
+        self._revoke_backend(rows)
+        for r in rows:
+            self.store.x("UPDATE leases SET revoked=1 WHERE id=?", (r["id"],))
+        return len(rows)
+
     def revoke(self, lease_id: str | None = None, agent_id: str | None = None, ref: str | None = None) -> dict:
         if lease_id:
+            self._revoke_backend(self.store.q("SELECT * FROM leases WHERE id=? AND revoked=0", (lease_id,)))
             self.store.x("UPDATE leases SET revoked=1 WHERE id=?", (lease_id,))
             n = 1
         else:
@@ -175,7 +310,9 @@ class Broker:
                 where.append("agent_id=?"); args.append(agent_id)
             if ref:
                 where.append("ref=?"); args.append(ref)
-            n = len(self.store.q(f"SELECT id FROM leases WHERE {' AND '.join(where)}", args))
+            rows = self.store.q(f"SELECT * FROM leases WHERE {' AND '.join(where)}", args)
+            self._revoke_backend(rows)
+            n = len(rows)
             self.store.x(f"UPDATE leases SET revoked=1 WHERE {' AND '.join(where)}", args)
         self.store.audit(agent_id, "secret.revoke", lease_id or ref or "*", {"count": n})
         return {"revoked": n}

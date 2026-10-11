@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from . import __version__
 
@@ -21,7 +22,7 @@ SNIPPET = {
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="commons", description="Unified cross-AI memory hub (MCP).")
-    p.add_argument("--db", default=None, help="SQLite path (default $COMMONS_DB or ~/.commons/commons.db)")
+    p.add_argument("--db", default=None, help="SQLite path or postgresql:// DSN (default $COMMONS_DB or ~/.commons/commons.db)")
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="create the database and print client config snippets")
@@ -32,10 +33,51 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-auth", action="store_true", help="HTTP: allow writes without api keys (local dev only)")
     s.add_argument("--dashboard", action="store_true", help="also serve the web dashboard (default port 8766)")
     s.add_argument("--dashboard-port", type=int, default=8766)
+    s.add_argument("--tls-cert", help="HTTPS certificate (PEM) for --transport http and the dashboard")
+    s.add_argument("--tls-key", help="HTTPS private key (PEM)")
+    s.add_argument("--tls-self-signed", action="store_true", help="generate/use a self-signed cert in ~/.commons/tls")
     d = sub.add_parser("dashboard", help="local web dashboard")
     d.add_argument("--host", default="127.0.0.1")
     d.add_argument("--port", type=int, default=8766)
     d.add_argument("--token", default=None, help="require this token (or COMMONS_DASHBOARD_TOKEN)")
+    d.add_argument("--tls-cert", help="serve HTTPS with this certificate (PEM)")
+    d.add_argument("--tls-key", help="private key for --tls-cert")
+    d.add_argument("--tls-self-signed", action="store_true", help="generate/use a self-signed cert in ~/.commons/tls")
+    du = sub.add_parser("dashboard-user", help="per-user dashboard tokens: add NAME [--role viewer|admin] | list | remove NAME")
+    du.add_argument("action", choices=["add", "list", "remove"])
+    du.add_argument("name", nargs="?")
+    du.add_argument("--role", default="viewer")
+    acl = sub.add_parser("acl", help="per-project access control: grant PROJECT AGENT [--role] | revoke PROJECT AGENT | list")
+    acl.add_argument("action", choices=["grant", "revoke", "list"])
+    acl.add_argument("project", nargs="?")
+    acl.add_argument("agent", nargs="?")
+    acl.add_argument("--role", default="read", choices=["read", "write", "admin"])
+    tr = sub.add_parser("trust", help="agent trust scores: list | set AGENT SCORE | unset AGENT")
+    tr.add_argument("action", choices=["list", "set", "unset"])
+    tr.add_argument("agent", nargs="?")
+    tr.add_argument("score", nargs="?", type=float)
+    pru = sub.add_parser("prune", help="retention: roll up old usage, GC old context packs, trim logs/caches")
+    pru.add_argument("--usage-days", type=float)
+    pru.add_argument("--context-days", type=float)
+    pru.add_argument("--audit-days", type=float)
+    pru.add_argument("--dry-run", action="store_true")
+    dmp = sub.add_parser("dump", help="full-fidelity JSONL dump of every table (portable SQLite <-> Postgres)")
+    dmp.add_argument("out")
+    imp = sub.add_parser("import-memory", help="restore a `commons dump` (or an export-memory file); idempotent")
+    imp.add_argument("path")
+    mpg = sub.add_parser("migrate-postgres", help="copy a SQLite Commons DB into Postgres (+pgvector)")
+    mpg.add_argument("dsn")
+    mpg.add_argument("--from", dest="src", default=None, help="SQLite path (default: --db / COMMONS_DB)")
+    ntf = sub.add_parser("notifications", help="escalations/alerts: list | read [ID]")
+    ntf.add_argument("action", nargs="?", default="list", choices=["list", "read"])
+    ntf.add_argument("id", nargs="?")
+    sub.add_parser("escalate", help="run the stuck/unassignable-task escalation ladder now")
+    a2p = sub.add_parser("a2a", help="A2A client: card URL | send URL TEXT [--wait] | get URL TASK | cancel URL TASK | stream URL TEXT")
+    a2p.add_argument("action", choices=["card", "send", "get", "cancel", "stream"])
+    a2p.add_argument("url")
+    a2p.add_argument("arg", nargs="?")
+    a2p.add_argument("--wait", action="store_true")
+    a2p.add_argument("--bearer", default=os.environ.get("COMMONS_A2A_TOKEN"))
     sk = sub.add_parser("install-skill", help="install Commons skill/rules/config for an agent platform")
     sk.add_argument("platform", help="claude-code|claude-desktop|cursor|codex|agents-md|chatgpt|grok|muse|generic|all")
     sk.add_argument("--dir", default=".", help="project directory (default: cwd)")
@@ -109,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     lb.add_argument("--auto-approve", choices=["on", "off"])
     lb.add_argument("--budget", type=float)
     sd = sub.add_parser("skills", help="skill discovery + local import: discover|trending|popular|add|updates|import|configure|status")
-    sd.add_argument("action", choices=["discover", "trending", "popular", "add", "updates", "import", "configure", "status"])
+    sd.add_argument("action", choices=["discover", "trending", "popular", "add", "updates", "import", "configure", "status",
+                                       "restore", "backups"])
     sd.add_argument("target", nargs="?")
     sd.add_argument("--name")
     sd.add_argument("--query", default="")
@@ -130,7 +173,14 @@ def main(argv: list[str] | None = None) -> int:
     cxp.add_argument("--max-tokens", type=int, default=4000)
     mh = sub.add_parser("mcp", help="MCP hub: catalog|add|add-preset|import|list|health|tools|call|policy|approvals|approve|deny|calls|remove")
     mh.add_argument("action", choices=["catalog", "add", "add-preset", "import", "list", "health", "tools", "describe", "call",
-                                       "policy", "approvals", "approve", "deny", "calls", "remove"])
+                                       "policy", "approvals", "approve", "deny", "calls", "remove", "agent-creds", "oauth",
+                                       "verify-catalog"])
+    mh.add_argument("--require", action="store_true", help="agent-creds: deny agents without their own credentials")
+    mh.add_argument("--token-url")
+    mh.add_argument("--client-id-ref")
+    mh.add_argument("--client-secret-ref")
+    mh.add_argument("--refresh-token-ref")
+    mh.add_argument("--scope", default="")
     mh.add_argument("target", nargs="?")
     mh.add_argument("rest", nargs="*")
     mh.add_argument("--url")
@@ -174,8 +224,12 @@ def main(argv: list[str] | None = None) -> int:
     pa = sub.add_parser("pause", help="kill switch: pause all orchestration")
     pa.add_argument("--reason", default="manual kill switch")
     sub.add_parser("resume-all", help="resume orchestration after pause")
-    bk = sub.add_parser("backup", help="consistent online backup of the database")
-    bk.add_argument("out")
+    bk = sub.add_parser("backup", help="consistent online backup (rotated; encrypted with COMMONS_BACKUP_KEY)")
+    bk.add_argument("out", nargs="?", help="file path (SQLite copy) or omit for a rotated backup in ~/.commons/backups")
+    bk.add_argument("--dir")
+    bk.add_argument("--keep", type=int)
+    bk.add_argument("--encrypt", action="store_true")
+    bk.add_argument("--decrypt", metavar="ENC_FILE", help="decrypt an encrypted backup to OUT")
     ex = sub.add_parser("export-memory", help="export all memories/decisions/preferences as JSONL (portable)")
     ex.add_argument("out")
     gr = sub.add_parser("graph", help="graph maintenance and scoped views")
@@ -230,11 +284,17 @@ def main(argv: list[str] | None = None) -> int:
         req = None
         if args.transport == "http":
             req = not args.no_auth and os.environ.get("COMMONS_REQUIRE_KEYS", "1") == "1"
+        if args.tls_self_signed and not args.tls_cert:
+            from .dashboard import self_signed_cert
+            args.tls_cert, args.tls_key = self_signed_cert(host=args.host)
+        if args.tls_cert:
+            os.environ["COMMONS_TLS_CERT"], os.environ["COMMONS_TLS_KEY"] = args.tls_cert, args.tls_key or ""
         if args.dashboard:
             from .dashboard import serve_dashboard
             from .store import Store as _S
-            serve_dashboard(_S(args.db), port=args.dashboard_port, background=True)
-            print(f"dashboard: http://127.0.0.1:{args.dashboard_port}/", file=sys.stderr)
+            serve_dashboard(_S(args.db), port=args.dashboard_port, background=True, tls_cert=args.tls_cert,
+                            tls_key=args.tls_key)
+            print(f"dashboard: {'https' if args.tls_cert else 'http'}://127.0.0.1:{args.dashboard_port}/", file=sys.stderr)
         run(args.transport, args.host, args.port, args.db, req)
         return 0
     if args.cmd == "install-skill":
@@ -296,8 +356,71 @@ def main(argv: list[str] | None = None) -> int:
         value = Broker(store).resolve(args.lease_id)
         return subprocess.call(cmd, env={**os.environ, args.var: value})
     elif args.cmd == "dashboard":
-        from .dashboard import serve_dashboard
-        serve_dashboard(store, args.host, args.port, args.token)
+        from .dashboard import self_signed_cert, serve_dashboard
+        if args.tls_self_signed and not args.tls_cert:
+            args.tls_cert, args.tls_key = self_signed_cert(host=args.host)
+        serve_dashboard(store, args.host, args.port, args.token, tls_cert=args.tls_cert, tls_key=args.tls_key)
+    elif args.cmd == "dashboard-user":
+        from .dashboard import add_dashboard_user, dashboard_users
+        if args.action == "add":
+            print(json.dumps(add_dashboard_user(store, args.name, args.role), indent=2))
+        elif args.action == "remove":
+            store.x("DELETE FROM meta WHERE key=?", (f"dash_user:{args.name}",))
+            print("removed")
+        else:
+            print(json.dumps([{k: u[k] for k in ("name", "role")} for u in dashboard_users(store)], indent=2))
+    elif args.cmd == "acl":
+        from .auth import ACL
+        acl_ = ACL(store)
+        r = acl_.grant(args.project, args.agent, args.role) if args.action == "grant" else \
+            acl_.revoke(args.project, args.agent) if args.action == "revoke" else acl_.list(args.project)
+        print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "trust":
+        from .trust import Trust
+        t = Trust(store)
+        r = t.table() if args.action == "list" else t.set_manual(args.agent, args.score if args.action == "set" else None)
+        print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "prune":
+        from .retention import prune
+        print(json.dumps(prune(store, args.usage_days, args.context_days, args.audit_days, args.dry_run), indent=2))
+    elif args.cmd == "dump":
+        from .retention import dump
+        print(json.dumps(dump(store, args.out)))
+    elif args.cmd == "import-memory":
+        from .retention import load
+        print(json.dumps(load(store, args.path), indent=2))
+    elif args.cmd == "migrate-postgres":
+        from .pgcompat import migrate_sqlite_to_pg
+        src = args.src or args.db or os.environ.get("COMMONS_DB") or str(Path.home() / ".commons" / "commons.db")
+        print(json.dumps(migrate_sqlite_to_pg(src, args.dsn), indent=2))
+        print(f"done. Point clients at it with COMMONS_DB={args.dsn}", file=sys.stderr)
+    elif args.cmd == "notifications":
+        from .escalation import notifications
+        if args.action == "read":
+            store.x("UPDATE notifications SET read=1" + (" WHERE id=?" if args.id else ""), (args.id,) if args.id else ())
+        print(json.dumps(notifications(store, args.action == "list"), indent=2, default=str))
+    elif args.cmd == "escalate":
+        from .escalation import Escalator
+        print(json.dumps(Escalator(store).run(), indent=2))
+    elif args.cmd == "a2a":
+        from . import a2a
+        h = {"Authorization": f"Bearer {args.bearer}"} if args.bearer else None
+        if args.action == "card":
+            r = a2a.fetch_agent_card(args.url)
+        elif args.action == "send":
+            r = a2a.send_message(args.url, args.arg, headers=h)
+            tid = (r.get("result") or {}).get("id")
+            if args.wait and tid:
+                r = a2a.wait_task(args.url, tid, headers=h)
+        elif args.action == "get":
+            r = a2a.get_task(args.url, args.arg, headers=h)
+        elif args.action == "cancel":
+            r = a2a.cancel_task(args.url, args.arg, headers=h)
+        else:
+            for ev in a2a.stream_message(args.url, args.arg, headers=h):
+                print(json.dumps(ev), flush=True)
+            return 0
+        print(json.dumps(r, indent=2))
     elif args.cmd == "connect":
         from .orchestrator import Profiles
         from .skills import install, save_key
@@ -315,44 +438,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{args.platform}] {line}")
     elif args.cmd == "scheduler":
         import time
-        from .orchestrator import Orchestrator
-        from .librarian import Librarian
-        from .providers import ProviderLayer
-        o = Orchestrator(store)
-        last_lib = last_models = 0.0
+        from .background import tick
+        if args.librarian_every is not None:
+            os.environ.setdefault("COMMONS_EVERY_LIBRARIAN", str(args.librarian_every))
+        if args.models_every is not None:
+            os.environ.setdefault("COMMONS_EVERY_MODELS", str(args.models_every))
         while True:
-            for r in o.run_due():
-                print(json.dumps(r), flush=True)
-            lib = Librarian(store)
-            if args.librarian_every and (time.time() - last_lib >= args.librarian_every or args.once) \
-                    and lib.status()["new_since_last_run"]:
-                rep = lib.run()
-                last_lib = time.time()
-                print(json.dumps({"librarian": {k: rep[k] for k in ("items_scanned", "tagged", "assigned", "summaries")}}),
-                      flush=True)
-            from .skilldiscovery import Discovery
-            disc = Discovery(store)
-            if os.environ.get("COMMONS_SKILL_DISCOVERY", "1") == "1" and disc.configure()["token_ref"] and disc.due(24):
-                try:
-                    print(json.dumps({"skill_discovery": disc.discover(), "skill_updates": disc.check_updates()}), flush=True)
-                except Exception as e:  # noqa: BLE001
-                    print(json.dumps({"skill_discovery_error": str(e)}), flush=True)
-            if args.models_every and store.q("SELECT 1 FROM providers WHERE enabled=1") and \
-                    time.time() - last_models >= args.models_every:
-                last_models = time.time()
-                try:
-                    w = ProviderLayer(store).watch()
-                    print(json.dumps({"models": {"new": w["refresh"]["new_models"]}}), flush=True)
-                except Exception as e:  # noqa: BLE001
-                    print(json.dumps({"models_error": str(e)}), flush=True)
-            o.reap()
-            from .kb import KB
-            rebuilt = KB(store).refresh_dirty()
-            if rebuilt:
-                print(json.dumps({"kb_rebuilt": rebuilt}), flush=True)
+            tick(store, force=args.once, log=lambda r: print(json.dumps(r, default=str), flush=True))
             if args.once:
                 break
-            time.sleep(args.interval)
+            time.sleep(min(args.interval, 30))
     elif args.cmd == "submit":
         from .orchestrator import Orchestrator
         budget = {k: v for k, v in (("tokens", args.max_tokens), ("cost", args.max_cost)) if v}
@@ -398,12 +493,21 @@ def main(argv: list[str] | None = None) -> int:
         from .orchestrator import Orchestrator
         print(json.dumps(Orchestrator(store).set_paused(False)))
     elif args.cmd == "backup":
-        import sqlite3
-        dst = sqlite3.connect(args.out)
-        with store.lock:
-            store.db.backup(dst)
-        dst.close()
-        print(f"backup written to {args.out}")
+        from .retention import backup, decrypt_file, _key
+        if args.decrypt:
+            if not _key():
+                p.error("set COMMONS_BACKUP_KEY")
+            decrypt_file(args.decrypt, args.out, _key())
+            print(f"decrypted to {args.out}")
+        elif args.out and store.dialect == "sqlite" and not args.encrypt:
+            import sqlite3
+            dst = sqlite3.connect(args.out)
+            with store.lock:
+                store.db.backup(dst)
+            dst.close()
+            print(f"backup written to {args.out}")
+        else:
+            print(json.dumps(backup(store, args.dir, args.keep, True if args.encrypt else None)))
     elif args.cmd == "export-memory":
         n = 0
         with open(args.out, "w", encoding="utf-8") as f:
@@ -527,6 +631,9 @@ def main(argv: list[str] | None = None) -> int:
         if a == "import":
             from .skillimport import run as imp
             r = imp(store, args.dir, args.path, args.dry_run, args.replace_local, aid)
+        elif a in ("restore", "backups"):
+            from .skillimport import backups, restore
+            r = restore(args.target, store) if a == "restore" else backups()
         else:
             r = {"discover": lambda: d.discover(args.max_repos), "add": lambda: d.add(args.target, args.name, aid, args.allow_license),
                  "updates": lambda: d.check_updates(aid), "configure": lambda: d.configure(args.token_ref),
@@ -545,6 +652,17 @@ def main(argv: list[str] | None = None) -> int:
         from .mcphub import Hub, load_catalog
         hub, a, t = Hub(store), args.action, args.target
         kv = lambda xs: dict(x.split("=", 1) for x in xs)  # noqa: E731
+        if a == "agent-creds":  # commons mcp agent-creds SERVER AGENT --env X=ref --header H=ref [--require]
+            print(json.dumps(hub.set_agent_credentials(t, args.rest[0], kv(args.env), kv(args.header),
+                                                       True if args.require else None), indent=2))
+            return 0
+        if a == "oauth":
+            print(json.dumps(hub.set_oauth(t, args.token_url, args.client_id_ref, args.client_secret_ref,
+                                           args.refresh_token_ref, args.scope), indent=2))
+            return 0
+        if a == "verify-catalog":
+            print(json.dumps(hub.verify_catalog(t), indent=2))
+            return 0
         if a == "catalog":
             for k, v in sorted(load_catalog()["presets"].items()):
                 print(f"{k:16} {'✓' if v.get('verified') else '?'} {v['transport']:5} {v.get('auth', ''):16} {v['title']}")

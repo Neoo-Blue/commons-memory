@@ -31,19 +31,47 @@ LAYERS = ("L0", "L1", "L2", "L3")
 BRIEF_KEYS = ("goal", "state", "decisions", "open_threads", "next_steps", "constraints")
 
 
-def count_tokens(text: str, model: str | None = None) -> int:
-    """Per-model token estimate. Uses tiktoken for OpenAI models when installed; otherwise calibrated chars/token."""
+_ENC: dict[str, object] = {}
+
+
+def _tiktoken(m: str):
+    try:
+        import tiktoken  # optional: pip install commons-memory[tokens]
+    except ImportError:
+        return None
+    name = "cl100k_base" if any(k in m for k in ("gpt-4-", "gpt-4 ", "gpt-3.5", "text-embedding")) or m.endswith("gpt-4") \
+        else "o200k_base"
+    if name not in _ENC:
+        try:
+            _ENC[name] = tiktoken.get_encoding(name)
+        except Exception:  # noqa: BLE001 - encoding files unavailable offline
+            _ENC[name] = None
+    return _ENC[name]
+
+
+def count_tokens(text: str, model: str | None = None, store: Store | None = None, exact: bool | None = None) -> int:
+    """Token count for `model`.
+    * OpenAI-family models: exact local count with tiktoken (o200k_base / cl100k_base) when installed.
+    * Anthropic / Gemini: exact counts from the provider's count-tokens API when `exact` (or COMMONS_EXACT_TOKENS=1)
+      and a provider key is configured (results cached by text hash) — these are network calls, so off by default.
+    * Everything else: calibrated chars/token estimate (code/JSON denser than prose)."""
     if not text:
         return 0
     m = (model or "").lower()
-    if any(k in m for k in ("gpt", "o3", "o4", "openai")):
+    if any(k in m for k in ("gpt", "o1", "o3", "o4", "openai", "chatgpt")):
+        enc = _tiktoken(m)
+        if enc is not None:
+            return len(enc.encode(text, disallowed_special=()))
+    import os
+    if store is not None and model and (exact if exact is not None else os.environ.get("COMMONS_EXACT_TOKENS") == "1"):
         try:
-            import tiktoken  # optional
-            return len(tiktoken.get_encoding("o200k_base").encode(text))
-        except Exception:  # noqa: BLE001
+            from .providers import ProviderLayer
+            n = ProviderLayer(store).count_tokens(model, text)
+            if n:
+                return n
+        except Exception:  # noqa: BLE001 - fall back to estimate
             pass
     ratio = 3.5 if "claude" in m or "anthropic" in m else 4.0 if any(k in m for k in ("gpt", "gemini", "grok")) else 3.8
-    # code/JSON tokenizes denser than prose
     if sum(text.count(c) for c in "{}[]();=<>") > len(text) / 40:
         ratio *= 0.85
     return max(1, int(len(text) / ratio + 0.5))
@@ -178,6 +206,7 @@ class ContextStore:
         if layer not in LAYERS:
             raise CommonsError("layer must be L0, L1, L2 or L3")
         p = self._pack(pack)
+        self.s.check_project(p["project_id"])
         st = json.loads(p["stats"])
         brief = self._get(p["brief_hash"])
         budget = max_tokens
@@ -187,7 +216,7 @@ class ContextStore:
             prefix, body = "", f"# Shared context: {p['name']}\n{p['gist']}"
         else:
             prefix, body = self._prefix(p["name"], p["gist"], brief), ""
-        used = count_tokens(prefix + body, model)
+        used = count_tokens(prefix + body, model, self.s)
         included, omitted = [], []
         if layer in ("L2", "L3"):
             for t, h in json.loads(p["sections"]):
@@ -195,7 +224,7 @@ class ContextStore:
                     omitted.append(t)
                     continue
                 txt = f"\n## {t}\n{self._get(h)}\n"
-                tk = count_tokens(txt, model)
+                tk = count_tokens(txt, model, self.s)
                 if used + tk > budget:
                     omitted.append(t)
                     continue
@@ -206,9 +235,9 @@ class ContextStore:
             refs = json.loads(p["refs"])
             txt = "\n## References (L3; fetch on demand with expand/read)\n" + "\n".join(
                 "- " + (json.dumps(r, separators=(",", ":")) if isinstance(r, dict) else str(r)) for r in refs)
-            if used + count_tokens(txt, model) <= budget:
+            if used + count_tokens(txt, model, self.s) <= budget:
                 body += txt
-                used += count_tokens(txt, model)
+                used += count_tokens(txt, model, self.s)
         if used > budget and layer != "L0":  # even the brief doesn't fit -> fall back to L0
             return self.load(pack, "L0", max_tokens, model, agent_id=agent_id) | {"fallback": "L0"}
         self.s.x("INSERT INTO context_loads(pack_id,agent_id,layer,model,tokens,full_tokens,ts) VALUES(?,?,?,?,?,?,?)",

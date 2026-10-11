@@ -18,6 +18,7 @@ from .codeindex import code_symbols as _symbols
 from .codeindex import index_repo
 from .graphexport import export as _export
 from .secrets import Broker
+from .ids import now
 from .store import CommonsError, Store
 
 INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
@@ -51,8 +52,14 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
             a = store.authenticate(key)
             if not a:
                 raise CommonsError("invalid api_key")
-            store.x("UPDATE agents SET last_seen=strftime('%s','now') WHERE id=?", (a["id"],))
+            store.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), a["id"]))
+            from .auth import PRINCIPAL
+            PRINCIPAL.set(a["id"])  # ACLs apply to this call
             return a["id"], True
+        from .auth import ANON, PRINCIPAL
+        p = PRINCIPAL.get()
+        if p and p != ANON:  # authenticated at the HTTP layer (agent key or OAuth token)
+            return p, True
         if require_keys and write:
             raise CommonsError("this server requires an api_key for writes (register_agent first)")
         name = agent or os.environ.get("COMMONS_AGENT")
@@ -297,10 +304,38 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v2(mcp, store, who)
     from .server_v4 import register_v4
     register_v4(mcp, store, who)
+    from .server_v5 import register_v5
+    register_v5(mcp, store, who)
+    from .telemetry import instrument_mcp
+    instrument_mcp(mcp)
     return mcp
+
+
+def _lifespan_mount(mcp_app, a2a_app):
+    """Route A2A paths to the A2A app; lifespan (session manager startup) stays with the MCP app."""
+    from .a2a_server import mount
+    return mount(mcp_app, a2a_app)
 
 
 def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db: str | None = None,
         require_keys: bool | None = None) -> None:
-    server = build_server(Store(db), host=host, port=port, require_keys=require_keys)
-    server.run("streamable-http" if transport in ("http", "streamable-http") else "stdio")
+    store = Store(db)
+    server = build_server(store, host=host, port=port, require_keys=require_keys)
+    if transport not in ("http", "streamable-http"):
+        server.run("stdio")
+        return
+    import uvicorn
+
+    from .auth import AuthMiddleware
+    from .background import start_background
+    start_background(store)
+    from .a2a_server import build_app
+    public = os.environ.get("COMMONS_PUBLIC_URL", f"http://{host}:{port}")
+    inner = server.streamable_http_app()
+    if os.environ.get("COMMONS_A2A", "1") == "1":
+        inner = _lifespan_mount(inner, build_app(store, public))
+    app = AuthMiddleware(inner, store, resource_url=public)
+    ssl = {}
+    if os.environ.get("COMMONS_TLS_CERT"):
+        ssl = {"ssl_certfile": os.environ["COMMONS_TLS_CERT"], "ssl_keyfile": os.environ.get("COMMONS_TLS_KEY")}
+    uvicorn.run(app, host=host, port=port, log_level="warning", **ssl)

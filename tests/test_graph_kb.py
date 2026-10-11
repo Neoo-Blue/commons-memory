@@ -1,13 +1,11 @@
 import json
-import sqlite3
 import textwrap
 
 from commons_memory.graphexport import export
 from commons_memory.graphlinks import rebuild, subgraph
-from commons_memory.kb import KB, SECTIONS
+from commons_memory.kb import KB
 from commons_memory.orchestrator import Orchestrator
 from commons_memory.secrets import Broker
-from commons_memory.usage import Usage
 
 
 def rels(store, src=None, dst=None, type_=None):

@@ -97,8 +97,8 @@ class Tree:
             rel = "defines"
             return [N(f"cls:{r['id']}" if r["type"] == "class" else f"sym:{r['id']}", f"{r['name']} ({r['type']}, L{r['line']})",
                       r["type"], r["id"]) for r in s.q(
-                f"SELECT e.* FROM relations r JOIN entities e ON e.id=r.dst WHERE r.src=? AND r.type=? "
-                f"ORDER BY e.line, e.name", (rest, rel))]
+                "SELECT e.* FROM relations r JOIN entities e ON e.id=r.dst WHERE r.src=? AND r.type=? "
+                "ORDER BY e.line, e.name", (rest, rel))]
         if kind == "rec":
             return [N(f"job:{r['id']}", r["title"], "job", r["id"])
                     for r in s.q("SELECT id, title FROM jobs WHERE recurring_id=? ORDER BY created_at", (rest,))]

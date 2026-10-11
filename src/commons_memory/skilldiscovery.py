@@ -122,7 +122,7 @@ class Discovery:
                              "kind,topics,first_seen,last_seen,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new') "
                              "ON CONFLICT(id) DO UPDATE SET stars=excluded.stars, forks=excluded.forks, "
                              "pushed_at=excluded.pushed_at, last_seen=excluded.last_seen, description=excluded.description, "
-                             "license=excluded.license, sha=COALESCE(excluded.sha, sha)",
+                             "license=excluded.license, sha=COALESCE(excluded.sha, skill_catalog.sha)",
                              (cid, full, path, _slug(name), (repo.get("description") or "")[:300],
                               repo.get("html_url", "") + (f"/blob/{repo.get('default_branch', 'main')}/{path}" if path else ""),
                               lic, sha, repo.get("stargazers_count", 0), repo.get("forks_count", 0),

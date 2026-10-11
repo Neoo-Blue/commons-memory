@@ -34,6 +34,30 @@ See [FLAWS_AND_GAPS.md](FLAWS_AND_GAPS.md) for known risks.
 v0.1 features remain: shared memory with hybrid search and token-budgeted results, one graph across memory/code/sessions,
 code indexing, handoffs, reasoning log, agent inbox, secret references, conflict detection.
 
+## v0.5: production hardening (Postgres, auth, ACLs, trust, escalation, A2A server)
+
+v0.5 closes the open items from `FLAWS_AND_GAPS.md`. That file now separates what is fixed from what is still open and says why.
+
+| Feature | How |
+|---|---|
+| Postgres + pgvector | `pip install commons-memory[postgres]`, `COMMONS_DB=postgresql://user@host/db`. Run `commons migrate-postgres DSN` to move an existing SQLite DB |
+| Encryption at rest | `pip install commons-memory[encryption]`, `COMMONS_DB_KEY=...` (SQLCipher). For encrypted backups, `COMMONS_BACKUP_KEY=...` |
+| HTTP auth for reads and writes | Agent API keys or OAuth 2.1 bearer tokens (`COMMONS_OAUTH_ISSUER`, `COMMONS_OAUTH_INTROSPECT_URL`). Rate limit with `COMMONS_RATE_PER_MIN` |
+| Per-project ACLs | `commons acl grant PROJECT AGENT --role read|write|admin` |
+| Trust scores | `commons trust list|set|unset`. Trust weights search and KB digests (`COMMONS_KB_MIN_TRUST`) |
+| Nothing waits forever | Escalation ladder: reassign, then the distributor model, then notify you (`commons notifications`, `COMMONS_NOTIFY_WEBHOOK`) |
+| Missed schedules | `schedule(..., catchup="skip|once|all", max_catchup=N)` |
+| Background maintenance | In-process thread in `serve`/`dashboard` (`COMMONS_BACKGROUND=1|full|0`): KB rebuilds, librarian, escalation, retention, backups |
+| Retention / backups | `commons prune`, `commons backup [--encrypt]`, `commons dump` / `commons import-memory` |
+| A2A server | `POST /a2a` (send, stream, get, cancel, resubscribe), `/.well-known/agent-card.json`. Client: `commons a2a send URL "text" --wait` |
+| Code graph | `pip install commons-memory[code]` turns on tree-sitter JS/TS. Call targets are resolved through imports and scope |
+| Dashboard | `--tls-self-signed` or `--tls-cert/--tls-key`, SSE live updates, `commons dashboard-user add NAME --role viewer` |
+| Secrets | Real Infisical adapter, `vault-dyn://` dynamic credentials revoked with the lease, entropy-based redaction |
+| MCP hub | Pooled persistent upstream sessions, per-agent credentials, OAuth client-credentials/refresh for upstreams, `verify-catalog` |
+| Tokens / tracing | Exact counts through tiktoken and the Anthropic/Gemini count APIs. OpenTelemetry with `[otel]` and `COMMONS_OTEL=1` |
+
+Install everything with `pip install "commons-memory[all]"`. Workers: see `docs/workers.md` for the flags checked against each vendor's docs.
+
 ## v0.4: shared skill pool, research, model routing, org chart, librarian, MCP hub
 
 | | |

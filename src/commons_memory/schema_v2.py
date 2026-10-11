@@ -176,3 +176,19 @@ def migrate(db):  # noqa: F811
     cols = {r[1] for r in db.execute("PRAGMA table_info(usage)")}
     if "cached_tokens" not in cols:
         db.execute("ALTER TABLE usage ADD COLUMN cached_tokens INTEGER DEFAULT 0")
+
+
+def _v5(db):
+    from .auth import ACL_SCHEMA
+    db.executescript(ACL_SCHEMA)
+    from .v5schema import SCHEMA_V5, add_columns
+    db.executescript(SCHEMA_V5)
+    add_columns(db)
+
+
+_v4e_migrate = migrate
+
+
+def migrate(db):  # noqa: F811
+    _v4e_migrate(db)
+    _v5(db)

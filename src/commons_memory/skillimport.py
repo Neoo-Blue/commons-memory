@@ -89,6 +89,7 @@ def run(store: Store, project_dir: str = ".", extra: list[str] | None = None, dr
             bak = Path.home() / ".commons" / "skill-backups" / f"{src.name}-{int(now())}"
             bak.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(src, bak)
+            (bak / ".commons-origin").write_text(str(src))
             shutil.rmtree(src)
             src.mkdir(parents=True)
             from importlib import resources
@@ -98,3 +99,32 @@ def run(store: Store, project_dir: str = ".", extra: list[str] | None = None, dr
             out["replaced"].append({"path": str(src), "backup": str(bak)})
     store.audit(agent_id, "skills.import.local", f"{len(out['imported'])} new", {k: len(v) for k, v in out.items() if isinstance(v, list)})
     return out
+
+
+def backups() -> list[dict]:
+    d = Path.home() / ".commons" / "skill-backups"
+    out = []
+    for b in sorted(d.glob("*")) if d.exists() else []:
+        origin = (b / ".commons-origin").read_text().strip() if (b / ".commons-origin").exists() else None
+        out.append({"backup": str(b), "origin": origin, "name": b.name.rsplit("-", 1)[0]})
+    return out
+
+
+def restore(target: str | None = None, store: Store | None = None) -> list[dict]:
+    """Undo `--replace-local`: copy backed-up local skills back over the bootstrap pointers.
+    target: a backup path, a skill name, or None for every backup with a recorded origin."""
+    done = []
+    for b in backups():
+        if target and target not in (b["backup"], b["name"]):
+            continue
+        if not b["origin"]:
+            continue
+        dst = Path(b["origin"])
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(b["backup"], dst)
+        (dst / ".commons-origin").unlink(missing_ok=True)
+        done.append({"restored": str(dst), "from": b["backup"]})
+    if store is not None and done:
+        store.audit(None, "skills.import.restore", f"{len(done)} restored", done)
+    return done

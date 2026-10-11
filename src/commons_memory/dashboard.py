@@ -6,10 +6,12 @@ Secrets: only references, leases and audit events are ever shown — never value
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -270,7 +272,28 @@ class API:
         return out
 
     # ---- mutations
+    def system(self, q):
+        from .auth import ACL
+        from .background import status
+        from .escalation import notifications
+        from .trust import Trust
+        esc = [dict(r) for r in self.s.q("SELECT * FROM escalations ORDER BY created_at DESC LIMIT 30")]
+        rv = [dict(r) for r in self.s.q("SELECT * FROM routing_validation ORDER BY applied_at DESC LIMIT 20")]
+        return {"background": status(self.s), "notifications": notifications(self.s, limit=30),
+                "trust": Trust(self.s).table(), "acl": ACL(self.s).list(), "escalations": esc, "routing_validation": rv,
+                "dialect": self.s.dialect, "encrypted": bool(os.environ.get("COMMONS_DB_KEY"))}
+
     def post(self, path, body):
+        if path == "/api/notifications/read":
+            self.s.x("UPDATE notifications SET read=1" + (" WHERE id=?" if body.get("id") else ""),
+                     (body["id"],) if body.get("id") else ())
+            return {"ok": True}
+        if path == "/api/trust/set":
+            from .trust import Trust
+            return Trust(self.s).set_manual(body["agent"], None if body.get("score") in (None, "") else float(body["score"]))
+        if path == "/api/maintenance/run":
+            from .background import tick
+            return tick(self.s, (body.get("job"),) if body.get("job") else None, force=True)
         if path == "/api/discover/add":
             from .skilldiscovery import Discovery
             return Discovery(self.s).add(body["id"], body.get("name") or None, self.s.ensure_agent("dashboard-user"),
@@ -360,8 +383,14 @@ def make_handler(api: API, token: str | None):
         def log_message(self, *a):
             pass
 
+        role = "admin"
+
         def _authed(self, q) -> bool:
-            if not token:
+            """Shared token (admin), or a per-user dashboard token (`commons dashboard-user add NAME --role
+            viewer|admin`). Viewers can read but not POST."""
+            users = dashboard_users(api.s)
+            if not token and not users:
+                self.role = "admin"
                 return True
             cand = self.headers.get("Authorization", "").removeprefix("Bearer ").strip() or q.get("token", "")
             if not cand:
@@ -369,7 +398,43 @@ def make_handler(api: API, token: str | None):
                     k, _, v = part.strip().partition("=")
                     if k == "commons_token":
                         cand = v
-            return hmac.compare_digest(cand, token)
+            if not cand:
+                return False
+            if token and hmac.compare_digest(cand, token):
+                self.role = "admin"
+                return True
+            h = hashlib.sha256(cand.encode()).hexdigest()
+            for u in users:
+                if hmac.compare_digest(h, u["hash"]):
+                    self.role = u["role"]
+                    self.user = u["name"]
+                    return True
+            return False
+
+        def _events(self):
+            """Server-Sent Events: pushes a 'change' event whenever activity happens (jobs, memories, usage, audit,
+            notifications), plus a heartbeat. The page re-renders live views on change instead of polling."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            last, beat = None, time.time()
+            try:
+                for _ in range(int(os.environ.get("COMMONS_SSE_MAX_SECONDS", "3600"))):
+                    fp = change_fingerprint(api.s)
+                    if fp != last:
+                        n = api.s.q("SELECT id,title,level FROM notifications WHERE read=0 ORDER BY ts DESC LIMIT 3")
+                        self.wfile.write(f"event: change\ndata: {json.dumps({'fp': fp, 'notifications': [dict(x) for x in n]})}\n\n".encode())
+                        self.wfile.flush()
+                        last = fp
+                    elif time.time() - beat > 15:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        beat = time.time()
+                    time.sleep(1)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def _send(self, code, body, ctype="application/json", extra=None):
             data = body if isinstance(body, bytes) else (body if isinstance(body, str) else
@@ -389,8 +454,11 @@ def make_handler(api: API, token: str | None):
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             if not self._authed(q):
                 return self._send(401, {"error": "token required (?token=...)"})
-            extra = {"Set-Cookie": f"commons_token={token}; HttpOnly; SameSite=Strict; Path=/"} if token and q.get("token") else None
+            secure = "; Secure" if getattr(self.server, "tls", False) else ""
+            extra = {"Set-Cookie": f"commons_token={q['token']}; HttpOnly; SameSite=Strict; Path=/{secure}"} if q.get("token") else None
             try:
+                if u.path == "/events":
+                    return self._events()
                 if u.path in ("/", "/index.html"):
                     return self._send(200, PAGE, "text/html; charset=utf-8", extra)
                 if u.path == "/graph.html":
@@ -417,6 +485,8 @@ def make_handler(api: API, token: str | None):
                 return self._send(401, {"error": "token required"})
             if self.headers.get("X-Commons") != "1":
                 return self._send(403, {"error": "missing X-Commons header"})
+            if self.role != "admin":
+                return self._send(403, {"error": "read-only dashboard user"})
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
                 return self._send(200, api.post(u.path, body))
@@ -425,19 +495,91 @@ def make_handler(api: API, token: str | None):
     return H
 
 
-def make_server(store: Store, host: str = "127.0.0.1", port: int = 8766, token: str | None = None) -> ThreadingHTTPServer:
+def dashboard_users(s: Store) -> list[dict]:
+    return [json.loads(r["value"]) for r in s.q("SELECT value FROM meta WHERE key LIKE 'dash_user:%'")]
+
+
+def add_dashboard_user(s: Store, name: str, role: str = "viewer") -> dict:
+    import secrets as _sec
+    if role not in ("viewer", "admin"):
+        raise CommonsError("role must be viewer|admin")
+    tok = "cmd_" + _sec.token_urlsafe(24)
+    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"dash_user:{name}", json.dumps(
+        {"name": name, "role": role, "hash": hashlib.sha256(tok.encode()).hexdigest()})))
+    s.audit(None, "dashboard.user.add", name, {"role": role})
+    return {"name": name, "role": role, "token": tok, "note": "shown once; only its hash is stored"}
+
+
+def change_fingerprint(s: Store) -> str:
+    parts = []
+    for t, c in (("subtasks", "updated_at"), ("items", "created_at"), ("usage", "ts"), ("audit", "ts"),
+                 ("notifications", "ts"), ("jobs", "updated_at"), ("agents", "last_seen")):
+        try:
+            parts.append(str(s.q(f"SELECT MAX({c}) m FROM {t}")[0]["m"]))
+        except Exception:  # noqa: BLE001
+            parts.append("-")
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+def self_signed_cert(dir_: str | None = None, host: str = "localhost") -> tuple[str, str]:
+    """Create (once) a self-signed cert for the dashboard/server under ~/.commons/tls using `cryptography`."""
+    import datetime as dt
+    from pathlib import Path
+    d = Path(dir_ or Path.home() / ".commons" / "tls")
+    d.mkdir(parents=True, exist_ok=True)
+    cert, key = d / "cert.pem", d / "key.pem"
+    if cert.exists() and key.exists():
+        return str(cert), str(key)
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    k = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    import ipaddress
+    sans = [x509.DNSName(host), x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+    c = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(k.public_key())
+         .serial_number(x509.random_serial_number()).not_valid_before(dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5))
+         .not_valid_after(dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=825))
+         .add_extension(x509.SubjectAlternativeName(sans), critical=False).sign(k, hashes.SHA256()))
+    key.write_bytes(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption()))
+    os.chmod(key, 0o600)
+    cert.write_bytes(c.public_bytes(serialization.Encoding.PEM))
+    return str(cert), str(key)
+
+
+def make_server(store: Store, host: str = "127.0.0.1", port: int = 8766, token: str | None = None,
+                tls_cert: str | None = None, tls_key: str | None = None) -> ThreadingHTTPServer:
     token = token or os.environ.get("COMMONS_DASHBOARD_TOKEN") or None
-    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+    if host not in ("127.0.0.1", "localhost", "::1") and not token and not dashboard_users(store):
         raise CommonsError("refusing to bind dashboard to a non-loopback host without a token")
-    return ThreadingHTTPServer((host, port), make_handler(API(store), token))
+    srv = ThreadingHTTPServer((host, port), make_handler(API(store), token))
+    srv.daemon_threads = True
+    srv.tls = False
+    tls_cert = tls_cert or os.environ.get("COMMONS_TLS_CERT")
+    tls_key = tls_key or os.environ.get("COMMONS_TLS_KEY")
+    if tls_cert:
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(tls_cert, tls_key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        srv.tls = True
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: dashboard on a non-loopback host without TLS; use --tls-cert/--tls-key or --tls-self-signed")
+    return srv
 
 
-def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, background=False):
-    srv = make_server(store, host, port, token)
+def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, background=False,
+                    tls_cert: str | None = None, tls_key: str | None = None):
+    srv = make_server(store, host, port, token, tls_cert, tls_key)
+    from .background import start_background
+    start_background(store)
     if background:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         return srv
-    print(f"Commons dashboard on http://{host}:{port}/" + ("?token=<token>" if (token or os.environ.get('COMMONS_DASHBOARD_TOKEN')) else ""))
+    print(f"Commons dashboard on {'https' if srv.tls else 'http'}://{host}:{port}/" + ("?token=<token>" if (token or os.environ.get('COMMONS_DASHBOARD_TOKEN')) else ""))
     srv.serve_forever()
 
 
@@ -533,9 +675,9 @@ div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1f
 <div id="pal" role="dialog" aria-modal="true" aria-label="Command palette" onclick="if(event.target.id=='pal')palClose()"><div class="box"><input id="palq" placeholder="Jump to a page, find a place, search memory…" autocomplete="off"><div class="res" id="palr"></div></div></div>
 <div id="toasts" aria-live="assertive"></div>
 <script>
-const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring"];
-const ICON={Overview:'<path d="M3 12l9-8 9 8M5 10v10h14V10"/>',Agents:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/>',Orchestration:'<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7.5l4 8.5M17 7.5l-4 8.5M7.5 6h9"/>',Sessions:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h5"/>',Usage:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',Memory:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',Knowledge:'<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6"/>',Preferences:'<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',Graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7l7.4.6M7 8.3l1.5 7.3M16.4 10l-5.6 6.4"/>',"Org chart":'<rect x="9" y="2.5" width="6" height="5" rx="1.2"/><rect x="2.5" y="16.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="16.5" width="6" height="5" rx="1.2"/><path d="M12 7.5V12M5.5 16.5V12h13v4.5"/>',Skills:'<path d="M14.7 6.3a4 4 0 015 5L12 19l-5-5 7.7-7.7zM7 14l-4 4 3 3 4-4"/>',Models:'<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1.5v3.5M15 1.5v3.5M9 19v3.5M15 19v3.5M1.5 9H5M1.5 15H5M19 9h3.5M19 15h3.5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',"MCP hub":'<circle cx="12" cy="12" r="3"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7M5 5l4.5 4.5M14.5 14.5L19 19M19 5l-4.5 4.5M9.5 14.5L5 19"/>',Context:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17.5l9 5 9-5" opacity=".5"/>',Discover:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',Import:'<path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/>',Librarian:'<path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8-1 3.2 15.5-3.8 1z"/>',Secrets:'<rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 018 0v3.5"/>',Recurring:'<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>'};
-const GROUPS=[["Live",["Overview","Agents","Orchestration","Sessions","Usage"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Skills","Discover","Import","Models","MCP hub"]],["Admin",["Secrets","Recurring"]]];
+const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring","System"];
+const ICON={Overview:'<path d="M3 12l9-8 9 8M5 10v10h14V10"/>',Agents:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/>',Orchestration:'<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7.5l4 8.5M17 7.5l-4 8.5M7.5 6h9"/>',Sessions:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h5"/>',Usage:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',Memory:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',Knowledge:'<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6"/>',Preferences:'<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',Graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7l7.4.6M7 8.3l1.5 7.3M16.4 10l-5.6 6.4"/>',"Org chart":'<rect x="9" y="2.5" width="6" height="5" rx="1.2"/><rect x="2.5" y="16.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="16.5" width="6" height="5" rx="1.2"/><path d="M12 7.5V12M5.5 16.5V12h13v4.5"/>',Skills:'<path d="M14.7 6.3a4 4 0 015 5L12 19l-5-5 7.7-7.7zM7 14l-4 4 3 3 4-4"/>',Models:'<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1.5v3.5M15 1.5v3.5M9 19v3.5M15 19v3.5M1.5 9H5M1.5 15H5M19 9h3.5M19 15h3.5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',"MCP hub":'<circle cx="12" cy="12" r="3"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7M5 5l4.5 4.5M14.5 14.5L19 19M19 5l-4.5 4.5M9.5 14.5L5 19"/>',Context:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17.5l9 5 9-5" opacity=".5"/>',Discover:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',Import:'<path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/>',Librarian:'<path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8-1 3.2 15.5-3.8 1z"/>',Secrets:'<rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 018 0v3.5"/>',Recurring:'<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',System:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
+const GROUPS=[["Live",["Overview","Agents","Orchestration","Sessions","Usage"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Skills","Discover","Import","Models","MCP hub"]],["Admin",["Secrets","Recurring","System"]]];
 let [tab,hq]=(decodeURI(location.hash.slice(1))||"Overview").split("?");if(!T.includes(tab))tab="Overview";
 if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get("scope"),id:u.get("id")||""};if(u.get("bucket"))window.kb=u.get("bucket");if(u.get("path"))window.oc_jump=u.get("path");if(u.get("mode"))window.oc_mode=u.get("mode");if(u.get("cite"))setTimeout(()=>cite(u.get("cite")),800)}
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -695,6 +837,18 @@ return `<div class="grid"><div class="card stat hero"><div class="mut">Tokens sa
 <div class="cols"><div class="card"><h3>Context packs</h3>${c.packs.length?`<table><tr><th>pack</th><th>L0 · L1 · L2 · L3 tokens</th><th>new / reused chars</th><th>loads · saved</th></tr>${c.packs.map(p=>`<tr style="cursor:pointer" onclick="cxs='${p.id}';render()"><td><b>${E(p.name)}</b> ${p.parent?pill("delta"):pill("base")}<div class="mut">${E(p.gist.slice(0,90))}</div><div class="mut" style="font-size:11px">${E(p.agent||"")} · ${E(p.created_at)} · prefix <code>${E(p.prefix_hash)}</code></div></td>
 <td>${["L0","L1","L2","L3"].map(l=>`<span title="${l}">${p.tokens[l]}</span>`).join(" · ")}<div style="display:flex;height:6px;border-radius:9px;overflow:hidden;margin-top:4px;background:var(--line)">${["L0","L1","L2","L3"].map((l,i)=>`<div style="width:${100*p.tokens[l]/Math.max(1,p.full_tokens)}%;background:${PAL[i]}"></div>`).join("")}</div></td><td>${p.new_chars} / <span class="done">${p.reused_chars}</span></td><td>${p.loads} · <b>${p.tokens_saved}</b></td></tr>`).join("")}</table>`:empty("🧳","No context packs yet","<div>Agents call <code>context_save</code> before a handoff and pass the pack id; receivers <code>context_load</code> only the layer they need.</div>")}</div>
 <div class="card">${sel&&c.diff?`<h3>Pack ${E(sel)}</h3><div class="mut">vs parent ${E(c.diff.from||"–")}: +${c.diff.added.length} sections, −${c.diff.removed.length}, ~${c.diff.changed.length} changed</div>${c.diff.changed.map(x=>`<details><summary>${E(x.title)}</summary><pre>${E(x.diff)}</pre></details>`).join("")}<h4>L1 (cache-friendly prefix)</h4><pre>${E(c.l1)}</pre>`:'<p class="mut">Select a pack to see its delta vs the parent and its L1 brief.</p>'}</div></div>`}});
+Object.assign(V,{
+async System(){const d=await api("system");const ago=t=>t?Math.round((Date.now()/1000-t)/60)+"m ago":"never";
+return `<div class="grid"><div class="card stat"><div class="mut">Backend</div><div class="big">${E(d.dialect)}</div><div class="mut">${d.encrypted?"encrypted at rest (SQLCipher)":"not encrypted"}</div></div>
+<div class="card stat"><div class="mut">Unread notifications</div><div class="big">${d.notifications.filter(n=>!n.read).length}</div></div>
+<div class="card stat"><div class="mut">Escalations</div><div class="big">${d.escalations.length}</div></div>
+<div class="card stat"><div class="mut">Last prune</div><div class="big" style="font-size:16px">${d.background.last_prune?ago(d.background.last_prune.ts):"never"}</div><div class="mut">backup: ${d.background.last_backup?E(d.background.last_backup.path.split("/").pop()):"off"}</div></div></div>
+<div class="cols"><div class="card"><h3>Notifications <button onclick="post('notifications/read',{}).then(render)">mark all read</button></h3>${d.notifications.length?`<table>${d.notifications.map(n=>`<tr><td>${pill(n.level)}</td><td><b>${E(n.title)}</b><div class="mut">${E(n.body.slice(0,220))}</div></td><td class="mut">${ago(n.ts)}</td></tr>`).join("")}</table>`:empty("🔔","Nothing needs you","Stuck or unassignable tasks escalate here.")}
+<h3 style="margin-top:14px">Escalations</h3>${d.escalations.length?`<table>${d.escalations.map(x=>`<tr><td>${pill(x.level)}</td><td><code>${E(x.subtask_id)}</code></td><td class="mut">${E(x.detail)}</td></tr>`).join("")}</table>`:'<p class="mut">none</p>'}</div>
+<div class="card"><h3>Background jobs</h3><table>${Object.entries(d.background.jobs).map(([k,v])=>`<tr><td>${E(k)}</td><td class="mut">every ${v.every}s</td><td>${ago(v.last)}</td><td><button onclick="post('maintenance/run',{job:'${k}'}).then(()=>{toast('${k} ran');render()})">run</button></td></tr>`).join("")}</table></div></div>
+<div class="cols"><div class="card"><h3>Agent trust</h3><table><tr><th>agent</th><th>score</th><th>auth</th><th>success</th><th>conflict loss</th><th>pin</th></tr>${d.trust.map(t=>`<tr><td>${E(t.agent)}</td><td><b>${t.score}</b>${t.manual!=null?" "+pill("pinned"):""}<div style="height:5px;width:${Math.round(t.score*100)}%;background:var(--grad);border-radius:9px"></div></td><td>${t.auth}</td><td>${t.success_rate} (${t.evidence})</td><td>${t.conflict_loss}</td><td><input size=3 placeholder="0-1" onchange="post('trust/set',{agent:'${E(t.agent)}',score:this.value}).then(render)"></td></tr>`).join("")}</table></div>
+<div class="card"><h3>Project ACLs</h3>${d.acl.length?`<table>${d.acl.map(a=>`<tr><td>${E(a.project)}</td><td>${E(a.agent)}</td><td>${pill(a.role)}</td></tr>`).join("")}</table>`:'<p class="mut">All projects open. <code>commons acl grant PROJECT AGENT --role read|write|admin</code> restricts a project.</p>'}
+<h3 style="margin-top:14px">Routing A/B validation</h3>${d.routing_validation.length?`<table>${d.routing_validation.map(r=>`<tr><td>${E(r.task_type)}</td><td>${E(r.old_model)} → ${E(r.new_model)}</td><td>${pill(r.status)}</td></tr>`).join("")}</table>`:'<p class="mut">No switches being validated.</p>'}</div></div>`}});
 async function mcpAdd(id){const c=(await api("mcp")).catalog.find(x=>x.id==id);const params={},refs={};c.params.forEach(p=>{const v=$("#mp_"+p).value;if(v)params[p]=v});c.secrets.forEach(x=>{const v=$("#mr_"+x).value;if(v)refs[x]=v});window.mcp_add=null;post("mcp/add_preset",{preset:id,params,refs})}
 function ocT(p){oc_sel=p;oc_open[p]=!oc_open[p];render()}
 window.oc_tf=window.oc_tf||{x:0,y:0,k:1,fit:true};
@@ -715,5 +869,8 @@ async function openJob(id){const j=await api("job?id="+id);$("#j_"+id).innerHTML
 async function show(id){const d=await api("item?id="+id);const el=$("#det");el.hidden=false;el.textContent=JSON.stringify(d,null,1)}
 async function render(){tabs();const o=await api("overview");$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})">⏻ Kill switch</button>`;
 try{const html=await V[tab]();const m=$("#m");if(m.dataset.tab!=tab){m.style.animation="none";m.offsetHeight;m.style.animation=""}m.dataset.tab=tab;m.innerHTML=html;if(tab=="Org chart")ocInit()}catch(e){$("#m").innerHTML='<div class="card failed">'+E(e)+'</div>'}}
-render();setInterval(()=>{if(["Overview","Agents","Orchestration"].includes(tab)&&!document.querySelector("details[open]"))render()},5000);
+const boot=Date.now();render();
+const LIVE=["Overview","Agents","Orchestration","Usage","Librarian","MCP hub","Context","Sessions"];let lastLive=0,seenN=new Set();
+function liveRender(){if(LIVE.includes(tab)&&!document.querySelector("details[open]")&&!document.querySelector("input:focus,textarea:focus")&&Date.now()-lastLive>1500){lastLive=Date.now();render()}}
+if(window.EventSource){const es=new EventSource("/events");es.addEventListener("change",e=>{const d=JSON.parse(e.data);(d.notifications||[]).forEach(n=>{if(!seenN.has(n.id)){seenN.add(n.id);if(seenN.size>1||Date.now()-boot>3000)toast((n.level==="warn"?"⚠ ":"")+n.title)}});liveRender()});es.onerror=()=>{if(!window._poll){window._poll=setInterval(liveRender,5000)}}}else{setInterval(liveRender,5000)}
 </script></body></html>"""

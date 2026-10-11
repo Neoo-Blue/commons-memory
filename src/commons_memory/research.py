@@ -164,7 +164,12 @@ class Research:
                                    project=project, agent_id=agent_id, tags=["research", "source"],
                                    meta={"url": r["url"], "provider": provider, "query": query})
             sources.append({"id": item["id"], "url": r["url"], "title": page.get("title") or r["title"],
-                            "excerpt": excerpt[:300], **({"error": page["error"]} if page.get("error") else {})})
+                            "excerpt": excerpt[:600], **({"error": page["error"]} if page.get("error") else {})})
+        for s_ in sources:  # per-source corroboration across independent domains
+            first = re.split(r"(?<=[.!?])\s+", s_["excerpt"])[0]
+            s_["corroboration"] = corroboration(first, s_["url"], sources)
+            if s_["corroboration"] <= 1:
+                self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(["research", "source", "single-source"]), s_["id"]))
         summary = self._summarize(query, sources)
         note = self.s.add_item("memory", summary, title=f"Research: {query[:100]}", project=project, agent_id=agent_id,
                                tags=["research"], related_ids=[s["id"] for s in sources],
@@ -183,10 +188,34 @@ class Research:
                                               f"cite them as [id].\nQUESTION: {query}\nSOURCES:\n{body}")
         if llm:
             return llm + "\n\nSources:\n" + "\n".join(f"- [{s['id']}] {s['url']}" for s in sources)
-        lines = [f"Research question: {query}", "", "Findings (extractive):"]
+        lines = [f"Research question: {query}", "", "Findings (extractive; corroboration = independent domains agreeing):"]
         terms = set(re.findall(r"[a-z]{4,}", query.lower()))
         for s in sources:
             sents = re.split(r"(?<=[.!?])\s+", s["excerpt"])
             best = max(sents, key=lambda x: len(terms & set(re.findall(r"[a-z]{4,}", x.lower()))), default="")
-            lines.append(f"- {best[:240]} [{s['id']}] ({s['url']})")
+            c = corroboration(best, s["url"], sources)
+            mark = "single-source, unverified" if c <= 1 else f"corroborated by {c} domains"
+            lines.append(f"- {best[:240]} [{s['id']}] ({s['url']}) — {mark}")
         return "\n".join(lines)
+
+
+def _domain(url: str) -> str:
+    from urllib.parse import urlparse
+    h = (urlparse(url).hostname or url).lower()
+    parts = h.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else h
+
+
+def corroboration(claim: str, url: str, sources: list[dict], min_overlap: float = 0.5) -> int:
+    """How many independent domains (including the claim's own) contain most of the claim's salient terms.
+    A cheap cross-source check: it flags single-source claims; it does not establish truth."""
+    stop = {"that", "this", "with", "from", "have", "were", "which", "their", "about", "there", "would", "these", "also"}
+    ct = {t for t in re.findall(r"[a-z0-9]{4,}", claim.lower()) if t not in stop}
+    if not ct:
+        return 1
+    doms = {_domain(url)}
+    for s in sources:
+        st = set(re.findall(r"[a-z0-9]{4,}", (s.get("excerpt") or "").lower()))
+        if len(ct & st) / len(ct) >= min_overlap:
+            doms.add(_domain(s["url"]))
+    return len(doms)

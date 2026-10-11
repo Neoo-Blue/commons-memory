@@ -160,6 +160,92 @@ class Hub:
             value = value.replace("{" + r + "}", self.broker.resolve_internal(r, purpose))
         return value
 
+    # ---- per-agent credentials and OAuth token refresh
+    def set_agent_credentials(self, server: str, agent: str, env_refs: dict | None = None,
+                              header_refs: dict | None = None, require: bool | None = None) -> dict:
+        """Give one agent its own upstream credentials (refs only), so agents do not share a single identity.
+        require=True: agents without their own credentials are denied for this server."""
+        self._srv(server)
+        aid = self.s.ensure_agent(agent) if not agent.startswith("agt_") else agent
+        for v in list((env_refs or {}).values()) + list((header_refs or {}).values()):
+            for r in re.findall(r"\w+://[^}\s]+", v) or [v]:
+                if not re.match(r"^(env|vault|vault-dyn|op|infisical)://", r):
+                    raise CommonsError("credential values must be secret refs (env://, vault://, op://, infisical://)")
+        self.s.x("INSERT OR REPLACE INTO mcp_agent_creds VALUES(?,?,?,?)",
+                 (server, aid, json.dumps(env_refs or {}), json.dumps(header_refs or {})))
+        if require is not None:
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"mcp_require_agent_creds:{server}", "1" if require else "0"))
+        self.s.audit(None, "mcp.agent_creds", server, {"agent": aid})
+        return {"server": server, "agent": aid, "env": list((env_refs or {})), "headers": list((header_refs or {}))}
+
+    def set_oauth(self, server: str, token_url: str, client_id_ref: str, client_secret_ref: str | None = None,
+                  refresh_token_ref: str | None = None, scope: str = "", audience: str = "") -> dict:
+        """OAuth for a remote upstream: Commons obtains short-lived access tokens itself (refresh_token grant when a
+        refresh-token ref is given, else client_credentials) and sends them as `Authorization: Bearer`."""
+        self._srv(server)
+        cfg = {"token_url": token_url, "client_id_ref": client_id_ref, "client_secret_ref": client_secret_ref,
+               "refresh_token_ref": refresh_token_ref, "scope": scope, "audience": audience}
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"mcp_oauth:{server}", json.dumps(cfg)))
+        return {"server": server, "grant": "refresh_token" if refresh_token_ref else "client_credentials"}
+
+    def _oauth_header(self, srv: dict) -> dict:
+        r = self.s.q("SELECT value FROM meta WHERE key=?", (f"mcp_oauth:{srv['name']}",))
+        if not r:
+            return {}
+        cfg = json.loads(r[0]["value"])
+        cached = _TOKENS.get(srv["name"])
+        if cached and cached[1] > time.time() + 30:
+            return {"Authorization": f"Bearer {cached[0]}"}
+        import urllib.parse
+        import urllib.request
+        purpose = f"mcp-oauth:{srv['name']}"
+        form = {"client_id": self._resolve(cfg["client_id_ref"], purpose)}
+        if cfg.get("client_secret_ref"):
+            form["client_secret"] = self._resolve(cfg["client_secret_ref"], purpose)
+        if cfg.get("refresh_token_ref"):
+            form |= {"grant_type": "refresh_token", "refresh_token": self._resolve(cfg["refresh_token_ref"], purpose)}
+        else:
+            form["grant_type"] = "client_credentials"
+        if cfg.get("scope"):
+            form["scope"] = cfg["scope"]
+        if cfg.get("audience"):
+            form["resource"] = cfg["audience"]
+        req = urllib.request.Request(cfg["token_url"], data=urllib.parse.urlencode(form).encode(),
+                                     headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 - operator-configured token endpoint
+            tok = json.loads(resp.read())
+        _TOKENS[srv["name"]] = (tok["access_token"], time.time() + float(tok.get("expires_in") or 300))
+        self.s.audit(None, "mcp.oauth.token", srv["name"], {"grant": form["grant_type"]})
+        return {"Authorization": f"Bearer {tok['access_token']}"}
+
+    def _effective(self, srv: dict, agent_id: str | None) -> dict:
+        srv = dict(srv)
+        row = self.s.q("SELECT * FROM mcp_agent_creds WHERE server=? AND agent_id=?", (srv["name"], agent_id)) if agent_id else []
+        if row:
+            srv["env_refs"] = json.dumps({**json.loads(srv["env_refs"] or "{}"), **json.loads(row[0]["env_refs"] or "{}")})
+            srv["header_refs"] = json.dumps({**json.loads(srv["header_refs"] or "{}"), **json.loads(row[0]["header_refs"] or "{}")})
+            srv["_cred_owner"] = agent_id
+        else:
+            req = self.s.q("SELECT value FROM meta WHERE key=?", (f"mcp_require_agent_creds:{srv['name']}",))
+            if req and req[0]["value"] == "1":
+                raise CommonsError(f"{srv['name']} requires per-agent credentials; none configured for this agent")
+            srv["_cred_owner"] = "shared"
+        return srv
+
+    def _pool_key(self, srv: dict) -> str:
+        return srv["name"] + ":" + hashlib.sha256(json.dumps([srv["name"], srv["transport"], srv["command"], srv["args"], srv["url"],
+                                          srv["env_refs"], srv["header_refs"], srv.get("_cred_owner")]).encode()).hexdigest()
+
+    def _with_session(self, srv: dict, fn, timeout: float):
+        """Run `fn(session)` on a persistent upstream session (kept warm, closed after COMMONS_MCP_IDLE seconds idle,
+        reconnected once on failure). COMMONS_MCP_PERSISTENT=0 -> one connection per call."""
+        if os.environ.get("COMMONS_MCP_PERSISTENT", "1") != "1":
+            async def once():
+                async with self._session(srv) as sess:
+                    return await fn(sess)
+            return self._run(once(), timeout)
+        return POOL.call(self._pool_key(srv), lambda: self._session(srv), fn, timeout)
+
     @asynccontextmanager
     async def _session(self, srv: dict):
         from mcp import ClientSession
@@ -174,6 +260,7 @@ class Hub:
                 yield sess
         else:
             headers = {k: self._resolve(v, purpose) for k, v in json.loads(srv["header_refs"] or "{}").items()}
+            headers |= self._oauth_header(srv)
             if srv["transport"] == "sse":
                 from mcp.client.sse import sse_client
                 async with sse_client(srv["url"], headers=headers) as (r, w), ClientSession(r, w) as sess:
@@ -210,10 +297,10 @@ class Hub:
             overrides = (load_catalog()["presets"].get(srv["preset"] or "", {}) or {}).get("risk", {})
             t0 = time.time()
             try:
-                async def go():
-                    async with self._session(srv) as sess:
-                        return (await sess.list_tools()).tools
-                tools = self._run(go(), timeout)
+                POOL.close_server(n)  # health checks restart the connection
+                async def lt(sess):
+                    return (await sess.list_tools()).tools
+                tools = self._with_session(srv, lt, timeout)
                 self.s.x("DELETE FROM mcp_tools WHERE server=?", (n,))
                 for t in tools:
                     ann = t.annotations.model_dump() if getattr(t, "annotations", None) else {}
@@ -308,8 +395,14 @@ class Hub:
     # ------------------------------------------------------------------ call
     def call(self, tool: str, args: dict | None = None, agent_id: str | None = None, approval_id: str | None = None,
              timeout: float = 120, max_chars: int = 20000) -> dict:
+        from .telemetry import span
+        with span("mcp_hub.call", tool=tool, agent=agent_id):
+            return self._call(tool, args, agent_id, approval_id, timeout, max_chars)
+
+    def _call(self, tool: str, args: dict | None = None, agent_id: str | None = None, approval_id: str | None = None,
+              timeout: float = 120, max_chars: int = 20000) -> dict:
         srv_name, name = self._split(tool)
-        srv = self._srv(srv_name)
+        srv = self._effective(self._srv(srv_name), agent_id)
         if not srv["enabled"]:
             raise CommonsError(f"server {srv_name} is disabled")
         args = args or {}
@@ -352,10 +445,9 @@ class Hub:
                 return {"status": "ok", "cached": True, "result": c[0]["result"]}
         t0 = time.time()
         try:
-            async def go():
-                async with self._session(srv) as sess:
-                    return await sess.call_tool(name, args)
-            res = self._run(go(), timeout)
+            async def ct(sess):
+                return await sess.call_tool(name, args)
+            res = self._with_session(srv, ct, timeout)
         except BaseException as e:  # noqa: BLE001
             ms = int((time.time() - t0) * 1000)
             log("error", ms, error=_err(e)[:300])
@@ -381,6 +473,45 @@ class Hub:
         if risk == "read" and not is_err:
             self.s.x("INSERT OR REPLACE INTO mcp_cache VALUES(?,?,?)", (key, wrapped, now()))
         return {"status": "error" if is_err else "ok", "cached": False, "ms": ms, "result": wrapped}
+
+    def verify_catalog(self, preset: str | None = None, timeout: float = 15) -> dict:
+        """Re-verify catalog presets against the vendors: docs URL reachable, npm/PyPI package exists for stdio
+        presets, remote endpoint answers (any HTTP status but 404/5xx). Results are stored and shown in the catalog."""
+        import urllib.error
+        import urllib.request
+        cat = load_catalog()["presets"]
+        out = {}
+
+        def probe(url, method="GET"):
+            req = urllib.request.Request(url, method=method, headers={"User-Agent": "commons-catalog-verify"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - catalog URLs
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+            except Exception:  # noqa: BLE001
+                return 0
+        for name, p in cat.items():
+            if preset and name != preset:
+                continue
+            res = {}
+            if p.get("docs"):
+                res["docs"] = probe(p["docs"])
+            if p.get("url") and "{" not in p["url"]:
+                res["endpoint"] = probe(p["url"])
+            args = p.get("args") or []
+            if p.get("command") == "npx" and args:
+                pkg = next((a for a in args if not a.startswith("-")), None)
+                if pkg:
+                    base = pkg.rsplit("@", 1)[0] if pkg.count("@") > (1 if pkg.startswith("@") else 0) else pkg
+                    res["npm"] = probe(f"https://registry.npmjs.org/{base.replace('/', '%2F')}")
+            if p.get("command") in ("uvx", "pipx") and args:
+                res["pypi"] = probe(f"https://pypi.org/pypi/{args[0]}/json")
+            ok = all(v and v < 400 or (k == "endpoint" and v in (401, 403, 405, 406)) for k, v in res.items())
+            res["ok"] = bool(res) and ok
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"catalog_verify:{name}", json.dumps(res | {"ts": now()})))
+            out[name] = res
+        return out
 
     def calls(self, limit: int = 100) -> list[dict]:
         return [dict(r) | {"ts": iso(r["ts"]), "agent": self.s.label(r["agent_id"])[1] if r["agent_id"] else None}
@@ -432,6 +563,98 @@ class Hub:
                              env_refs=env_refs, header_refs=header_refs, discover=False)
                 added.append({"name": name, "from": str(p), "transport": transport})
         return {"added": added, "skipped": skipped, "warnings": warnings, "dry_run": dry_run}
+
+
+_TOKENS: dict[str, tuple[str, float]] = {}
+
+
+class _SessionPool:
+    """Keeps upstream MCP sessions open on a private event-loop thread."""
+
+    def __init__(self):
+        self.loop = None
+        self.lock = __import__("threading").Lock()
+        self.sessions: dict[str, dict] = {}
+
+    def _ensure_loop(self):
+        import threading
+        with self.lock:
+            if self.loop is None:
+                self.loop = asyncio.new_event_loop()
+                threading.Thread(target=self.loop.run_forever, name="commons-mcp-pool", daemon=True).start()
+                asyncio.run_coroutine_threadsafe(self._reaper(), self.loop)
+        return self.loop
+
+    async def _reaper(self):
+        while True:
+            await asyncio.sleep(15)
+            idle = float(os.environ.get("COMMONS_MCP_IDLE", "300"))
+            for k, e in list(self.sessions.items()):
+                if time.time() - e["last"] > idle:
+                    await self._close(k)
+
+    async def _open(self, key, factory):
+        ready = asyncio.get_running_loop().create_future()
+        stop = asyncio.Event()
+
+        async def holder():
+            try:
+                async with factory() as sess:
+                    ready.set_result(sess)
+                    await stop.wait()
+            except BaseException as e:  # noqa: BLE001
+                if not ready.done():
+                    ready.set_exception(e)
+        task = asyncio.get_running_loop().create_task(holder())
+        sess = await ready
+        self.sessions[key] = {"sess": sess, "stop": stop, "task": task, "last": time.time(),
+                              "lock": asyncio.Lock()}
+        return self.sessions[key]
+
+    async def _close(self, key):
+        e = self.sessions.pop(key, None)
+        if e:
+            e["stop"].set()
+            try:
+                await asyncio.wait_for(e["task"], 5)
+            except BaseException:  # noqa: BLE001
+                e["task"].cancel()
+
+    async def _use(self, key, factory, fn):
+        for attempt in (0, 1):
+            e = self.sessions.get(key) or await self._open(key, factory)
+            try:
+                async with e["lock"]:
+                    e["last"] = time.time()
+                    return await fn(e["sess"])
+            except BaseException:  # noqa: BLE001 - broken pipe/dead server: reconnect once
+                await self._close(key)
+                if attempt:
+                    raise
+
+    def call(self, key, factory, fn, timeout):
+        loop = self._ensure_loop()
+        fut = asyncio.run_coroutine_threadsafe(asyncio.wait_for(self._use(key, factory, fn), timeout), loop)
+        return fut.result(timeout + 5)
+
+    def close_server(self, name: str):
+        if self.loop is None:
+            return
+        for k in list(self.sessions):
+            if k.startswith(name + ":"):
+                asyncio.run_coroutine_threadsafe(self._close(k), self.loop).result(10)
+
+    def close_all(self):
+        if self.loop is None:
+            return
+        for k in list(self.sessions):
+            asyncio.run_coroutine_threadsafe(self._close(k), self.loop).result(10)
+
+    def stats(self) -> dict:
+        return {"open_sessions": len(self.sessions)}
+
+
+POOL = _SessionPool()
 
 
 def _err(e: BaseException) -> str:

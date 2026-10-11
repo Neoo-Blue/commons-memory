@@ -8,13 +8,20 @@ commons connect claude-code --platform claude-code --expertise code:0.9,plan:0.8
 commons worker --agent claude-code --preset claude --model claude-sonnet
 ```
 
-| Preset | Command | Notes |
-|---|---|---|
-| `claude` | `claude -p --output-format text` | Claude Code print mode; add `--mcp-config` / `--allowedTools` to taste |
-| `codex` | `codex exec --skip-git-repo-check -` | Codex CLI reading the prompt from stdin |
-| `cursor` | `cursor-agent -p --output-format text` | Cursor CLI agent |
-| `gemini` | `gemini -p "$(cat {prompt_file})"` | Gemini CLI |
-| `echo` | `cat` | debugging |
+Presets were checked on 2026-10-11 against each vendor's own CLI reference. The CLIs change often, so run
+`<cli> --help` if a flag is rejected.
+
+| Preset | Command | Verified against | Notes |
+|---|---|---|---|
+| `claude` | `claude -p --output-format text --permission-prompts none "<query>"` (prompt on stdin) | [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) | `-p` is print mode; piped stdin is the content. `--permission-prompts none` (v2.1.259+) denies prompts nobody can answer instead of hanging; drop it on older versions. Add `--allowedTools` / `--mcp-config` / `--max-budget-usd` as needed. |
+| `codex` | `codex exec --skip-git-repo-check --sandbox workspace-write -` | [Codex CLI reference](https://developers.openai.com/codex/cli/reference) | `exec` is non-interactive; `-` reads the prompt from stdin; the sandbox keeps edits in the workspace. |
+| `cursor` | `agent -p --output-format text --trust "$(cat {prompt_file})"` | [Cursor CLI parameters](https://cursor.com/docs/cli/reference/parameters) | The binary is now `agent`; `--trust` skips the workspace-trust prompt (headless only). No stdin prompt is documented, so the prompt goes in as an argument. Add `--force` only in a sandbox. |
+| `cursor-legacy` | `cursor-agent -p --output-format text "$(cat {prompt_file})"` | older Cursor installs | Same flags, older binary name. |
+| `gemini` | `gemini --output-format text -p "$(cat {prompt_file})"` | [Gemini CLI headless mode](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/headless.md) | `-p` or non-TTY stdin triggers headless mode. Exit code 53 means the turn limit was exceeded. |
+| `echo` | `cat` | n/a | debugging |
+
+Not verified by running: the box that built this release has none of these CLIs logged in. The flags come from the
+docs above, and the worker itself is tested with mock commands.
 
 Any other agent: `--cmd "<shell command>"`. The prompt arrives on **stdin** and in `{prompt_file}`. The environment has
 `COMMONS_SUBTASK_ID`, `COMMONS_JOB_ID`, `COMMONS_TASK_TYPE` and `COMMONS_PROMPT_FILE`. Example for an API-only model (Grok via

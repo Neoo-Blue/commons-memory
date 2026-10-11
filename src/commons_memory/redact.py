@@ -1,4 +1,5 @@
 """Secret-redaction scanner applied to every write. Patterns inspired by gitleaks."""
+import os
 import re
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
@@ -7,6 +8,12 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b")),
     ("slack_token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),
     ("openai_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}\b")),
+    ("huggingface_token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("gitlab_token", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b")),
+    ("npm_token", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b")),
+    ("sendgrid_key", re.compile(r"\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\b")),
+    ("digitalocean_token", re.compile(r"\bdo[opr]_v1_[a-f0-9]{64}\b")),
+    ("xai_key", re.compile(r"\bxai-[A-Za-z0-9]{30,}\b")),
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("stripe_key", re.compile(r"\b(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{16,}\b")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
@@ -18,11 +25,41 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
+_CAND = re.compile(r"(?<![A-Za-z0-9_/+=.-])[A-Za-z0-9+/_=-]{32,}(?![A-Za-z0-9_/+=-])")
+_SAFE = re.compile(r"^(?:[0-9a-f]+|[0-9A-F]+|[a-z]{2,6}_[0-9a-f]{16,}|[A-Za-z]+(?:[-_][A-Za-z]+)*|\d+)$")
+
+
+def _entropy(s: str) -> float:
+    import math
+    from collections import Counter
+    n = len(s)
+    return -sum(c / n * math.log2(c / n) for c in Counter(s).values())
+
+
+def _high_entropy(text: str) -> list[str]:
+    """Novel-format secrets: long mixed-case+digit tokens with high Shannon entropy. Hex digests, our ids,
+    words/slugs and numbers are skipped (they are not secrets and are everywhere)."""
+    if os.environ.get("COMMONS_ENTROPY_REDACT", "1") != "1":
+        return []
+    out = []
+    for m in _CAND.finditer(text):
+        t = m.group(0).strip("=")
+        if "/" in t and not re.search(r"[+=]", m.group(0)):  # file paths / URLs: judge the longest segment
+            t = max(t.split("/"), key=len)
+        if len(t) < 32 or _SAFE.match(t) or "REDACTED" in t:
+            continue
+        if not (re.search(r"[a-z]", t) and re.search(r"[A-Z]", t) and re.search(r"\d", t)):
+            continue
+        if _entropy(t) >= float(os.environ.get("COMMONS_ENTROPY_MIN", "4.3")):
+            out.append(m.group(0))
+    return out
+
+
 def scan(text: str) -> list[str]:
     """Return the names of secret patterns found in text."""
     if not text:
         return []
-    return [name for name, p in _PATTERNS if p.search(text)]
+    return [name for name, p in _PATTERNS if p.search(text)] + (["high_entropy"] if _high_entropy(text) else [])
 
 
 def redact(text: str) -> tuple[str, list[str]]:
@@ -40,4 +77,9 @@ def redact(text: str) -> tuple[str, list[str]]:
             text = p.sub(lambda m: f"{m.group(1)}[REDACTED:{name}]", text)
         else:
             text = p.sub(f"[REDACTED:{name}]", text)
+    hits = _high_entropy(text)
+    if hits:
+        found.append("high_entropy")
+        for h in set(hits):
+            text = text.replace(h, "[REDACTED:high_entropy]")
     return text, found

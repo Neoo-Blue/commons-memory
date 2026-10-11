@@ -77,6 +77,13 @@ class Profiles:
         self.s.x("INSERT INTO outcomes(agent_id,task_type,success,rating,subtask_id,tokens,seconds,note,created_at)"
                  " VALUES(?,?,?,?,?,?,?,?,?)", (agent_id, task_type, int(bool(success)), rating, subtask_id, tokens,
                                                 seconds, note, now()))
+        if subtask_id and note in ("gate rejected", "gates passed", "lease timeout"):
+            # real task outcome -> learned model score (feeds routing + post-switch A/B validation)
+            m = self.s.q("SELECT model FROM usage WHERE subtask_id=? AND model IS NOT NULL ORDER BY ts DESC LIMIT 1",
+                         (subtask_id,))
+            if m and m[0]["model"]:
+                from .providers import ProviderLayer
+                ProviderLayer(self.s).record_score(m[0]["model"], task_type, rating if rating is not None else float(bool(success)))
         return {"agent_id": agent_id, "task_type": task_type, "success": bool(success)}
 
     def score(self, agent: dict, task_type: str) -> float:
@@ -201,7 +208,7 @@ class Orchestrator:
     def submit(self, task: str, *, pattern: str = "auto", project: str | None = None, agent_id: str | None = None,
                n: int = 3, budget: dict | None = None, dag: list[dict] | None = None, title: str = "",
                recurring_id: str | None = None, leftovers: list[dict] | None = None,
-               context_pack: str | None = None) -> dict:
+               context_pack: str | None = None, dedupe: bool = False) -> dict:
         task, _ = redact(task)
         if not dag and pattern in ("auto", "llm"):
             dag = self._llm_plan(task)
@@ -221,6 +228,12 @@ class Orchestrator:
         _check_acyclic(dag)
         if self.paused():
             raise CommonsError(f"orchestration paused: {self.paused()} (resume with set_paused(false))")
+        if dedupe and not recurring_id:
+            sim = self.similar_jobs(task, project)
+            if sim:  # same work already running: join it instead of paying twice
+                st = self.status(sim[0]["job_id"], brief=True)
+                return st | {"duplicate_of": sim[0]["job_id"], "similarity": sim[0]["similarity"],
+                             "text": f"Similar job already running ({sim[0]['similarity']}): " + st["text"]}
         jid = new_id("job")
         if context_pack:  # pass an id, not text: subtasks load the layer they need
             from .contextpacks import ContextStore
@@ -360,6 +373,11 @@ class Orchestrator:
         return out
 
     def claim(self, agent_id: str, subtask_id: str | None = None, lease_seconds: int = DEFAULT_LEASE) -> dict | None:
+        from .telemetry import span
+        with span("orchestrator.claim", agent=agent_id):
+            return self._claim(agent_id, subtask_id, lease_seconds)
+
+    def _claim(self, agent_id: str, subtask_id: str | None = None, lease_seconds: int = DEFAULT_LEASE) -> dict | None:
         if self.paused():
             return None
         with self.s.lock:
@@ -612,8 +630,11 @@ class Orchestrator:
         pid = self.s.project_id(project)
         dup = self.s.q("SELECT id FROM leftovers WHERE status='open' AND lower(text)=lower(?) AND project_id IS ? "
                        "AND recurring_id IS ?", (text.strip(), pid, recurring_id))
+        if not dup:  # semantic duplicates: same work, different wording
+            dup = self._similar_open_leftover(text, pid, recurring_id)
         if dup:  # avoid duplicate work: same unfinished item reported twice
-            self.s.x("UPDATE leftovers SET priority=MAX(priority, ?), updated_at=? WHERE id=?", (priority, now(), dup[0]["id"]))
+            self.s.x("UPDATE leftovers SET priority=CASE WHEN priority>? THEN priority ELSE ? END, updated_at=? WHERE id=?",
+                   (priority, priority, now(), dup[0]["id"]))
             return {"id": dup[0]["id"], "text": text, "duplicate": True}
         from .graphlinks import link_leftover
         lid = new_id("lft")
@@ -623,6 +644,42 @@ class Orchestrator:
         link_leftover(self.s, lid)
         self.s.kb_dirty(pid)
         return {"id": lid, "text": text}
+
+    def _similar_open_leftover(self, text: str, pid, recurring_id) -> list:
+        from .embed import cosine
+        thr = float(os.environ.get("COMMONS_DUP_SIM", "0.86"))
+        rows = self.s.q("SELECT id, text FROM leftovers WHERE status='open' AND project_id IS ? AND recurring_id IS ?",
+                        (pid, recurring_id))
+        if not rows or not self.s.embedder:
+            return []
+        vecs = self.s.embedder.embed([text] + [r["text"] for r in rows])
+        tq = set(re.findall(r"[a-z0-9]{3,}", text.lower()))
+        for r, v in zip(rows, vecs[1:]):
+            tr = set(re.findall(r"[a-z0-9]{3,}", r["text"].lower()))
+            jac = len(tq & tr) / max(1, len(tq | tr))
+            if cosine(vecs[0], v) >= thr and jac >= 0.5:
+                return [r]
+        return []
+
+    def similar_jobs(self, task: str, project: str | None = None, threshold: float | None = None) -> list[dict]:
+        """Running jobs whose task is semantically the same (used by submit to avoid duplicate work)."""
+        from .embed import cosine
+        if not self.s.embedder:
+            return []
+        thr = threshold or float(os.environ.get("COMMONS_DUP_SIM", "0.86"))
+        pid = self.s.project_id(project) if project else None
+        rows = self.s.q("SELECT id, title, body FROM jobs WHERE status='running' AND project_id IS ?", (pid,))
+        if not rows:
+            return []
+        vecs = self.s.embedder.embed([task] + [r["body"] or r["title"] or "" for r in rows])
+        tq = set(re.findall(r"[a-z0-9]{3,}", task.lower()))
+        out = []
+        for r, v in zip(rows, vecs[1:]):
+            tr = set(re.findall(r"[a-z0-9]{3,}", (r["body"] or "").lower()))
+            sim = cosine(vecs[0], v)
+            if sim >= thr and len(tq & tr) / max(1, len(tq | tr)) >= 0.5:
+                out.append({"job_id": r["id"], "title": r["title"], "similarity": round(sim, 3)})
+        return out
 
     def resolve_leftover(self, leftover_id: str, note: str = "", agent_id: str | None = None) -> dict:
         self.s.x("UPDATE leftovers SET status='done', updated_at=? WHERE id=?", (now(), leftover_id))
@@ -639,12 +696,19 @@ class Orchestrator:
                 self.s.q(f"SELECT * FROM leftovers WHERE {' AND '.join(where)} ORDER BY priority DESC, created_at", args)]
 
     def schedule(self, name: str, cron: str, task: str, *, pattern: str = "auto", project: str | None = None,
-                 budget: dict | None = None, agent_id: str | None = None) -> dict:
+                 budget: dict | None = None, agent_id: str | None = None, catchup: str = "once",
+                 max_catchup: int = 3) -> dict:
+        """catchup: what to do with runs missed while no scheduler was running —
+        'skip' (drop missed slots, wait for the next one), 'once' (one catch-up run), 'all' (one run per missed slot,
+        at most max_catchup)."""
+        if catchup not in ("skip", "once", "all"):
+            raise CommonsError("catchup must be skip|once|all")
         nxt = next_cron(cron, datetime.now())
         rid = new_id("rec")
-        self.s.x("INSERT OR REPLACE INTO recurring VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self.s.x("INSERT OR REPLACE INTO recurring(id,name,cron,task,pattern,project_id,budget,created_by,enabled,last_run,"
+                 "next_run,last_job,created_at,catchup,max_catchup) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (rid, name, cron, redact(task)[0], pattern, self.s.project_id(project), _j(budget or {}), agent_id, 1,
-                  None, nxt.timestamp(), None, now()))
+                  None, nxt.timestamp(), None, now(), catchup, max_catchup))
         from .graphlinks import link_recurring
         link_recurring(self.s, rid)
         return {"id": rid, "name": name, "next_run": iso(nxt.timestamp())}
@@ -655,16 +719,39 @@ class Orchestrator:
         rows = self.s.q("SELECT * FROM recurring WHERE enabled=1 AND (next_run<=? OR name=? OR id=?)", (t, force, force))
         out = []
         for r in rows:
-            carried = self.leftovers(recurring_id=r["id"])
-            job = self.submit(r["task"], pattern=r["pattern"], project=self.s.project_name(r["project_id"]),
-                              agent_id=r["created_by"], budget=json.loads(r["budget"] or "{}"),
-                              title=f"{r['name']} @ {iso(t)}", recurring_id=r["id"], leftovers=carried)
+            # missed-slot accounting (catch-up policy)
+            slots, cur = [], r["next_run"] or t
+            if force not in (r["name"], r["id"]):
+                while cur <= t and len(slots) < 1000:
+                    slots.append(cur)
+                    cur = next_cron(r["cron"], datetime.fromtimestamp(cur)).timestamp()
+            slots = slots or [t]
+            policy = (r["catchup"] if "catchup" in r.keys() else None) or "once"
             nxt = next_cron(r["cron"], datetime.fromtimestamp(t))
-            self.s.x("UPDATE recurring SET last_run=?, next_run=?, last_job=? WHERE id=?",
-                     (t, nxt.timestamp(), job["job_id"], r["id"]))
+            missed = len(slots) - 1
+            if policy == "skip" and missed:
+                runs = []
+            elif policy == "all":
+                runs = slots[-int(r["max_catchup"] or 3):]
+            else:
+                runs = [slots[-1]]
+            jobs, ncarried = [], 0
+            for slot in runs:
+                carried = self.leftovers(recurring_id=r["id"])
+                ncarried += len(carried)
+                job = self.submit(r["task"], pattern=r["pattern"], project=self.s.project_name(r["project_id"]),
+                                  agent_id=r["created_by"], budget=json.loads(r["budget"] or "{}"),
+                                  title=f"{r['name']} @ {iso(slot)}" + (" (catch-up)" if slot < slots[-1] or missed else ""),
+                                  recurring_id=r["id"], leftovers=carried)
+                jobs.append(job["job_id"])
+            self.s.x("UPDATE recurring SET last_run=?, next_run=?, last_job=COALESCE(?, last_job) WHERE id=?",
+                     (t, nxt.timestamp(), jobs[-1] if jobs else None, r["id"]))
+            if missed:
+                self.s.audit(None, "recurring.missed", r["id"], {"missed": missed, "policy": policy, "ran": len(jobs)})
             from .graphlinks import link_recurring
             link_recurring(self.s, r["id"])
-            out.append({"recurring": r["name"], "job_id": job["job_id"], "carried_leftovers": len(carried),
+            out.append({"recurring": r["name"], "job_id": jobs[-1] if jobs else None, "jobs": jobs, "missed": missed,
+                        "policy": policy, "carried_leftovers": ncarried,
                         "next_run": iso(nxt.timestamp())})
         return out
 

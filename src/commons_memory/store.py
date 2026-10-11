@@ -87,17 +87,41 @@ def _hash_key(key: str) -> str:
 
 class Store:
     def __init__(self, path: str | None = None, embedder: Embedder | None | str = "auto"):
+        from .pgcompat import PgDB, is_pg
         self.path = path or default_db_path()
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        self.db.row_factory = sqlite3.Row
+        self.dialect = "postgres" if is_pg(self.path) else "sqlite"
+        if self.dialect == "postgres":
+            self.db = PgDB(self.path)
+        else:
+            if self.path != ":memory:":
+                Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            self.db = _sqlite_connect(self.path)
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
         from .schema_v2 import migrate
         migrate(self.db)
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
+        self._pgvec = False
+        if self.dialect == "postgres" and self.embedder:
+            dim = self.embedder.dim
+            have = self.q("SELECT value FROM meta WHERE key='pgvector_dim'")
+            if not have:
+                self.db.execute(f"ALTER TABLE embeddings ADD COLUMN IF NOT EXISTS v vector({int(dim)})")
+                self.db.execute("CREATE INDEX IF NOT EXISTS emb_hnsw ON embeddings USING hnsw (v vector_cosine_ops)")
+                self.x("INSERT OR REPLACE INTO meta VALUES('pgvector_dim', ?)", (str(dim),))
+                have = [{"value": str(dim)}]
+            self._pgvec = have[0]["value"] == str(dim)  # different-dim embedder -> fall back to python cosine
+
+    def sync_vectors(self) -> int:
+        """Postgres: fill the pgvector column from stored embeddings (after a migration)."""
+        if not self._pgvec:
+            return 0
+        n = 0
+        for r in self.q("SELECT item_id, vec FROM embeddings WHERE v IS NULL AND model=?", (self.embedder.name,)):
+            self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(unpack(r["vec"])), r["item_id"]))
+            n += 1
+        return n
 
     # ------------------------------------------------------------------ helpers
     def q(self, sql: str, args: Iterable = ()) -> list[sqlite3.Row]:
@@ -195,6 +219,7 @@ class Store:
         if not title:
             title = " ".join(content.split())[:80]
         pid = self.project_id(project)
+        self.check_project(pid, "write")
         iid = new_id({"decision": "dec", "handoff": "hof", "checkpoint": "chk", "fact": "fct"}.get(kind, "mem"))
         ts = now()
         tags = [t.strip().lower() for t in (tags or []) if t.strip()]
@@ -206,7 +231,9 @@ class Store:
                (iid, title, summary, content, " ".join(tags)))
         if self.embedder:
             vec = self.embedder.embed([f"{title}\n{summary}\n{content}"[:4000]])[0]
-            self.x("INSERT OR REPLACE INTO embeddings VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
+            self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
+            if self._pgvec:
+                self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(vec), iid))
         # graph links
         if pid:
             self.relate(iid, pid, "in_project", agent_id=agent_id)
@@ -325,21 +352,38 @@ class Store:
             args += ents + ents
         if not include_superseded:
             where.append("i.superseded_by IS NULL")
+        denied = self.denied_projects("read")
+        if denied:
+            where.append(f"(i.project_id IS NULL OR i.project_id NOT IN ({','.join('?' * len(denied))}))")
+            args += denied
         wsql = " AND ".join(where)
         scores: dict[str, float] = {}
         query = (query or "").strip()
         if query and mode in ("hybrid", "keyword"):
             fts = _fts_query(query)
-            if fts:
+            if fts and self.dialect == "postgres":
+                tsq = " | ".join(t.strip('"') for t in fts.split(" OR "))
+                rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
+                              f"WHERE f.tsv @@ to_tsquery('english', ?) AND {wsql} "
+                              f"ORDER BY ts_rank(f.tsv, to_tsquery('english', ?)) DESC LIMIT 200", [tsq] + args + [tsq])
+                for rank, r in enumerate(rows):
+                    scores[r["id"]] = scores.get(r["id"], 0) + 1.0 / (60 + rank)
+            elif fts:
                 rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
                               f"WHERE items_fts MATCH ? AND {wsql} ORDER BY bm25(items_fts) LIMIT 200", [fts] + args)
                 for rank, r in enumerate(rows):
                     scores[r["id"]] = scores.get(r["id"], 0) + 1.0 / (60 + rank)
         if query and mode in ("hybrid", "semantic") and self.embedder:
             qv = self.embedder.embed([query])[0]
-            rows = self.q(f"SELECT e.item_id AS id, e.vec FROM embeddings e JOIN items i ON i.id=e.item_id "
-                          f"WHERE e.model=? AND {wsql}", [self.embedder.name] + args)
-            sims = sorted(((cosine(qv, unpack(r["vec"])), r["id"]) for r in rows), reverse=True)[:200]
+            if self._pgvec:  # ANN in the database (HNSW)
+                rows = self.q(f"SELECT e.item_id AS id, 1-(e.v <=> ?::vector) AS sim FROM embeddings e JOIN items i "
+                              f"ON i.id=e.item_id WHERE e.model=? AND e.v IS NOT NULL AND {wsql} "
+                              f"ORDER BY e.v <=> ?::vector LIMIT 200", [_vecstr(qv), self.embedder.name] + args + [_vecstr(qv)])
+                sims = [(float(r["sim"]), r["id"]) for r in rows]
+            else:
+                rows = self.q(f"SELECT e.item_id AS id, e.vec FROM embeddings e JOIN items i ON i.id=e.item_id "
+                              f"WHERE e.model=? AND {wsql}", [self.embedder.name] + args)
+                sims = sorted(((cosine(qv, unpack(r["vec"])), r["id"]) for r in rows), reverse=True)[:200]
             floor = 0.12 if self.embedder.name == "hash" else 0.3
             for rank, (s, iid) in enumerate(sims):
                 if s < floor:
@@ -349,6 +393,16 @@ class Store:
             rows = self.q(f"SELECT i.id FROM items i WHERE {wsql} ORDER BY i.created_at DESC LIMIT ?", args + [limit])
             ranked = [r["id"] for r in rows]
         else:
+            if scores and os.environ.get("COMMONS_TRUST_WEIGHTING", "1") == "1":  # provenance-weighted ranking
+                from .trust import Trust
+                tr = Trust(self)
+                ids = list(scores)
+                authors = {}
+                for i in range(0, len(ids), 500):
+                    chunk = ids[i:i + 500]
+                    for r in self.q(f"SELECT id, agent_id FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                        authors[r["id"]] = r["agent_id"]
+                scores = {k: v * (0.5 + tr.score(authors.get(k))) for k, v in scores.items()}
             ranked = [k for k, _ in sorted(scores.items(), key=lambda kv: -kv[1])][:limit]
         return self._budgeted(ranked, max_tokens, total=len(scores) if query else len(ranked))
 
@@ -362,6 +416,10 @@ class Store:
                 continue
             r = r[0]
             flag = " ⚠conflict" if r["conflict"] else ""
+            if r["agent_id"]:
+                from .trust import Trust
+                if Trust(self).score(r["agent_id"]) < 0.3:
+                    flag += " ⚠low-trust"
             line = (f"{r['id']} [{r['kind']}] {iso(r['created_at'])[:10]} "
                     f"{r['project_name'] or '-'}/{r['agent_name'] or '-'}{flag}: {r['summary']}")
             t = estimate_tokens(line)
@@ -379,8 +437,18 @@ class Store:
         return {"results": results, "text": text, "total": total, "tokens": used,
                 "hint": "use expand(id) for full content"}
 
+    def denied_projects(self, need: str = "read") -> list[str]:
+        from .auth import ACL, PRINCIPAL
+        return ACL(self).denied_projects(PRINCIPAL.get(), need)
+
+    def check_project(self, project_id: str | None, need: str = "read") -> None:
+        from .auth import ACL, PRINCIPAL
+        ACL(self).check(PRINCIPAL.get(), project_id, need)
+
     def expand(self, any_id: str, depth: int = 0, max_tokens: int = 2000) -> dict:
         d = self.get_item(any_id)
+        if d is not None:
+            self.check_project(self.q("SELECT project_id FROM items WHERE id=?", (any_id,))[0]["project_id"])
         if d is None:
             r = self.q("SELECT * FROM entities WHERE id=?", (any_id,))
             if r:
@@ -440,6 +508,8 @@ class Store:
 
     def label(self, any_id: str) -> tuple[str, str]:
         """(type, display name) for any id."""
+        if not any_id:
+            return "", ""
         r = self.q("SELECT type, name FROM entities WHERE id=?", (any_id,))
         if r:
             return r[0]["type"], r[0]["name"]
@@ -713,6 +783,31 @@ def _render_packet(p: dict) -> str:
     return (f"GOAL: {p['goal']}\nSUMMARY: {p['summary']}\nSTATE: {p['state'] or '-'}\n"
             f"DECISIONS:\n{lst(p['decisions'])}\nNEXT STEPS:\n{lst(p['next_steps'])}\n"
             f"OPEN QUESTIONS:\n{lst(p['open_questions'])}\nRELEVANT IDS: {', '.join(p['relevant_ids']) or '-'}")
+
+
+def _vecstr(v) -> str:
+    return "[" + ",".join(f"{x:.6g}" for x in v) + "]"
+
+
+def _sqlite_connect(path: str):
+    """SQLite connection; uses SQLCipher (encrypted at rest) when COMMONS_DB_KEY is set and sqlcipher3 is installed."""
+    key = os.environ.get("COMMONS_DB_KEY")
+    if key:
+        try:
+            import sqlcipher3.dbapi2 as sq  # type: ignore
+        except ImportError as e:
+            raise CommonsError("COMMONS_DB_KEY is set but sqlcipher3 is not installed: pip install 'commons-memory[encrypt]'") from e
+        db = sq.connect(path, check_same_thread=False, isolation_level=None)
+        db.execute("PRAGMA key = " + "'" + key.replace("'", "''") + "'")
+        try:
+            db.execute("SELECT count(*) FROM sqlite_master").fetchall()
+        except Exception as e:  # noqa: BLE001
+            raise CommonsError("cannot open encrypted database: wrong COMMONS_DB_KEY?") from e
+        db.row_factory = sq.Row
+        return db
+    db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def _fts_query(q: str) -> str:

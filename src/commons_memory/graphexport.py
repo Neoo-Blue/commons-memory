@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import html
 import json
+import re
+import os
 from xml.sax.saxutils import escape
 
 
@@ -74,7 +76,25 @@ def to_html(g: dict) -> str:
     return HTML.replace("__DATA__", data)
 
 
+_REF = re.compile(r"^(env|vault|vault-dyn|op|infisical)://")
+
+
+def mask_secret_refs(g: dict) -> dict:
+    """Replace secret-reference names (which can themselves be sensitive) with stable hashes for sharing.
+    Set COMMONS_EXPORT_SECRET_REFS=1 to keep them."""
+    import hashlib
+    if os.environ.get("COMMONS_EXPORT_SECRET_REFS") == "1":
+        return g
+    m = {k: "secret_ref:" + hashlib.sha256(k.encode()).hexdigest()[:10] for k in g.get("nodes", {}) if _REF.match(k)}
+    if not m:
+        return g
+    nodes = {m.get(k, k): (dict(v, name=m[k]) if k in m else v) for k, v in g["nodes"].items()}
+    edges = [dict(e, src=m.get(e["src"], e["src"]), dst=m.get(e["dst"], e["dst"])) for e in g.get("edges", [])]
+    return {**g, "nodes": nodes, "edges": edges}
+
+
 def export(g: dict, fmt: str) -> str:
+    g = mask_secret_refs(g)
     fmt = fmt.lower()
     if fmt == "mermaid":
         return to_mermaid(g)

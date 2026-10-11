@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import urllib.request
 from typing import Any
@@ -101,6 +102,34 @@ class ProviderLayer:
     def _key(self, p: dict) -> str | None:
         return self.broker.resolve_internal(p["key_ref"], f"provider:{p['name']}") if p["key_ref"] else None
 
+    def count_tokens(self, model_id: str, text: str) -> int | None:
+        """Exact input-token count from the provider API (Anthropic /v1/messages/count_tokens, Gemini :countTokens),
+        cached by text hash; None if unsupported."""
+        prov, _, model = model_id.partition("/")
+        r = self.s.q("SELECT * FROM providers WHERE name=? AND enabled=1", (prov,))
+        if not r:
+            return None
+        p = dict(r[0])
+        key = "tc:" + hashlib.sha256(f"{model_id}\n{text}".encode()).hexdigest()[:32]
+        c = self.s.q("SELECT tokens FROM token_count_cache WHERE key=?", (key,))
+        if c:
+            return c[0]["tokens"]
+        kind, base = p["kind"], (p["base_url"] or KINDS.get(p["kind"]) or "").rstrip("/")
+        n = None
+        if kind == "anthropic":
+            out = _http("POST", f"{base}/v1/messages/count_tokens", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"},
+                        {"model": model, "messages": [{"role": "user", "content": text}]}, timeout=20)
+            n = out.get("input_tokens")
+        elif kind == "google":
+            out = _http("POST", f"{base}/models/{model}:countTokens?key={self._key(p)}",
+                        body={"contents": [{"parts": [{"text": text}]}]}, timeout=20)
+            n = out.get("totalTokens")
+        elif kind == "mock":
+            n = len(text.split())  # deterministic for tests
+        if n is not None:
+            self.s.x("INSERT OR REPLACE INTO token_count_cache VALUES(?,?,?,?)", (key, int(n), kind, now()))
+        return n
+
     # ------------------------------------------------------------------ model lists
     def _fetch_models(self, p: dict) -> list[dict]:
         kind, base, key = p["kind"], p["base_url"].rstrip("/"), self._key(p)
@@ -187,6 +216,16 @@ class ProviderLayer:
     # ------------------------------------------------------------------ chat
     def chat(self, model_id: str, prompt: str, system: str = "", max_tokens: int = 1024, role: str = "",
              agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "") -> dict:
+        from .telemetry import span
+        with span("llm.chat", model=model_id, role=role or "chat", job=job_id) as sp:
+            out = self._chat(model_id, prompt, system, max_tokens, role, agent_id, job_id, cache_prefix)
+            if sp is not None and isinstance(out, dict):
+                for k in ("tokens_in", "tokens_out", "cached_tokens"):
+                    sp.set_attribute(f"commons.{k}", int(out.get(k) or 0))
+            return out
+
+    def _chat(self, model_id: str, prompt: str, system: str = "", max_tokens: int = 1024, role: str = "",
+              agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "") -> dict:
         """cache_prefix: a stable block (e.g. a context pack's L0+L1) placed first so provider prompt caches hit:
         Anthropic gets an explicit cache_control breakpoint; OpenAI/OpenRouter/xAI cache identical prefixes
         automatically. Cached input tokens are recorded in usage.cached_tokens."""
@@ -278,7 +317,7 @@ class ProviderLayer:
     # ------------------------------------------------------------------ scores, probes, routing
     def record_score(self, model_id: str, task_type: str, score: float, cost: float = 0.0) -> None:
         self.s.x("INSERT INTO model_scores VALUES(?,?,1,?,?,?) ON CONFLICT(model_id, task_type) DO UPDATE SET "
-                 "n=n+1, score_sum=score_sum+excluded.score_sum, cost=cost+excluded.cost, updated_at=excluded.updated_at",
+                 "n=model_scores.n+1, score_sum=model_scores.score_sum+excluded.score_sum, cost=model_scores.cost+excluded.cost, updated_at=excluded.updated_at",
                  (model_id, task_type, score, cost, now()))
 
     def model_score(self, model_id: str, task_type: str) -> tuple[float, int]:
@@ -373,6 +412,14 @@ class ProviderLayer:
         return {"applied": applied, "proposals": proposed, "table": self.routing()}
 
     def _apply(self, tt, agent_id, model_id, reason, source):
+        prev = self.route_for(tt)
+        if prev and prev.get("model_id") and prev["model_id"] != model_id and source != "revert":
+            base, _n = self.model_score(prev["model_id"], tt)
+            r = self.s.q("SELECT n, score_sum FROM model_scores WHERE model_id=? AND task_type=?", (model_id, tt))
+            self.s.x("INSERT INTO routing_validation VALUES(?,?,?,?,?,?,?,?)",
+                     (new_id("rvl"), tt, prev["model_id"], model_id, now(), base, "watching",
+                      json.dumps({"n0": r[0]["n"] if r else 0, "sum0": r[0]["score_sum"] if r else 0.0,
+                                  "agent_id": prev.get("agent_id")})))
         self.s.x("INSERT OR REPLACE INTO routing VALUES(?,?,?,?,?,?)", (tt, agent_id, model_id, reason, source, now()))
         self.s.relate(self.s.upsert_entity("task_type", tt), self.s.upsert_entity("model", model_id), "routed_to")
         self.s.audit(None, "routing.apply", tt, {"agent": agent_id, "model": model_id, "source": source})
@@ -395,6 +442,34 @@ class ProviderLayer:
         self.s.x("UPDATE proposals SET status=?, decided_at=? WHERE id=?",
                  ("applied" if approve else "rejected", now(), proposal_id))
         return {"proposal": proposal_id, "status": "applied" if approve else "rejected"}
+
+    def validate_routing(self, min_samples: int | None = None, margin: float = 0.1) -> list[dict]:
+        """A/B check after a switch: compare the new model's *post-switch* scores (real task grades and probes recorded
+        since the switch) with the old model's baseline. Worse by more than `margin` -> revert (auto-approve) or a
+        revert proposal; better/equal -> confirmed."""
+        min_samples = min_samples or int(os.environ.get("COMMONS_ROUTING_VALIDATE_N", "5"))
+        out = []
+        for v in self.s.q("SELECT * FROM routing_validation WHERE status='watching'"):
+            meta = json.loads(v["result"] or "{}")
+            r = self.s.q("SELECT n, score_sum FROM model_scores WHERE model_id=? AND task_type=?", (v["new_model"], v["task_type"]))
+            n = (r[0]["n"] if r else 0) - meta.get("n0", 0)
+            if n < min_samples:
+                continue
+            mean = ((r[0]["score_sum"] if r else 0) - meta.get("sum0", 0)) / n
+            verdict = "confirmed" if mean >= (v["baseline"] or 0) - margin else "regressed"
+            meta |= {"post_mean": round(mean, 3), "post_n": n}
+            if verdict == "regressed":
+                ev = {"baseline": v["baseline"], "post_switch_mean": mean, "samples": n, "reason": "A/B validation regression"}
+                if self.auto_approve():
+                    self._apply(v["task_type"], meta.get("agent_id"), v["old_model"], "A/B regression revert", "revert")
+                    verdict = "reverted"
+                else:
+                    self._propose(v["task_type"], v["new_model"], v["old_model"], meta.get("agent_id"), ev)
+                    verdict = "revert_proposed"
+            self.s.x("UPDATE routing_validation SET status=?, result=? WHERE id=?", (verdict, json.dumps(meta), v["id"]))
+            self.s.audit(None, "routing.validate", v["task_type"], {"verdict": verdict} | meta)
+            out.append({"task_type": v["task_type"], "new": v["new_model"], "old": v["old_model"], "verdict": verdict} | meta)
+        return out
 
     def proposals(self, status: str | None = "proposed") -> list[dict]:
         sql = "SELECT * FROM proposals" + (" WHERE status=?" if status else "") + " ORDER BY created_at DESC"

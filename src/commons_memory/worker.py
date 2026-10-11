@@ -23,12 +23,27 @@ import tempfile
 import threading
 import time
 
+# Verified 2026-10-11 against each vendor's CLI reference (see docs/WORKERS.md for links and caveats).
+#  claude : `-p/--print` non-interactive; piped stdin is the content, the arg is the query; `--output-format text`.
+#           `--permission-prompts none` makes unanswerable permission prompts deny instead of hang (v2.1.259+).
+#  codex  : `codex exec` is the non-interactive mode; PROMPT `-` reads stdin; `--skip-git-repo-check` allows
+#           running outside a repo; `--sandbox workspace-write` keeps edits inside the workspace.
+#  cursor : the CLI binary is `agent` (older installs: `cursor-agent`); `-p/--print` + `--output-format text`;
+#           `--trust` skips the workspace-trust prompt in headless mode. No documented stdin prompt -> arg.
+#  gemini : `-p/--prompt` (or non-TTY stdin) triggers headless mode; `--output-format text|json|stream-json`.
 PRESETS = {
-    "claude": "claude -p --output-format text",
-    "codex": "codex exec --skip-git-repo-check -",
-    "cursor": "cursor-agent -p --output-format text",
-    "gemini": "gemini -p \"$(cat {prompt_file})\"",
+    "claude": "claude -p --output-format text --permission-prompts none \"Do the Commons subtask given on stdin. Follow its output protocol.\"",
+    "codex": "codex exec --skip-git-repo-check --sandbox workspace-write -",
+    "cursor": "agent -p --output-format text --trust \"$(cat {prompt_file})\"",
+    "cursor-legacy": "cursor-agent -p --output-format text \"$(cat {prompt_file})\"",
+    "gemini": "gemini --output-format text -p \"$(cat {prompt_file})\"",
     "echo": "cat",
+}
+PRESET_DOCS = {
+    "claude": "https://code.claude.com/docs/en/cli-reference",
+    "codex": "https://developers.openai.com/codex/cli/reference",
+    "cursor": "https://cursor.com/docs/cli/reference/parameters",
+    "gemini": "https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/headless.md",
 }
 
 

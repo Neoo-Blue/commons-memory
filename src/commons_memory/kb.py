@@ -77,6 +77,16 @@ class KB:
             "SELECT DISTINCT bucket FROM kb_pages WHERE bucket LIKE 'misc/%' ORDER BY bucket")]
 
     def _items(self, bucket: str) -> list[dict]:
+        from .trust import Trust
+        tr, floor = Trust(self.s), float(os.environ.get("COMMONS_KB_MIN_TRUST", "0.2"))
+        out = []
+        for i in self._items_raw(bucket):
+            t = tr.score(i["agent_id"])
+            if t >= floor:  # very low-trust writers never reach the shared digest
+                out.append(i | {"_trust": t})
+        return out
+
+    def _items_raw(self, bucket: str) -> list[dict]:
         if bucket == "misc" or bucket.startswith("misc/"):
             rows = self.s.q("SELECT * FROM items WHERE project_id IS NULL AND superseded_by IS NULL ORDER BY created_at")
             items = [dict(r) for r in rows]
@@ -90,9 +100,60 @@ class KB:
                                           "ORDER BY created_at", (pid,))]
 
     def misc_topics(self, items: list[dict] | None = None, min_size: int = 2) -> dict[str, list[str]]:
-        """Cluster unassigned memories by their most distinctive shared keyword."""
+        """Cluster unassigned memories: by embeddings when a semantic embedder is configured, else by keyword."""
         if items is None:
             items = [dict(r) for r in self.s.q("SELECT * FROM items WHERE project_id IS NULL AND superseded_by IS NULL")]
+        mode = os.environ.get("COMMONS_KB_CLUSTER", "auto")
+        emb = self.s.embedder
+        if emb and (mode == "semantic" or (mode == "auto" and emb.name != "hash")):
+            sem = self._semantic_topics(items, min_size)
+            if sem:
+                return sem
+        return self._keyword_topics(items, min_size)
+
+    def _semantic_topics(self, items: list[dict], min_size: int) -> dict[str, list[str]] | None:
+        """Greedy centroid clustering on stored embeddings; each cluster is named by its most distinctive term."""
+        from .embed import cosine, unpack
+        docs = [i for i in items if i["kind"] != "checkpoint"]
+        if len(docs) < 2:
+            return None
+        vecs = {}
+        for i in range(0, len(docs), 500):
+            chunk = [d["id"] for d in docs[i:i + 500]]
+            for r in self.s.q(f"SELECT item_id, vec FROM embeddings WHERE model=? AND item_id IN ({','.join('?' * len(chunk))})",
+                              [self.s.embedder.name] + chunk):
+                vecs[r["item_id"]] = unpack(r["vec"])
+        if len(vecs) < 2:
+            return None
+        thr = float(os.environ.get("COMMONS_KB_CLUSTER_SIM", "0.55" if self.s.embedder.name != "hash" else "0.35"))
+        clusters: list[dict] = []
+        for d in docs:
+            v = vecs.get(d["id"])
+            if v is None:
+                continue
+            best = max(clusters, key=lambda c: cosine(c["c"], v), default=None)
+            if best and cosine(best["c"], v) >= thr:
+                n = len(best["ids"])
+                best["c"] = [(a * n + b) / (n + 1) for a, b in zip(best["c"], v)]
+                best["ids"].append(d["id"])
+            else:
+                clusters.append({"c": list(v), "ids": [d["id"]]})
+        byid = {d["id"]: d for d in docs}
+        df_all = Counter(t for d in docs for t in set(_terms(f"{d['title']} {d['content']}")))
+        out: dict[str, list[str]] = defaultdict(list)
+        for c in clusters:
+            if len(c["ids"]) < min_size:
+                out["general"].extend(c["ids"])
+                continue
+            tf = Counter(t for i in c["ids"] for t in set(_terms(f"{byid[i]['title']} {byid[i]['content']}")))
+            name = max(tf, key=lambda t: (tf[t] / (df_all[t] ** 0.5), tf[t], t), default="general")
+            if name in out:
+                name = f"{name}-{len(out)}"
+            out[name].extend(c["ids"])
+        return dict(out)
+
+    def _keyword_topics(self, items: list[dict], min_size: int = 2) -> dict[str, list[str]]:
+        """Cluster unassigned memories by their most distinctive shared keyword."""
         docs = {i["id"]: set(_terms(f"{i['title']} {i['content']} {' '.join(json.loads(i['tags'] or '[]'))}"))
                 for i in items if i["kind"] not in ("checkpoint",)}
         df = Counter(t for terms in docs.values() for t in terms)
@@ -179,6 +240,8 @@ class KB:
     # ---------------------------------------------------------------- read API
     def get(self, bucket: str = "misc", section: str = "", max_tokens: int = 800) -> dict:
         bucket = bucket or "misc"
+        if bucket != "misc":
+            self.s.check_project(bucket if bucket.startswith("prj_") else self.s.project_id(bucket))
         stale = self._ensure(bucket)
         secs = [section] if section else SECTIONS
         parts, cites, used = [], [], 0
@@ -320,6 +383,7 @@ class KB:
         for i in items:
             tags = json.loads(i["tags"] or "[]")
             w = weight.get(i["kind"], 0.8) * (0.5 if "subtask" in tags else 1.0) * (1.3 if "job-result" in tags else 1.0)
+            w *= 0.5 + i.get("_trust", 0.5)
             for s_ in _sentences(i["content"])[:6]:
                 if s_.startswith(("DECISION:", "WHY:", "GOAL:", "STATE:", "##", "[")) or len(s_) > 300:
                     continue
