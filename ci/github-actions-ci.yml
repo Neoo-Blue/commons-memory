@@ -24,3 +24,4 @@ jobs:
           uv run --no-sync commons index . --project commons-memory
           uv run --no-sync commons export-graph --format mermaid --no-items -o graph.mmd
           uv run --no-sync commons stats
+          uv run --no-sync python examples/demo_multi_agent.py

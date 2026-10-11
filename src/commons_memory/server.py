@@ -291,6 +291,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         """Counts of items/entities/relations/etc. and the active embedder."""
         return _fmt(store.stats(), "json")
 
+    from .server_v2 import register_v2
+    register_v2(mcp, store, who)
     return mcp
 
 

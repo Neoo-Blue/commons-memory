@@ -1,0 +1,11 @@
+{
+  "name": "commons",
+  "version": "0.2.0",
+  "description": "Shared cross-AI memory, handoffs, preferences and multi-agent orchestration via the Commons MCP server",
+  "author": { "name": "Neoo-Blue" },
+  "homepage": "https://github.com/Neoo-Blue/commons-memory",
+  "license": "MIT",
+  "mcpServers": {
+    "commons": { "command": "commons", "args": ["serve"], "env": { "COMMONS_AGENT": "claude-code" } }
+  }
+}

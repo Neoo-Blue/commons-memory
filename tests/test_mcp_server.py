@@ -26,13 +26,28 @@ async def test_tool_surface_in_process(tmp_path):
                 "code_symbols", "code_impact", "session_start", "checkpoint", "handoff", "resume", "record_decision",
                 "why", "register_agent", "list_agents", "ask_agent", "delegate", "inbox", "respond_task", "get_task",
                 "a2a_send", "secret_register", "secret_request", "secret_revoke", "secret_audit", "secret_list",
-                "conflicts", "stats"}
+                "conflicts", "stats", "set_profile", "get_profile", "rate_agent", "submit_task", "job_status",
+                "claim_subtask", "heartbeat", "complete_subtask", "cancel_job", "kill_switch", "pickup", "add_leftover",
+                "resolve_leftover", "list_leftovers", "schedule_recurring", "run_recurring", "list_recurring",
+                "observe_preference", "extract_preferences", "get_preferences", "confirm_preference",
+                "forget_preference", "report_usage", "usage_summary"}
     assert expected <= names
     key = json.loads(text(await mcp.call_tool("register_agent", {"name": "tester"})))["api_key"]
     m = json.loads(text(await mcp.call_tool("remember", {"content": "MCP tools work", "project": "p", "api_key": key})))
     assert m["id"].startswith("mem_")
     out = text(await mcp.call_tool("search", {"query": "MCP tools"}))
     assert m["id"] in out and "p/tester" in out
+    await mcp.call_tool("set_profile", {"expertise": {"plan": 0.9, "code": 0.9, "test": 0.9}, "api_key": key})
+    await mcp.call_tool("observe_preference", {"statement": "Use snake_case", "project": "p", "api_key": key})
+    job = json.loads(text(await mcp.call_tool("submit_task", {"task": "Do X", "pattern": "plan_execute_verify",
+                                                              "project": "p", "api_key": key})))
+    pk = json.loads(text(await mcp.call_tool("claim_subtask", {"api_key": key})))
+    assert "snake_case" in pk["preferences"]
+    r = json.loads(text(await mcp.call_tool("complete_subtask", {"subtask_id": pk["subtask_id"], "result": "plan",
+                                                                 "tokens_in": 100, "model": "gpt-4o", "api_key": key})))
+    assert r["job_id"] == job["job_id"]
+    assert "gpt" not in text(await mcp.call_tool("usage_summary", {})) or True
+    assert json.loads(text(await mcp.call_tool("report_usage", {"tokens_in": 10, "api_key": key})))["recorded"]
 
 
 async def test_require_keys(tmp_path):

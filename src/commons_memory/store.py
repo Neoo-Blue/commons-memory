@@ -94,6 +94,8 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
+        from .schema_v2 import migrate
+        migrate(self.db)
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
 
@@ -125,7 +127,8 @@ class Store:
             aid = existing["id"]
         else:
             aid = new_id("agt")
-            self.x("INSERT INTO agents VALUES(?,?,?,?,?,?,?,?,?,?)",
+            self.x("INSERT INTO agents(id,name,vendor,model,description,capabilities,key_hash,a2a_url,created_at,last_seen)"
+                   " VALUES(?,?,?,?,?,?,?,?,?,?)",
                    (aid, name, vendor, model, description, _j(capabilities or []),
                     _hash_key(key) if key else None, a2a_url, now(), now()))
         self.audit(aid, "agent.register", aid)
@@ -260,7 +263,7 @@ class Store:
         return {"resolved": conflict_id, "kept": keep_id, "superseded": loser}
 
     def _exists(self, any_id: str) -> bool:
-        for t in ("items", "entities", "sessions", "agents", "inbox"):
+        for t in ("items", "entities", "sessions", "agents", "inbox", "jobs", "subtasks", "leftovers"):
             if self.q(f"SELECT 1 FROM {t} WHERE id=?", (any_id,)):
                 return True
         return False
@@ -356,7 +359,8 @@ class Store:
             used += t
             lines.append(line)
             results.append({"id": r["id"], "kind": r["kind"], "summary": r["summary"], "project": r["project_name"],
-                            "agent": r["agent_name"], "created_at": iso(r["created_at"]), "conflict": bool(r["conflict"])})
+                            "agent": r["agent_name"], "created_at": iso(r["created_at"]), "conflict": bool(r["conflict"]),
+                            "authenticated": bool(r["authenticated"])})
         more = max(0, total - len(results))
         text = "\n".join(lines) or "(no results)"
         if more:
@@ -371,11 +375,11 @@ class Store:
             if r:
                 d = dict(r[0]) | {"meta": json.loads(r[0]["meta"] or "{}"), "created_at": iso(r[0]["created_at"])}
             else:
-                for t in ("sessions", "inbox"):
+                for t in ("sessions", "inbox", "jobs", "subtasks", "leftovers", "preferences"):
                     r = self.q(f"SELECT * FROM {t} WHERE id=?", (any_id,))
                     if r:
                         d = dict(r[0])
-                        for k in ("state", "context_ids", "result"):
+                        for k in ("state", "context_ids", "result", "deps", "gates", "budget", "used", "evidence"):
                             if k in d and d[k] and d[k][:1] in "[{":
                                 d[k] = json.loads(d[k])
                         break
@@ -440,6 +444,10 @@ class Store:
         r = self.q("SELECT body FROM inbox WHERE id=?", (any_id,))
         if r:
             return "task", (r[0]["body"] or "")[:60]
+        for t, col, typ in (("jobs", "title", "job"), ("subtasks", "title", "subtask"), ("leftovers", "text", "leftover")):
+            r = self.q(f"SELECT {col} AS v FROM {t} WHERE id=?", (any_id,))
+            if r:
+                return typ, (r[0]["v"] or "")[:60]
         return "unknown", any_id
 
     def neighbors(self, any_id: str, depth: int = 1, rel_types: list[str] | None = None,
@@ -556,6 +564,14 @@ class Store:
                             project=s["project_id"], agent_id=agent_id or s["agent_id"], session_id=sid,
                             related_ids=relevant_ids, tags=["handoff"], meta={"packet": packet})
         self.x("UPDATE sessions SET status='handed_off', updated_at=? WHERE id=?", (now(), sid))
+        # unfinished work becomes leftovers so any agent can pick it up later
+        for text, typ, prio in [(x, "general", 2) for x in next_steps or []] + \
+                [(x, "research", 1) for x in open_questions or []]:
+            lid = new_id("lft")
+            self.x("INSERT INTO leftovers VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (lid, redact(text)[0], typ, prio, s["project_id"], sid, None, "open", None,
+                    agent_id or s["agent_id"], now(), now()))
+            self.relate(lid, sid, "left_over_from")
         if to_agent:
             t = self.post_task(agent_id or s["agent_id"], to_agent, f"Resume session {sid}: {summary}", kind="handoff",
                                context_ids=[res["id"], sid] + (relevant_ids or []), project=s["project_id"])
