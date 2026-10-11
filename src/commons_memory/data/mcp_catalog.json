@@ -1,0 +1,623 @@
+{
+ "catalog_version": "2026.10.1",
+ "schema": 1,
+ "note": "Presets verified against each vendor's own docs on verified_on. Extend/override in ~/.commons/mcp_catalog.json ({\"presets\":{...}}). Mark anything you add unverified unless you checked vendor docs.",
+ "presets": {
+  "github": {
+   "title": "GitHub (hosted)",
+   "transport": "http",
+   "url": "https://api.githubcopilot.com/mcp/",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GITHUB_PAT",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": false,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "merge_pull_request": "destructive",
+    "delete_*": "destructive",
+    "create_*": "write",
+    "update_*": "write",
+    "push_*": "write"
+   },
+   "health": "tools/list"
+  },
+  "github-local": {
+   "title": "GitHub (local Docker)",
+   "transport": "stdio",
+   "command": "docker",
+   "args": [
+    "run",
+    "-i",
+    "--rm",
+    "-e",
+    "GITHUB_PERSONAL_ACCESS_TOKEN",
+    "ghcr.io/github/github-mcp-server"
+   ],
+   "auth": "token",
+   "docs": "https://github.com/github/github-mcp-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GITHUB_PAT",
+     "env": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    }
+   ],
+   "risk": {
+    "merge_pull_request": "destructive",
+    "delete_*": "destructive"
+   },
+   "health": "tools/list"
+  },
+  "gitlab": {
+   "title": "GitLab (built-in MCP)",
+   "transport": "http",
+   "url": "https://{{host}}/api/v4/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GITLAB_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "params": {
+    "host": {
+     "default": "gitlab.com",
+     "help": "your GitLab host"
+    }
+   }
+  },
+  "atlassian": {
+   "title": "Atlassian Rovo (Jira, Confluence, Compass)",
+   "transport": "http",
+   "url": "https://mcp.atlassian.com/v2/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "ATLASSIAN_TOKEN",
+     "header": "Authorization",
+     "format": "{ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "notes": "Headless: Authorization 'Basic <base64 email:api_token>' or 'Bearer <service-account key>' \u2014 store the full header value as the secret."
+  },
+  "linear": {
+   "title": "Linear",
+   "transport": "http",
+   "url": "https://mcp.linear.app/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://linear.app/docs/mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "LINEAR_API_KEY",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "notes": "Read-only variant: https://mcp.linear.app/mcp/readonly"
+  },
+  "notion": {
+   "title": "Notion (hosted)",
+   "transport": "http",
+   "url": "https://mcp.notion.com/mcp",
+   "auth": "oauth",
+   "oauth": true,
+   "docs": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "slack": {
+   "title": "Slack",
+   "transport": "http",
+   "url": "https://mcp.slack.com/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://docs.slack.dev/ai/slack-mcp-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "SLACK_USER_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "*send*": "write",
+    "*post*": "write"
+   },
+   "health": "tools/list"
+  },
+  "google-gmail": {
+   "title": "Google Gmail (Workspace MCP)",
+   "transport": "http",
+   "url": "https://gmailmcp.googleapis.com/mcp/v1",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GOOGLE_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "*send*": "write",
+    "*delete*": "destructive"
+   },
+   "health": "tools/list"
+  },
+  "google-drive": {
+   "title": "Google Drive (Workspace MCP)",
+   "transport": "http",
+   "url": "https://drivemcp.googleapis.com/mcp/v1",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GOOGLE_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "google-calendar": {
+   "title": "Google Calendar (Workspace MCP)",
+   "transport": "http",
+   "url": "https://calendarmcp.googleapis.com/mcp/v1",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "GOOGLE_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "delete_event": "destructive",
+    "create_event": "write",
+    "update_event": "write",
+    "respond_to_event": "write"
+   },
+   "health": "tools/list"
+  },
+  "azure": {
+   "title": "Azure MCP Server",
+   "transport": "stdio",
+   "command": "npx",
+   "args": [
+    "-y",
+    "@azure/mcp@latest",
+    "server",
+    "start"
+   ],
+   "auth": "Azure CLI login (az login)",
+   "docs": "https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "aws-api": {
+   "title": "AWS API MCP Server (awslabs)",
+   "transport": "stdio",
+   "command": "uvx",
+   "args": [
+    "awslabs.aws-api-mcp-server@latest"
+   ],
+   "auth": "AWS credentials/profile",
+   "docs": "https://awslabs.github.io/mcp/servers/aws-api-mcp-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "AWS_PROFILE",
+     "env": "AWS_PROFILE",
+     "optional": true
+    }
+   ],
+   "params": {
+    "region": {
+     "default": "us-east-1"
+    }
+   },
+   "risk": {
+    "call_aws": "write"
+   },
+   "health": "tools/list"
+  },
+  "cloudflare": {
+   "title": "Cloudflare API",
+   "transport": "http",
+   "url": "https://mcp.cloudflare.com/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "CLOUDFLARE_API_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "cloudflare-docs": {
+   "title": "Cloudflare documentation",
+   "transport": "http",
+   "url": "https://docs.mcp.cloudflare.com/mcp",
+   "auth": "token",
+   "oauth": false,
+   "docs": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "stripe": {
+   "title": "Stripe",
+   "transport": "http",
+   "url": "https://mcp.stripe.com",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://docs.stripe.com/mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "STRIPE_AGENT_KEY",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "create_refund": "destructive",
+    "cancel_*": "destructive",
+    "create_*": "write",
+    "update_*": "write"
+   },
+   "health": "tools/list",
+   "notes": "From 2026-10-31 Stripe MCP only accepts OAuth or Agent-tagged keys."
+  },
+  "supabase": {
+   "title": "Supabase",
+   "transport": "http",
+   "url": "https://mcp.supabase.com/mcp?project_ref={{project_ref}}&read_only={{read_only}}",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://supabase.com/docs/guides/ai-tools/mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "SUPABASE_ACCESS_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {
+    "execute_sql": "write",
+    "apply_migration": "destructive",
+    "pause_project": "destructive",
+    "delete_branch": "destructive"
+   },
+   "health": "tools/list",
+   "params": {
+    "project_ref": {
+     "help": "project id"
+    },
+    "read_only": {
+     "default": "true"
+    }
+   },
+   "notes": "Supabase recommends development data only."
+  },
+  "vercel": {
+   "title": "Vercel",
+   "transport": "http",
+   "url": "https://mcp.vercel.com",
+   "auth": "oauth",
+   "oauth": true,
+   "docs": "https://vercel.com/docs/agent-resources/vercel-mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "sentry": {
+   "title": "Sentry (project-scoped)",
+   "transport": "http",
+   "url": "https://mcp.sentry.dev/mcp/{{org}}/{{project}}",
+   "auth": "oauth",
+   "oauth": true,
+   "docs": "https://docs.sentry.io/product/sentry-mcp/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list",
+   "params": {
+    "org": {
+     "help": "organization slug"
+    },
+    "project": {
+     "help": "project slug"
+    }
+   }
+  },
+  "pagerduty": {
+   "title": "PagerDuty",
+   "transport": "http",
+   "url": "https://mcp.pagerduty.com/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://docs.pagerduty.com/developer/mcp-tooling-remote-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "PAGERDUTY_API_KEY",
+     "header": "Authorization",
+     "format": "Token token={ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "notes": "EU: https://mcp.eu.pagerduty.com/mcp"
+  },
+  "datadog": {
+   "title": "Datadog",
+   "transport": "http",
+   "url": "https://mcp.{{site}}/api/unstable/mcp-server/mcp?toolsets=all",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://docs.datadoghq.com/mcp_server/setup/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "DD_API_KEY",
+     "header": "DD_API_KEY",
+     "format": "{ref}",
+     "optional": true
+    },
+    {
+     "name": "DD_APPLICATION_KEY",
+     "header": "DD_APPLICATION_KEY",
+     "format": "{ref}",
+     "optional": true
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "params": {
+    "site": {
+     "default": "datadoghq.com",
+     "help": "datadoghq.com | us3.datadoghq.com | us5.datadoghq.com | datadoghq.eu | ap1.datadoghq.com"
+    }
+   },
+   "notes": "Endpoint path is '/unstable/' per Datadog docs."
+  },
+  "hubspot": {
+   "title": "HubSpot CRM",
+   "transport": "http",
+   "url": "https://mcp.hubspot.com/",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "HUBSPOT_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "notes": "OAuth 2.1 with PKCE via an MCP auth app."
+  },
+  "salesforce": {
+   "title": "Salesforce hosted MCP",
+   "transport": "http",
+   "url": "https://api.salesforce.com/platform/mcp/v1/{{server}}",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/client-connection-overview.html",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "SALESFORCE_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list",
+   "params": {
+    "server": {
+     "default": "platform/sobject-all",
+     "help": "hosted server name"
+    }
+   }
+  },
+  "shopify-dev": {
+   "title": "Shopify Dev MCP (docs + API schemas)",
+   "transport": "stdio",
+   "command": "npx",
+   "args": [
+    "-y",
+    "@shopify/dev-mcp@latest"
+   ],
+   "auth": "none",
+   "docs": "https://shopify.dev/docs/apps/build/ai-toolkit",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "figma": {
+   "title": "Figma (remote)",
+   "transport": "http",
+   "url": "https://mcp.figma.com/mcp",
+   "auth": "oauth or token",
+   "oauth": true,
+   "docs": "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [
+    {
+     "name": "FIGMA_OAUTH_TOKEN",
+     "header": "Authorization",
+     "format": "Bearer {ref}",
+     "optional": true,
+     "help": "token stored as a secret ref"
+    }
+   ],
+   "risk": {},
+   "health": "tools/list"
+  },
+  "playwright": {
+   "title": "Playwright browser automation",
+   "transport": "stdio",
+   "command": "npx",
+   "args": [
+    "@playwright/mcp@latest"
+   ],
+   "auth": "none",
+   "docs": "https://playwright.dev/docs/getting-started-mcp",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "secrets": [],
+   "risk": {
+    "browser_navigate": "write",
+    "browser_click": "write",
+    "browser_type": "write",
+    "browser_file_upload": "destructive"
+   },
+   "health": "tools/list"
+  },
+  "filesystem": {
+   "title": "Filesystem (reference server)",
+   "transport": "stdio",
+   "command": "npx",
+   "args": [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "{{path}}"
+   ],
+   "auth": "none",
+   "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+   "verified": true,
+   "verified_on": "2026-10-11",
+   "params": {
+    "path": {
+     "help": "directory to expose"
+    }
+   },
+   "secrets": [],
+   "risk": {
+    "write_file": "write",
+    "edit_file": "write",
+    "create_directory": "write",
+    "move_file": "destructive"
+   },
+   "health": "tools/list"
+  },
+  "zapier": {
+   "title": "Zapier MCP (per-user URL)",
+   "transport": "http",
+   "url": "{{url}}",
+   "auth": "secret URL",
+   "docs": "https://zapier.com/mcp",
+   "verified": false,
+   "verified_on": null,
+   "params": {
+    "url": {
+     "help": "your personal Zapier MCP URL"
+    }
+   },
+   "secrets": [],
+   "risk": {},
+   "health": "tools/list",
+   "notes": "community/unverified: endpoint is user-specific; check Zapier's MCP page."
+  }
+ }
+}

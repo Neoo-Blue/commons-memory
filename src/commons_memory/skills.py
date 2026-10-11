@@ -54,7 +54,7 @@ def install(platform: str, *, project_dir: str = ".", scope: str = "project", ag
         base = (home_p / ".claude") if scope == "user" else (proj / ".claude")
         sk = base / "skills" / "commons" / "SKILL.md"
         sk.parent.mkdir(parents=True, exist_ok=True)
-        sk.write_text(_res("SKILL.md"))
+        sk.write_text(_res("BOOTSTRAP.md"))  # full playbook is fetched from the pool
         done.append(f"skill -> {sk}")
         cmd_dir = base / "commands"
         cmd_dir.mkdir(parents=True, exist_ok=True)

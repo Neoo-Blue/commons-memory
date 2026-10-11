@@ -133,8 +133,16 @@ class KB:
         return {"buckets": built, "items": len(items)}
 
     def _llm(self, bucket, sec, content, cites):
+        if not cites:
+            return content
+        if sec in ("overview", "decisions"):
+            from .providers import ProviderLayer
+            llm = ProviderLayer(self.s).call_role("kb_summarizer", f"Rewrite this knowledge-base section as concise "
+                                                  f"prose. Keep every [id] citation.\n# {TITLES[sec]} ({bucket})\n\n{content}")
+            if llm:
+                return llm.strip() + "\n\nSources: " + " ".join(f"[{c}]" for c in cites)
         hook = os.environ.get("COMMONS_KB_SUMMARIZER")
-        if not hook or not cites:
+        if not hook:
             return content
         try:
             out = subprocess.run(hook, shell=True, input=f"# {TITLES[sec]} ({bucket})\n\n{content}", capture_output=True,

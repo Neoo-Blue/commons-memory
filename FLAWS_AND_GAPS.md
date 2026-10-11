@@ -1,4 +1,4 @@
-# Known flaws, risks and mitigations (v0.3)
+# Known flaws, risks and mitigations (v0.4)
 
 An honest list of the risks we know about. If you deploy Commons beyond a single trusted machine, read this first.
 
@@ -25,3 +25,23 @@ An honest list of the risks we know about. If you deploy Commons beyond a single
 | **KB as an injection / poisoning amplifier** | A poisoned memory gets promoted into the KB digest shown to every agent | Digests are short, cited and include provenance; conflicts are listed under open questions; superseded facts are excluded | The KB does not weigh sources by trust yet |
 | **Graph growth** | Usage, verdict and run links add many nodes | Scoped views (project/job/workflow/schedule/node) and depth limits; links are unique (no duplicates on rebuild) | No pruning/archiving of old usage nodes yet |
 | **Secret refs in the graph** | Graph exports reveal which secrets exist | Only reference strings and lease ids are linked, never values; the redaction scanner still applies to every write | Reference names themselves may be sensitive — filter `secret_ref` nodes before sharing exports |
+| **Malicious shared skills** | A skill in the pool tells every agent to exfiltrate data or run destructive commands | Every version is redacted + scanned for injection/exfiltration patterns; high-severity findings are flagged and can't activate; review by another agent / reviewer model / human (no self-review); GitHub and other external imports always need review, are pinned to a commit and license-checked; rollback and full history | Pattern scanning is heuristic; a reviewer can be fooled; scripts attached to skills are not sandboxed by Commons |
+| **Skill discovery abuse / ToS** | Hammering GitHub or scraping HTML | Official REST API only, authenticated via secret ref, stops when `X-RateLimit-Remaining` ≤ 2 or on 403/429, daily cadence | Popularity ≠ safety; star counts can be gamed |
+| **Local import side effects** | `--replace-local` removes a local skill | Originals are backed up to `~/.commons/skill-backups/`; only SKILL.md dirs are replaced; dry-run in CLI/dashboard first | Restoring is manual (copy the backup back) |
+| **Research poisoning** | Fetched pages contain prompt injection or false claims | Pages are redacted, stored as `source` items with URL provenance and cited; scripts/styles stripped; treated as data | Content is not fact-checked; summaries can repeat false claims (with citations) |
+| **Model provider keys / spend** | Keys leak or probes burn money | Keys are secret refs resolved server-side only (`resolve_internal`, audited), never returned to models; prompts are redacted before sending; probes and the librarian have $ budget caps; usage recorded per role | Provider pricing from APIs can be missing → estimates; probes are small heuristic checks, not real benchmarks |
+| **Distributor mistakes** | The routing model picks a bad model/agent | Reallocations are proposals unless auto-approve; evidence (scores) attached; routing only nudges the allocator (learned agent scores still apply) | No A/B validation after a switch yet |
+| **Librarian over-reach** | Wrong merges/tags/assignments | Merges go to a review queue by default; every change is logged with before/after and undoable; incremental with watermark; budget cap | Heuristic near-duplicate detection (hash embeddings + Jaccard) can miss or over-match; tags are keyword-based without a model |
+| **MCP hub as a choke point / confused deputy** | One agent uses another's upstream credentials or triggers destructive tools | Per-agent allow/deny/approve policies, destructive tools need human approval bound to the exact (redacted) args and usable once, per-agent rate limits, every call audited with redacted args, upstream output wrapped as untrusted + redacted | Risk tags are inferred from names/annotations (presets add overrides); each call reconnects (slow for stdio servers); no interactive OAuth — tokens must be stored as refs; credentials for an upstream are shared by all agents allowed to call it |
+| **Imported MCP configs** | Literal keys in client configs | Import never copies values: env vars become `env://VAR`, headers become `env://COMMONS_MCP_*` refs with a warning | You must export those variables where Commons runs |
+| **Catalog drift** | Vendor endpoints change | Each preset has `docs`, `verified_on`; unverified presets are labelled community; health checks surface failures | Needs periodic re-verification |
+
+## Shared context store (v0.4)
+
+| Risk | Mitigation / status |
+|---|---|
+| Packs leak secrets into every receiver | All gist/brief/section text passes the redaction scanner before it is hashed and stored. L3 refs are stripped to id/path/hash/url/note fields. |
+| A stale or poisoned pack misleads downstream agents | Packs have authors (provenance), lineage (`delta_of`) and diffs. Receivers get them as context, not instructions. Worker prompts still wrap upstream outputs as untrusted. Packs are not otherwise signed. |
+| Token estimates are approximate | tiktoken is used only for OpenAI models when installed. Other models use calibrated ratios, so budgets keep a reserve (`context_fit` reserve, 50% window share). |
+| Cache hits depend on the provider | The prefix is byte-stable, but providers decide whether to cache (minimum prefix length, TTL). Anthropic needs an explicit breakpoint, which is sent. Hits are only *measured* from the usage the provider returns. The mock provider simulates them. |
+| Blob store grows forever | Blobs are deduplicated, but there is no GC of blobs that no pack references yet (planned). |

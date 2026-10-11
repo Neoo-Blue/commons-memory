@@ -52,12 +52,13 @@ def register_v2(mcp, store, who):
     # ------------------------------------------------------------ orchestration
     @mcp.tool()
     def submit_task(task: str, pattern: str = "auto", project: str = "", n: int = 3, budget: dict | None = None,
-                    dag: list[dict] | None = None, agent: str = "", api_key: str = "") -> str:
+                    dag: list[dict] | None = None, context_pack: str = "", agent: str = "", api_key: str = "") -> str:
         """Submit a task for multi-agent execution. pattern: auto|plan_execute_verify|cross_review|debate|consensus|
         parallel (bullet list => parallel parts each gated by review). Or pass an explicit dag:
-        [{key,type,title,body,deps:[keys],gates:[keys]}]. budget: {tokens, cost, seconds} caps the whole job."""
+        [{key,type,title,body,deps:[keys],gates:[keys]}]. budget: {tokens, cost, seconds} caps the whole job.
+        context_pack: a pack id from context_save — subtasks get its L1 as a cache-friendly prefix instead of re-sent text."""
         return _js(orch.submit(task, pattern=pattern, project=project or None, agent_id=me(agent, api_key), n=n,
-                               budget=budget, dag=dag))
+                               budget=budget, dag=dag, context_pack=context_pack or None))
 
     @mcp.tool()
     def job_status(job_id: str = "", status: str = "", format: str = "text") -> str:

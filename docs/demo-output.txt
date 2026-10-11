@@ -1,131 +1,131 @@
-{"completed": 10}
 {"completed": 7}
+{"completed": 10}
 {"completed": 7}
 {"completed": 2}
 == 1. connect three agents from different platforms
-registered claude-code (agt_01a12d2baadb2c45d0da5d); api key saved to <tmp>/.commons/agents/claude-code.key (chmod 600)
-registered grok (agt_01a12d2bab1d32add35b5f); api key saved to <tmp>/.commons/agents/grok.key (chmod 600)
-registered cursor (agt_01a12d2bab5ca76f1bd224); api key saved to <tmp>/.commons/agents/cursor.key (chmod 600)
+registered claude-code (agt_01a12d3bff8a7c81485087); api key saved to /tmp/tmp4mprhrbp/.commons/agents/claude-code.key (chmod 600)
+registered grok (agt_01a12d3bffcb94d4883a1a); api key saved to /tmp/tmp4mprhrbp/.commons/agents/grok.key (chmod 600)
+registered cursor (agt_01a12d3c000f4e85613557); api key saved to /tmp/tmp4mprhrbp/.commons/agents/cursor.key (chmod 600)
 
 == 2. user corrects an agent once -> preference learned
-[{'id': 'prf_01a12d2bab72168d996fa0', 'statement': 'Prefer tabs', 'confidence': 0.5, 'reinforced': False}, {'id': 'prf_01a12d2bab7640e2abbdad', 'statement': 'Always add type hints', 'confidence': 0.6, 'reinforced': False}]
+[{'id': 'prf_01a12d3c004252956b5e87', 'statement': 'Prefer tabs', 'confidence': 0.5, 'reinforced': False}, {'id': 'prf_01a12d3c00456a313906d5', 'statement': 'Always add type hints', 'confidence': 0.6, 'reinforced': False}]
 
 == 3. submit one big task (parallel parts, each gated by review) and a debate
 RUNNING Build the checkout service:
-sub_01a12d2bab7bb1a6449362 plan       plan      pending       claude-code     Plan: Build the checkout service:
-sub_01a12d2bab7bb875dcdcca part1      code      pending       claude-code     cart API endpoints
-sub_01a12d2bab7b1de6921852 review1    review    pending       cursor          Review: cart API endpoints
-sub_01a12d2bab7bfe74179ad7 part2      research  pending       grok            research payment providers
-sub_01a12d2bab7b8bf058b221 review2    review    pending       cursor          Review: research payment providers
-sub_01a12d2bab7b3cb3f4e070 part3      code      pending       cursor          order confirmation email
-sub_01a12d2bab7bf332393d9e review3    review    pending       grok            Review: order confirmation email
-sub_01a12d2bab7b6db71a8693 summary    summarize pending       claude-code     Merge & summarize: Build the checkout service:
+sub_01a12d3c004b8ad551b91f plan       plan      pending       claude-code     Plan: Build the checkout service:
+sub_01a12d3c004bf163d20e07 part1      code      pending       claude-code     cart API endpoints
+sub_01a12d3c004be5976fe9f3 review1    review    pending       cursor          Review: cart API endpoints
+sub_01a12d3c004b0f51ff5a3a part2      research  pending       grok            research payment providers
+sub_01a12d3c004b95ae3cc84d review2    review    pending       cursor          Review: research payment providers
+sub_01a12d3c004b2b387de5d3 part3      code      pending       cursor          order confirmation email
+sub_01a12d3c004bab834d6e7c review3    review    pending       grok            Review: order confirmation email
+sub_01a12d3c004bf2f2606636 summary    summarize pending       claude-code     Merge & summarize: Build the checkout service:
 RUNNING Should checkout use Stripe vs Adyen?
-sub_01a12d2babdc156307de6f debater1   debate    pending       grok            Debate position 1: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdca376ccceaa debater2   debate    pending       cursor          Debate position 2: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdcbd53c5d77f debater3   debate    pending       claude-code     Debate position 3: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdcfa89f4f7aa judge      judge     pending       cursor          Judge & synthesize: Should checkout use Stripe vs Adyen?
+sub_01a12d3c0094bc45b0a06e debater1   debate    pending       grok            Debate position 1: Should checkout use Stripe vs Adyen?
+sub_01a12d3c0094cc2ba000c8 debater2   debate    pending       cursor          Debate position 2: Should checkout use Stripe vs Adyen?
+sub_01a12d3c009404a63cb8bc debater3   debate    pending       claude-code     Debate position 3: Should checkout use Stripe vs Adyen?
+sub_01a12d3c00949eddcdd9fc judge      judge     pending       cursor          Judge & synthesize: Should checkout use Stripe vs Adyen?
 
 == 4. recurring nightly task (run 1)
-{'recurring': 'nightly-qa', 'job_id': 'job_01a12d2bac03b7626369a8', 'carried_leftovers': 0, 'next_run': '2026-10-12T09:00:00Z'}
+{'recurring': 'nightly-qa', 'job_id': 'job_01a12d3c00b8dc914a8bb9', 'carried_leftovers': 0, 'next_run': '2026-10-12T09:00:00Z'}
 
 == 5. workers run (claim -> mock CLI agent -> complete; first review of each part rejects)
-    [worker] sub_01a12d2bab7bb1a6449362 plan: Plan: Build the checkout service:
+    [worker] sub_01a12d3c004b8ad551b91f plan: Plan: Build the checkout service:
     [worker]   -> ok in 0.1s; job running
-    [worker] sub_01a12d2bab7bb875dcdcca code: cart API endpoints
+    [worker] sub_01a12d3c004bf163d20e07 code: cart API endpoints
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2babdcbd53c5d77f debate: Debate position 3: Should checkout use Stripe vs Adyen?
+    [worker] sub_01a12d3c009404a63cb8bc debate: Debate position 3: Should checkout use Stripe vs Adyen?
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bac04abd15117c0 code: Implement: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c00bd382f96810a code: Implement: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7bb875dcdcca code: cart API endpoints
-    [worker]   -> ok in 0.1s; job running
-    [worker] sub_01a12d2bac04abd15117c0 code: Implement: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c004bf163d20e07 code: cart API endpoints
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7b6db71a8693 summarize: Merge & summarize: Build the checkout service:
+    [worker] sub_01a12d3c00bd382f96810a code: Implement: Implement fixes for failing checkout tests
+    [worker]   -> ok in 0.0s; job running
+    [worker] sub_01a12d3c004bf2f2606636 summarize: Merge & summarize: Build the checkout service:
     [worker]   -> ok in 0.0s; job done
-    [worker] sub_01a12d2babdc156307de6f debate: Debate position 1: Should checkout use Stripe vs Adyen?
+    [worker] sub_01a12d3c004b0f51ff5a3a research: research payment providers
     [worker]   -> ok in 0.1s; job running
-    [worker] sub_01a12d2bab7bfe74179ad7 research: research payment providers
+    [worker] sub_01a12d3c0094bc45b0a06e debate: Debate position 1: Should checkout use Stripe vs Adyen?
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7bf332393d9e review: Review: order confirmation email
-    [worker]   -> ok in 0.0s verdict=reject; job running
-    [worker] sub_01a12d2bac04f368d78930 red_team: Find flaws: Implement fixes for failing checkout tests
-    [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bab7bfe74179ad7 research: research payment providers
+    [worker] sub_01a12d3c004b0f51ff5a3a research: research payment providers
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7bf332393d9e review: Review: order confirmation email
-    [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bac04f368d78930 red_team: Find flaws: Implement fixes for failing checkout tests
-    [worker]   -> ok in 0.0s verdict=approve; job done
-    [worker] sub_01a12d2babdca376ccceaa debate: Debate position 2: Should checkout use Stripe vs Adyen?
-    [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7b1de6921852 review: Review: cart API endpoints
-    [worker]   -> ok in 0.0s verdict=reject; job running
-    [worker] sub_01a12d2bab7b3cb3f4e070 code: order confirmation email
-    [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bab7b8bf058b221 review: Review: research payment providers
+    [worker] sub_01a12d3c004bab834d6e7c review: Review: order confirmation email
     [worker]   -> ok in 0.1s verdict=reject; job running
-    [worker] sub_01a12d2bab7b3cb3f4e070 code: order confirmation email
-    [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2babdcfa89f4f7aa judge: Judge & synthesize: Should checkout use Stripe vs Adyen?
-    [worker]   -> ok in 0.1s; job done
-    [worker] sub_01a12d2bab7b1de6921852 review: Review: cart API endpoints
+    [worker] sub_01a12d3c00bdf33e2e6839 red_team: Find flaws: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bac04bb08b41bf6 review: Review: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c004bab834d6e7c review: Review: order confirmation email
+    [worker]   -> ok in 0.0s verdict=approve; job running
+    [worker] sub_01a12d3c00bdf33e2e6839 red_team: Find flaws: Implement fixes for failing checkout tests
+    [worker]   -> ok in 0.0s verdict=approve; job done
+    [worker] sub_01a12d3c0094cc2ba000c8 debate: Debate position 2: Should checkout use Stripe vs Adyen?
+    [worker]   -> ok in 0.2s; job running
+    [worker] sub_01a12d3c004be5976fe9f3 review: Review: cart API endpoints
     [worker]   -> ok in 0.0s verdict=reject; job running
-    [worker] sub_01a12d2bab7b8bf058b221 review: Review: research payment providers
+    [worker] sub_01a12d3c004b95ae3cc84d review: Review: research payment providers
+    [worker]   -> ok in 0.0s verdict=reject; job running
+    [worker] sub_01a12d3c004b2b387de5d3 code: order confirmation email
+    [worker]   -> ok in 0.1s; job running
+    [worker] sub_01a12d3c004b95ae3cc84d review: Review: research payment providers
     [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bac04bb08b41bf6 review: Review: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c00949eddcdd9fc judge: Judge & synthesize: Should checkout use Stripe vs Adyen?
+    [worker]   -> ok in 0.0s; job done
+    [worker] sub_01a12d3c004b2b387de5d3 code: order confirmation email
+    [worker]   -> ok in 0.0s; job running
+    [worker] sub_01a12d3c00bd0050208969 review: Review: Implement fixes for failing checkout tests
+    [worker]   -> ok in 0.0s verdict=reject; job running
+    [worker] sub_01a12d3c004be5976fe9f3 review: Review: cart API endpoints
     [worker]   -> ok in 0.0s verdict=approve; job running
+    [worker] sub_01a12d3c00bd0050208969 review: Review: Implement fixes for failing checkout tests
+    [worker]   -> ok in 0.1s verdict=approve; job running
 DONE Build the checkout service:
-sub_01a12d2bab7bb1a6449362 plan       plan      done          claude-code     Plan: Build the checkout service:
-sub_01a12d2bab7bb875dcdcca part1      code      done          claude-code     cart API endpoints
-sub_01a12d2bab7b1de6921852 review1    review    done          cursor         approve  Review: cart API endpoints
-sub_01a12d2bab7bfe74179ad7 part2      research  done          grok            research payment providers
-sub_01a12d2bab7b8bf058b221 review2    review    done          cursor         approve  Review: research payment providers
-sub_01a12d2bab7b3cb3f4e070 part3      code      done          cursor          order confirmation email
-sub_01a12d2bab7bf332393d9e review3    review    done          grok           approve  Review: order confirmation email
-sub_01a12d2bab7b6db71a8693 summary    summarize done          claude-code     Merge & summarize: Build the checkout service: 
+sub_01a12d3c004b8ad551b91f plan       plan      done          claude-code     Plan: Build the checkout service:
+sub_01a12d3c004bf163d20e07 part1      code      done          claude-code     cart API endpoints
+sub_01a12d3c004be5976fe9f3 review1    review    done          cursor         approve  Review: cart API endpoints
+sub_01a12d3c004b0f51ff5a3a part2      research  done          grok            research payment providers
+sub_01a12d3c004b95ae3cc84d review2    review    done          cursor         approve  Review: research payment providers
+sub_01a12d3c004b2b387de5d3 part3      code      done          cursor          order confirmation email
+sub_01a12d3c004bab834d6e7c review3    review    done          grok           approve  Review: order confirmation email
+sub_01a12d3c004bf2f2606636 summary    summarize done          claude-code     Merge & summarize: Build the checkout service: 
 
 DONE Should checkout use Stripe vs Adyen?
-sub_01a12d2babdc156307de6f debater1   debate    done          grok            Debate position 1: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdca376ccceaa debater2   debate    done          cursor          Debate position 2: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdcbd53c5d77f debater3   debate    done          claude-code     Debate position 3: Should checkout use Stripe vs Adyen?
-sub_01a12d2babdcfa89f4f7aa judge      judge     done          cursor          Judge & synthesize: Should checkout use Stripe vs Adyen? 
+sub_01a12d3c0094bc45b0a06e debater1   debate    done          grok            Debate position 1: Should checkout use Stripe vs Adyen?
+sub_01a12d3c0094cc2ba000c8 debater2   debate    done          cursor          Debate position 2: Should checkout use Stripe vs Adyen?
+sub_01a12d3c009404a63cb8bc debater3   debate    done          claude-code     Debate position 3: Should checkout use Stripe vs Adyen?
+sub_01a12d3c00949eddcdd9fc judge      judge     done          cursor          Judge & synthesize: Should checkout use Stripe vs Adyen? 
 
-DONE nightly-qa @ 2026-10-11T22:53:19Z
-sub_01a12d2bac04abd15117c0 code       code      done          claude-code     Implement: Implement fixes for failing checkout tests
-sub_01a12d2bac04bb08b41bf6 review     review    done          cursor         approve  Review: Implement fixes for failing checkout tests
-sub_01a12d2bac04f368d78930 red_team   red_team  done          grok           approve  Find flaws: Implement fixes for failing checkout tests 
+DONE nightly-qa @ 2026-10-11T23:11:09Z
+sub_01a12d3c00bd382f96810a code       code      done          claude-code     Implement: Implement fixes for failing checkout tests
+sub_01a12d3c00bd0050208969 review     review    done          cursor         approve  Review: Implement fixes for failing checkout tests
+sub_01a12d3c00bdf33e2e6839 red_team   red_team  done          grok           approve  Find flaws: Implement fixes for failing checkout tests 
 
 == 6. leftovers recorded:
-    lft_01a12d2bacf645aaf8adc2 code add integration tests for the edge cases 
-    lft_01a12d2bad40a44628f556 code add integration tests for the edge cases (recurring)
+    lft_01a12d3c019c1f59bb0759 code add integration tests for the edge cases 
+    lft_01a12d3c01e6de8752e5e5 code add integration tests for the edge cases (recurring)
 
 == 7. recurring run 2 carries leftovers forward
-{'recurring': 'nightly-qa', 'job_id': 'job_01a12d2bba8faa27682504', 'carried_leftovers': 1, 'next_run': '2026-10-12T09:00:00Z'}
-    [worker] sub_01a12d2bbae8d886fbac20 code: Implement: Implement fixes for failing checkout tests{"completed": 2}
+{'recurring': 'nightly-qa', 'job_id': 'job_01a12d3c0edbd3dd7697af', 'carried_leftovers': 1, 'next_run': '2026-10-12T09:00:00Z'}
+    [worker] sub_01a12d3c0edc3c883fade8 code: Implement: Implement fixes for failing checkout tests{"completed": 2}
 {"completed": 3}
 
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bbae8d886fbac20 code: Implement: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c0edc3c883fade8 code: Implement: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bbae8bfd6c054f7 red_team: Find flaws: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c0edc6bdb100395 red_team: Find flaws: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bbae8bfd6c054f7 red_team: Find flaws: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c0edc6bdb100395 red_team: Find flaws: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s verdict=approve; job running
-    [worker] sub_01a12d2bbae81b835a89da code: Leftover: add integration tests for the edge cases
+    [worker] sub_01a12d3c0edcdf56801421 code: Leftover: add integration tests for the edge cases
     [worker]   -> ok in 0.0s; job running
-    [worker] sub_01a12d2bbae80396f81bea review: Review: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c0edc53b33783b2 review: Review: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s verdict=reject; job running
-    [worker] sub_01a12d2bbae80396f81bea review: Review: Implement fixes for failing checkout tests
+    [worker] sub_01a12d3c0edc53b33783b2 review: Review: Implement fixes for failing checkout tests
     [worker]   -> ok in 0.0s verdict=approve; job done
-DONE nightly-qa @ 2026-10-11T22:53:22Z
-sub_01a12d2bbae8d886fbac20 code       code      done          claude-code     Implement: Implement fixes for failing checkout tests
-sub_01a12d2bbae80396f81bea review     review    done          cursor         approve  Review: Implement fixes for failing checkout tests
-sub_01a12d2bbae8bfd6c054f7 red_team   red_team  done          grok           approve  Find flaws: Implement fixes for failing checkout tests
-sub_01a12d2bbae81b835a89da leftover1  code      done          cursor          Leftover: add integration tests for the edge cases
+DONE nightly-qa @ 2026-10-11T23:11:13Z
+sub_01a12d3c0edc3c883fade8 code       code      done          claude-code     Implement: Implement fixes for failing checkout tests
+sub_01a12d3c0edc53b33783b2 review     review    done          cursor         approve  Review: Implement fixes for failing checkout tests
+sub_01a12d3c0edc6bdb100395 red_team   red_team  done          grok           approve  Find flaws: Implement fixes for failing checkout tests
+sub_01a12d3c0edcdf56801421 leftover1  code      done          cursor          Leftover: add integration tests for the edge cases
 
 == 8. checks
    PASS  big task done
@@ -139,7 +139,7 @@ sub_01a12d2bbae81b835a89da leftover1  code      done          cursor          Le
 == 9. v0.3: graph everything + automatic knowledge base
 {
   "project": "shop",
-  "project_id": "prj_01a12d2bab6d419476151f",
+  "project_id": "prj_01a12d3c0039401fb28a2e",
   "files": 2,
   "symbols": 5,
   "imports": 1,
@@ -154,45 +154,45 @@ graph rebuild: {"relations_before": 292, "relations_after": 505, "added": 213}
 **shop**: 38 records (37 memory, 1 decision), 2 indexed code files, 4 contributing agents; active 2026-10-11 → 2026-10-11.
 
 Key points:
-- Judge & synthesize: Should checkout use Stripe vs Adyen? [mem_01a12d2bae5c6b9309202d]
-- Review: Implement fixes for failing checkout tests [mem_01a12d2bafa7ef1e9ccf4b]
-- Should checkout use Stripe vs Adyen? [dec_01a12d2bae579df449deba]
-- Review: Implement fixes for failing checkout tests Missing error handling. [mem_01a12d2bae99aea44c742d]
-- Find flaws: Implement fixes for failing checkout tests [mem_01a12d2bade28474cbc5da]
-- Implement: Implement fixes for failing checkout tests [mem_01a12d2bad4483179395bd]
-- Checkout code lives in checkout/cart.py. [mem_01a12d2bc8a3e7e6e3a027]
+- Judge & synthesize: Should checkout use Stripe vs Adyen? [mem_01a12d3c02a9bced5c44af]
+- Review: Implement fixes for failing checkout tests [mem_01a12d3c0408e6ac5cbf7a]
+- Should checkout use Stripe vs Adyen? [dec_01a12d3c02a260d3e06c02]
+- Review: Implement fixes for failing checkout tests Missing error handling. [mem_01a12d3c02e6582fa28338]
+- Find flaws: Implement fixes for failing checkout tests [mem_01a12d3c02b3615b9beac7]
+- Implement: Implement fixes for failing checkout tests [mem_01a12d3c01e9fc75266198]
+- Checkout code lives in checkout/cart.py. [mem_01a12d3c1cb4b84696542b]
 
 ## Key decisions & rationale
-- **Should checkout use Stripe vs Adyen?** — Judge & synthesize: Should checkout use Stripe vs Adyen? _(by cursor, 2026-10-11)_ [dec_01a12d2bae579df449deba]
+- **Should checkout use Stripe vs Adyen?** — Judge & synthesize: Should checkout use Stripe vs Adyen? _(by cursor, 2026-10-11)_ [dec_01a12d3c02a260d3e06c02]
 
 ## Architecture & components
 2 files (1 js, 1 python). Components:
-- `checkout/` — 2 files [ent_01a12d2bc89102e56681f5]
+- `checkout/` — 2 files [ent_01a12d3c1ca19af0c06c16]
 
 Most depended-on symbols:
-- `apply_tax` (function, checkout/cart.py:6) — 2 callers [ent_01a12d2bc896a01313f024]
-- `pay` (function, checkout/api.ts:3) — 1 callers [ent_01a12d2bc8914722199aa9]
+- `apply_tax` (function, checkout/cart.py:6) — 2 callers [ent_01a12d3c1ca76dda87332f]
+- `pay` (function, checkout/api.ts:3) — 1 callers [ent_01a12d3c1ca11a3c6e04e7]
 
 Classes:
-- `Cart` in checkout/cart.py — Shopping cart. [ent_01a12d2bc89689a1a4cf9e]
+- `Cart` in checkout/cart.py — Shopping cart. [ent_01a12d3c1ca6b6e5b71082]
 
 ## Glossary & entities
-- **Cart** (concept, 1 mentions): Checkout code lives in checkout/cart.py. [ent_01a12d2bc8ab8c71107701] [mem_01a12d2bc8a3e7e6e3a027]
-- **Stripe** (concept, 1 mentions): Should checkout use Stripe vs Adyen? [ent_01a12d2bc8a70ee2b08563] [dec_01a12d2bae579df449deba]
+- **Cart** (concept, 1 mentions): Checkout code lives in checkout/cart.py. [ent_01a12d3c1cbeff3ceaabef] [mem_01a12d3c1cb4b84696542b]
+- **Stripe** (concept, 1 mentions): Should checkout use Stripe vs Adyen? [ent_01a12d3c1cbd09e8f9a26f] [dec_01a12d3c02a260d3e06c02]
 
 ## References & links
 Links:
-- <https://stripe.com/docs/webhooks> [mem_01a12d2bc8a3e7e6e3a027]
+- <https://stripe.com/docs/webhooks> [mem_01a12d3c1cb4b84696542b]
 Files:
-- `checkout/cart.py` [mem_01a12d2bc8a3e7e6e3a027]
+- `checkout/cart.py` [mem_01a12d3c1cb4b84696542b]
 
 ## How-tos & runbooks
-- **To release the shop, run `make release` after the review gates pass.** [mem_01a12d2bc8ad160c180fb0]
+- **To release the shop, run `make release` after the review gates pass.** [mem_01a12d3c1cbfe571cee066]
 
 ## People & agents
-- **cursor** (cursor): 13 memory, 4 review subtasks, 2 code subtasks, 1 decision, 1 debate subtasks, 1 judge subtasks; spent $0.0800 [agt_01a12d2bab5ca76f1bd224]
+- **cursor** (cursor): 13 memory, 4 review subtasks, 2 code subtasks, 1 decision, 1 debate subtasks, 1 judge subtasks; spent $0.0450 [agt_01a12d3c000f4e85613557]
 - **claude-code** (claude-code): 11 memory, 3 code subtasks, 1 debate subtasks, 1 plan subtasks, 1 summari
-{"dir": "<tmp>/vault", "files": 48, "buckets": ["misc", "shop"]}
+{"dir": "/tmp/tmp4mprhrbp/vault", "files": 48, "buckets": ["misc", "shop"]}
    PASS  graph rebuild backfilled links
    PASS  job graph links verdicts + workflow
    PASS  recurring runs linked to schedule
@@ -202,11 +202,139 @@ Files:
    PASS  Obsidian vault exported
    PASS  pickup includes KB digest
 
+== 10. v0.4: skill pool, research, model providers + distributor, org chart, librarian
+{
+  "skill": "release-notes",
+  "version": 1,
+  "status": "pending",
+  "findings": [],
+  "review": {
+    "by": null,
+    "verdict": null,
+    "notes": "awaiting review by another agent or the user"
+  }
+}
+{
+  "skill": "release-notes",
+  "version": 1,
+  "status": "active"
+}
+{
+  "skill": "release-notes",
+  "version": 2,
+  "status": "flagged",
+  "findings": [
+    {
+      "check": "injection",
+      "file": "SKILL.md",
+      "found": [
+        "override_instructions",
+        "exfiltration"
+      ],
+      "severity": "high"
+    }
+  ],
+  "review": {
+    "by": "scanner",
+    "verdict": "reject",
+    "notes": "high-severity findings; needs a human"
+  }
+}
+commons v1 — Shared cross-AI memory and multi-agent coordination via the Commons MCP server. Use at the start of every session (check [core, memory, coordination] (uses 0, success 50%)
+release-notes v1 — Write release notes from merged work [docs, release] (uses 0, success 50%)
+{"provider": "mock", "key_ref": null, "url": "http://127.0.0.1:43409", "default": true}
+Research question: how to verify stripe webhook signatures
+
+Findings (extractive):
+- Stripe signs webhook events; verify the signature with the endpoint secret before trusting the payload. [mem_01a12d3c20780040aa0f74] (http://127.0.0.1:43409/page1)
+- Stripe signs webhook events; verify the signature with the endpoint secret before trusting the payload. [mem_01a12d3c207ecd51ba8b74] (http://127.0.0.1:43409/page2)
+
+new models: ['mockrouter/new-frontier'] probe: {'mockrouter/new-frontier': {'research': 1.0, 'code': 1.0, 'plan': 1.0, 'review': 1.0, 'summarize': 1.0}}
+routing: {"code": "mockrouter/new-frontier", "debate": "mockrouter/fast-small", "general": "mockrouter/fast-small", "judge": "mockrouter/fast-small", "plan": "mockrouter/new-frontier", "red_team": "mockrouter/fast-small", "research": "mockrouter/new-frontier", "review": "mockrouter/new-frontier", "summarize": "mockrouter/new-frontier", "test": "mockrouter/fast-small"}
+Workspace
+1 [project] shop <prj_01a12d3c0039401fb28a2e>
+  1.1 [group] Jobs & tasks (4)
+  1.2 [group] Workflows (2)
+  1.3 [group] Knowledge base (10)
+  1.4 [group] Code (2)
+  1.5 [group] Schedules (1)
+  1.6 [group] Memories (41)
+  1.7 [group] Leftovers (2)
+
+{
+  "auto_approve": false,
+  "budget": 0.05
+}
+librarian: {'mode': 'model:mockrouter/fast-small', 'items_scanned': 43, 'tagged': 3, 'assigned': 0, 'summaries': 11, 'indexed': 1451} dedupe: {'merged': [], 'proposed': ['lbp_01a12d3c218fd05c7c8111', 'lbp_01a12d3c21915730eff504']}
+find 'stripe webhook':
+1.3.1.7 [memory] Payments go through Stripe; webhook docs at https://stripe.c <mem_01a12d3c1cb4b84696542b>
+1.3.5.2 [source] Stripe webhooks guide <mem_01a12d3c20780040aa0f74>
+1.3.5.3 [source] Stripe webhooks guide <mem_01a12d3c207ecd51ba8b74>
+1.3.5.4 [memory] Research: how to verify stripe webhook signatures <mem_01a12d3c208399a8d8316f>
+2.1.1.1 [memory] Stripe webhooks must be verified with the endpoint signing s <mem_01a12d3c214577c9d649e7>
+
+   PASS  skill published, cross-reviewed, active
+   PASS  injected skill update blocked from activation
+   PASS  research stored cited sources
+   PASS  new model detected + probed
+   PASS  routing table built by distributor
+   PASS  org chart has index paths
+   PASS  librarian proposed merge (review queue)
+   PASS  librarian undo works
+   PASS  find() returns locations
+
+== 11. v0.4: MCP hub (proxy upstream MCP servers with policy, approvals, audit)
+imported: ['notes'] | warnings: ['notes: env UPSTREAM_TOKEN had a literal value in claude_desktop_config.json; Commons stores env://UPSTREAM_TOKEN instead — export UPSTREAM_TOKEN where Commons runs (value NOT copied)']
+{
+  "notes": {
+    "status": "up",
+    "tools": 4,
+    "ms": 756
+  }
+}
+notes__create_note [write] Create a note.
+notes__delete_everything [destructive] Delete all data.
+notes__get_weather [read] Read the weather for a city.
+notes__poisoned [read] Returns hostile content.
+write call: ok | destructive call: approval_required
+   PASS  imported Claude Desktop config (secret not copied)
+   PASS  upstream tools discovered + namespaced
+   PASS  destructive tool gated by approval
+   PASS  policy deny enforced
+   PASS  upstream output wrapped + redacted
+   PASS  catalog lists verified presets
+
+== 12. v0.4: shared context packs (pass an id, not the text)
+base pack: ctx_01a12d3c35c2e4599bd997 {'L0': 14, 'L1': 40, 'L2': 1666, 'L3': 9} | delta pack new chars: 24 reused: 5360
+# Shared context: shop-handoff
+
+## Gist (L0)
+Tax extracted; invoices next.
+
+## Brief (L1)
+## Goal
+Refactor checkout
+## State
+cart done
+## Decisions
+- Stripe for payments
+## Open Threads
+- tax rounding
+## Next Steps
+- extract tax
+- add invoices
+
+
+fit: L3 for mockrouter/fast-small | savings: {'loads': 2, 'tokens_loaded': 1830, 'tokens_saved_by_layering': 1618, 'provider_cached_tokens': 0, 'blobs': 4, 'blob_chars': 5563, 'section_refs': 4, 'dedup_ratio': 1.0}
+   PASS  delta pack reuses big section
+   PASS  job carries pack id
+
 usage by agent:
-cursor                         in      6400 out      6400  $0.0800  0.3s
-grok                           in      4318 out      4318  $0.0777  0.2s
-claude-code                    in      4176 out      4176  $0.0752  0.2s
+cursor                         in      3597 out      3597  $0.0450  0.3s
+grok                           in      2483 out      2500  $0.0446  2.4s
+claude-code                    in      2166 out      2166  $0.0390  0.2s
+provider:mockrouter            in      4593 out       571  $0.0169  0s
 
-debate synthesis excerpt: ## Judge & synthesize: Should checkout use Stripe vs Adyen? | [cursor] judge: Judge & synthesize: Should checkout use Stripe vs Adyen? | Applied preference: Always add type hints | TOKENS: 652
+debate synthesis excerpt: ## Judge & synthesize: Should checkout use Stripe vs Adyen? | [cursor] judge: Judge & synthesize: Should checkout use Stripe vs Adyen? | Applied preference: Always add type hints | TOKENS: 392
 
-demo database: <tmp>/demo.db  (inspect with: COMMONS_DB=<tmp>/demo.db commons dashboard)
+demo database: /tmp/tmp4mprhrbp/demo.db  (inspect with: COMMONS_DB=/tmp/tmp4mprhrbp/demo.db commons dashboard)

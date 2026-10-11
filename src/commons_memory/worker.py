@@ -35,7 +35,9 @@ PRESETS = {
 def render_prompt(p: dict) -> str:
     deps = "\n\n".join(f"### {d['key']} ({d['type']}, by {d['by']})\n<untrusted-agent-output>\n"
                        f"{d['result']}\n</untrusted-agent-output>" for d in p["dependency_results"])
-    return f"""You are one agent in a Commons multi-agent job. Do ONLY this subtask.
+    ctx = p.get("context") or {}
+    head = (ctx["prefix"] + f"\n(more: {ctx['hint']})\n\n---\n") if ctx.get("prefix") else ""  # stable prefix first -> prompt cache
+    return head + f"""You are one agent in a Commons multi-agent job. Do ONLY this subtask.
 
 # Job: {p['job_title']}
 # Subtask {p['subtask_id']} — type: {p['type']} (attempt {p['attempt']})
@@ -48,7 +50,7 @@ def render_prompt(p: dict) -> str:
 
 {p['preferences']}
 
-{('## Related memory' + chr(10) + p['related_memory']) if p.get('related_memory') else ''}
+{('## Related memory' + chr(10) + (p['related_memory'].get('text', '') if isinstance(p['related_memory'], dict) else str(p['related_memory']))) if p.get('related_memory') else ''}
 
 ## Output protocol
 {p['protocol']}
@@ -141,15 +143,36 @@ def run_worker(client, cmd: str, *, once: bool = False, max_tasks: int = 0, inte
                 except Exception:  # noqa: BLE001
                     pass
         threading.Thread(target=beat, daemon=True).start()
-        env = {**os.environ, "COMMONS_SUBTASK_ID": p["subtask_id"], "COMMONS_JOB_ID": p["job_id"],
+        env = {**os.environ, "COMMONS_MODEL": p.get("model") or "", "COMMONS_SUBTASK_ID": p["subtask_id"], "COMMONS_JOB_ID": p["job_id"],
                "COMMONS_TASK_TYPE": p["type"], "COMMONS_PROMPT_FILE": pf}
+        model = p.get("model") or ""
         full = cmd.replace("{prompt_file}", shlex.quote(pf)).replace("{type}", p["type"]) \
+                  .replace("{model}", shlex.quote(model.split("/", 1)[-1]) if model else "") \
+                  .replace("{model_full}", shlex.quote(model)) \
                   .replace("{subtask_id}", p["subtask_id"])
         log(f"[worker] {p['subtask_id']} {p['type']}: {p['title'][:70]}")
         t0 = time.time()
         try:
-            r = subprocess.run(full, shell=True, input=prompt, capture_output=True, text=True, timeout=timeout, env=env)
-            out, ok = r.stdout.strip() or r.stderr.strip(), r.returncode == 0
+            if cmd.startswith("@llm"):
+                # API-only seat: execute through the provider layer with the routed (or given) model
+                from .providers import ProviderLayer
+                if not hasattr(client, "store"):
+                    raise RuntimeError("@llm workers need local DB access (no --url)")
+                mdl = p.get("model") or (cmd.split(":", 1)[1] if ":" in cmd else ProviderLayer(client.store).role_model("distributor"))
+                if not mdl:
+                    raise RuntimeError("no model routed for this task and no distributor configured")
+                cpre = (p.get("context") or {}).get("prefix") or ""
+                rr = ProviderLayer(client.store).chat(mdl, prompt[len(cpre):] if cpre and prompt.startswith(cpre) else prompt,
+                                                      cache_prefix=cpre, system="You are an expert agent in a Commons team.",
+                                                      agent_id=getattr(client, "agent_id", None), job_id=p["job_id"],
+                                                      role="executor")
+                out, ok = rr["text"], True
+                out += f"\nTOKENS: {rr['tokens_out']}"
+            else:
+                r = subprocess.run(full, shell=True, input=prompt, capture_output=True, text=True, timeout=timeout, env=env)
+                out, ok = r.stdout.strip() or r.stderr.strip(), r.returncode == 0
+        except RuntimeError as e:
+            out, ok = f"worker error: {e}", False
         except subprocess.TimeoutExpired:
             out, ok = "timed out", False
         finally:

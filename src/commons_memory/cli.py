@@ -69,6 +69,86 @@ def main(argv: list[str] | None = None) -> int:
     sc = sub.add_parser("scheduler", help="run due recurring tasks (loop, or --once from system cron)")
     sc.add_argument("--once", action="store_true")
     sc.add_argument("--interval", type=float, default=60)
+    sc.add_argument("--librarian-every", type=float, default=600, help="seconds between librarian passes (0=off)")
+    sc.add_argument("--models-every", type=float, default=3600, help="seconds between model-list refresh/probe (0=off)")
+    skp = sub.add_parser("skill", help="shared skill pool: list|get|publish|update|review|history|rollback|fork|rate")
+    skp.add_argument("action", choices=["list", "get", "publish", "update", "review", "history", "rollback", "fork", "rate"])
+    skp.add_argument("name", nargs="?")
+    skp.add_argument("--file", help="SKILL.md path (publish/update)")
+    skp.add_argument("--version", type=int)
+    skp.add_argument("--reject", action="store_true")
+    skp.add_argument("--new-name")
+    skp.add_argument("--tags", default="")
+    skp.add_argument("--success", action="store_true")
+    skp.add_argument("--agent", default=os.environ.get("COMMONS_AGENT", "cli"))
+    rsp = sub.add_parser("research", help="web research stored as cited memory")
+    rsp.add_argument("query")
+    rsp.add_argument("--provider")
+    rsp.add_argument("--project")
+    rsp.add_argument("-n", type=int, default=5)
+    rsp.add_argument("--configure", metavar="PROVIDER", help="set provider (brave|tavily|exa|searxng|fetch) as default")
+    rsp.add_argument("--key-ref")
+    rsp.add_argument("--url")
+    mp = sub.add_parser("models", help="providers / models / roles / routing")
+    mp.add_argument("action", choices=["add-provider", "refresh", "list", "probe", "role", "routing", "proposals",
+                                       "approve", "reject", "watch", "agent"])
+    mp.add_argument("args", nargs="*")
+    mp.add_argument("--key-ref")
+    mp.add_argument("--base-url")
+    mp.add_argument("--budget", type=float)
+    tp = sub.add_parser("tree", help="org-chart outline with index paths")
+    tp.add_argument("root", nargs="?", default="workspace")
+    tp.add_argument("--depth", type=int, default=2)
+    tp.add_argument("--max-tokens", type=int, default=2000)
+    tp.add_argument("--find")
+    tp.add_argument("--format", choices=["outline", "mermaid", "markdown"], default="outline")
+    lb = sub.add_parser("librarian", help="run | status | proposals | approve ID | reject ID | undo LOGID | config")
+    lb.add_argument("action", choices=["run", "status", "proposals", "approve", "reject", "undo", "config", "delegate"])
+    lb.add_argument("target", nargs="?")
+    lb.add_argument("--full", action="store_true")
+    lb.add_argument("--auto-approve", choices=["on", "off"])
+    lb.add_argument("--budget", type=float)
+    sd = sub.add_parser("skills", help="skill discovery + local import: discover|trending|popular|add|updates|import|configure|status")
+    sd.add_argument("action", choices=["discover", "trending", "popular", "add", "updates", "import", "configure", "status"])
+    sd.add_argument("target", nargs="?")
+    sd.add_argument("--name")
+    sd.add_argument("--query", default="")
+    sd.add_argument("--kind", default="")
+    sd.add_argument("--token-ref")
+    sd.add_argument("--allow-license", action="store_true")
+    sd.add_argument("--path", action="append", default=[], help="extra path to scan (import)")
+    sd.add_argument("--dir", default=".")
+    sd.add_argument("--dry-run", action="store_true")
+    sd.add_argument("--replace-local", action="store_true", help="replace imported local skills with the bootstrap pointer")
+    sd.add_argument("--max-repos", type=int, default=60)
+    sd.add_argument("--agent", default=os.environ.get("COMMONS_AGENT", "cli"))
+    cxp = sub.add_parser("context", help="shared context packs: list | load PACK | diff PACK [OTHER] | fit PACK MODEL | savings")
+    cxp.add_argument("action", choices=["list", "load", "diff", "fit", "savings"])
+    cxp.add_argument("pack", nargs="?")
+    cxp.add_argument("other", nargs="?")
+    cxp.add_argument("--layer", default="L1")
+    cxp.add_argument("--max-tokens", type=int, default=4000)
+    mh = sub.add_parser("mcp", help="MCP hub: catalog|add|add-preset|import|list|health|tools|call|policy|approvals|approve|deny|calls|remove")
+    mh.add_argument("action", choices=["catalog", "add", "add-preset", "import", "list", "health", "tools", "describe", "call",
+                                       "policy", "approvals", "approve", "deny", "calls", "remove"])
+    mh.add_argument("target", nargs="?")
+    mh.add_argument("rest", nargs="*")
+    mh.add_argument("--url")
+    mh.add_argument("--command", dest="mcp_command")
+    mh.add_argument("--arg", action="append", default=[], help="stdio arg (repeatable)")
+    mh.add_argument("--env", action="append", default=[], help="ENV=secret-ref (repeatable)")
+    mh.add_argument("--header", action="append", default=[], help="Header='Bearer {env://X}' (repeatable)")
+    mh.add_argument("--ref", action="append", default=[], help="preset SECRET=ref (repeatable)")
+    mh.add_argument("--param", action="append", default=[], help="preset param k=v (repeatable)")
+    mh.add_argument("--name")
+    mh.add_argument("--args-json", default="{}")
+    mh.add_argument("--agent", default=os.environ.get("COMMONS_AGENT", "cli"))
+    mh.add_argument("--approval")
+    mh.add_argument("--dry-run", action="store_true")
+    mh.add_argument("--no-discover", action="store_true")
+    fd = sub.add_parser("find", help="where to find X (librarian index)")
+    fd.add_argument("query")
+    fd.add_argument("-n", type=int, default=5)
     sb = sub.add_parser("submit", help="submit a task for multi-agent orchestration")
     sb.add_argument("task")
     sb.add_argument("--pattern", default="auto")
@@ -236,10 +316,35 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "scheduler":
         import time
         from .orchestrator import Orchestrator
+        from .librarian import Librarian
+        from .providers import ProviderLayer
         o = Orchestrator(store)
+        last_lib = last_models = 0.0
         while True:
             for r in o.run_due():
                 print(json.dumps(r), flush=True)
+            lib = Librarian(store)
+            if args.librarian_every and (time.time() - last_lib >= args.librarian_every or args.once) \
+                    and lib.status()["new_since_last_run"]:
+                rep = lib.run()
+                last_lib = time.time()
+                print(json.dumps({"librarian": {k: rep[k] for k in ("items_scanned", "tagged", "assigned", "summaries")}}),
+                      flush=True)
+            from .skilldiscovery import Discovery
+            disc = Discovery(store)
+            if os.environ.get("COMMONS_SKILL_DISCOVERY", "1") == "1" and disc.configure()["token_ref"] and disc.due(24):
+                try:
+                    print(json.dumps({"skill_discovery": disc.discover(), "skill_updates": disc.check_updates()}), flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(json.dumps({"skill_discovery_error": str(e)}), flush=True)
+            if args.models_every and store.q("SELECT 1 FROM providers WHERE enabled=1") and \
+                    time.time() - last_models >= args.models_every:
+                last_models = time.time()
+                try:
+                    w = ProviderLayer(store).watch()
+                    print(json.dumps({"models": {"new": w["refresh"]["new_models"]}}), flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(json.dumps({"models_error": str(e)}), flush=True)
             o.reap()
             from .kb import KB
             rebuilt = KB(store).refresh_dirty()
@@ -340,6 +445,126 @@ def main(argv: list[str] | None = None) -> int:
         from .usage import Usage
         for r in Usage(store).summary(args.by):
             print(f"{r['label'][:30]:<30} in {r['tokens_in']:>9} out {r['tokens_out']:>9}  ${r['cost']:.4f}  {r['seconds']}s")
+    elif args.cmd == "skill":
+        from .server_v4 import seed_skills
+        from .skillpool import SkillPool
+        seed_skills(store)
+        sp, aid = SkillPool(store), store.ensure_agent(args.agent)
+        a = args.action
+        if a == "list":
+            print(sp.list(args.name or "", None, 4000)["text"])
+        elif a == "get":
+            print(sp.get(args.name, args.version, 100000, True, aid)["content"])
+        elif a in ("publish", "update"):
+            body = open(args.file, encoding="utf-8").read()
+            tags = [t for t in args.tags.split(",") if t]
+            r = sp.publish(args.name, body, tags=tags, agent_id=aid) if a == "publish" else \
+                sp.update(args.name, body, tags=tags or None, agent_id=aid)
+            print(json.dumps(r, indent=2, default=str))
+        elif a == "review":
+            print(json.dumps(sp.review(args.name, args.version, not args.reject, aid), indent=2, default=str))
+        elif a == "history":
+            print(json.dumps(sp.history(args.name), indent=2, default=str))
+        elif a == "rollback":
+            print(json.dumps(sp.rollback(args.name, args.version, aid), indent=2, default=str))
+        elif a == "fork":
+            print(json.dumps(sp.fork(args.name, args.new_name, aid), indent=2, default=str))
+        elif a == "rate":
+            print(json.dumps(sp.rate(args.name, args.success, None, aid), indent=2, default=str))
+    elif args.cmd == "research":
+        from .research import Research
+        rs = Research(store)
+        if args.configure:
+            print(json.dumps(rs.configure(args.configure, args.key_ref, args.url, default=True)))
+        else:
+            r = rs.research(args.query, provider=args.provider, max_results=args.n, project=args.project,
+                            agent_id=store.ensure_agent(os.environ.get("COMMONS_AGENT", "cli")))
+            print(r["summary"])
+    elif args.cmd == "models":
+        from .providers import ProviderLayer
+        pl, a, xs = ProviderLayer(store), args.action, args.args
+        r = {"add-provider": lambda: pl.add_provider(xs[0], xs[1], args.key_ref, args.base_url),
+             "refresh": lambda: pl.refresh_models(xs[0] if xs else None),
+             "list": lambda: pl.models(xs[0] if xs else None),
+             "probe": lambda: pl.probe(xs or None, budget=args.budget),
+             "role": lambda: pl.set_role(xs[0], xs[1] if len(xs) > 1 else None) if xs else pl.roles(),
+             "routing": lambda: pl.refresh_routing() if xs[:1] == ["refresh"] else pl.routing(),
+             "proposals": lambda: pl.proposals(),
+             "approve": lambda: pl.decide(xs[0], True),
+             "reject": lambda: pl.decide(xs[0], False),
+             "watch": lambda: pl.watch(),
+             "agent": lambda: pl.set_agent_models(store.ensure_agent(xs[0]), xs[1:])}[a]()
+        print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "tree":
+        from .tree import Tree
+        t = Tree(store)
+        if args.find:
+            for h in t.find(args.find, args.root):
+                print(f"{h['path']}  {' > '.join(h['breadcrumbs'])}")
+        elif args.format == "mermaid":
+            print(t.to_mermaid(args.root, args.depth))
+        elif args.format == "markdown":
+            print(t.to_markdown(args.root, args.depth))
+        else:
+            print(t.outline(args.root, args.depth, args.max_tokens)["text"])
+    elif args.cmd == "librarian":
+        from .librarian import Librarian
+        lib, a = Librarian(store), args.action
+        r = {"run": lambda: lib.run(full=args.full), "status": lib.status, "proposals": lib.proposals,
+             "approve": lambda: lib.decide(args.target, True), "reject": lambda: lib.decide(args.target, False),
+             "undo": lambda: lib.undo(args.target), "delegate": lib.delegate,
+             "config": lambda: lib.configure(None if args.auto_approve is None else args.auto_approve == "on",
+                                             args.budget)}[a]()
+        print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "skills":
+        from .skilldiscovery import Discovery
+        d, a = Discovery(store), args.action
+        aid = store.ensure_agent(args.agent)
+        if a in ("trending", "popular"):
+            for r in d.list(a, args.query, args.kind, 40):
+                print(f"{r['score']:>8} ★{r['stars']:<6} +{r['delta_7d']:<4} {r['kind']:9} {r['license']:12} {r['id']}")
+            return 0
+        if a == "import":
+            from .skillimport import run as imp
+            r = imp(store, args.dir, args.path, args.dry_run, args.replace_local, aid)
+        else:
+            r = {"discover": lambda: d.discover(args.max_repos), "add": lambda: d.add(args.target, args.name, aid, args.allow_license),
+                 "updates": lambda: d.check_updates(aid), "configure": lambda: d.configure(args.token_ref),
+                 "status": d.status}[a]()
+        print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "context":
+        from .contextpacks import ContextStore
+        cs, a = ContextStore(store), args.action
+        if a == "load":
+            print(cs.load(args.pack, args.layer, args.max_tokens)["text"])
+        else:
+            r = {"list": cs.packs, "diff": lambda: cs.diff(args.pack, args.other), "savings": cs.savings,
+                 "fit": lambda: {k: v for k, v in cs.fit(args.pack, args.other).items() if k != "load"}}[a]()
+            print(json.dumps(r, indent=2, default=str))
+    elif args.cmd == "mcp":
+        from .mcphub import Hub, load_catalog
+        hub, a, t = Hub(store), args.action, args.target
+        kv = lambda xs: dict(x.split("=", 1) for x in xs)  # noqa: E731
+        if a == "catalog":
+            for k, v in sorted(load_catalog()["presets"].items()):
+                print(f"{k:16} {'✓' if v.get('verified') else '?'} {v['transport']:5} {v.get('auth', ''):16} {v['title']}")
+            return 0
+        r = {"add": lambda: hub.add(t, command=args.mcp_command, args=args.arg, url=args.url, env_refs=kv(args.env),
+                                     header_refs=kv(args.header), discover=not args.no_discover),
+             "add-preset": lambda: hub.add_preset(t, args.name, kv(args.param), kv(args.ref), not args.no_discover),
+             "import": lambda: hub.import_configs(([t] if t else []) + args.rest or None, args.dry_run),
+             "list": hub.servers, "health": lambda: hub.health(t),
+             "tools": lambda: hub.search(t or "", None, 200, 100000)["text"],
+             "describe": lambda: hub.describe(t),
+             "call": lambda: hub.call(t, json.loads(args.args_json), store.ensure_agent(args.agent), args.approval),
+             "policy": lambda: hub.set_policy(t, *(args.rest + ["*"] * 3)[:2], agent=(args.rest + ["*"] * 3)[2])
+             if t else hub.policies(),
+             "approvals": hub.approvals, "approve": lambda: hub.decide(t, True), "deny": lambda: hub.decide(t, False),
+             "calls": hub.calls, "remove": lambda: hub.remove(t)}[a]()
+        print(r if isinstance(r, str) else json.dumps(r, indent=2, default=str))
+    elif args.cmd == "find":
+        from .librarian import Librarian
+        print(Librarian(store).find(args.query, args.n)["text"])
     elif args.cmd == "stats":
         print(json.dumps(store.stats(), indent=2))
     return 0

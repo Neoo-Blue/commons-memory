@@ -1,5 +1,7 @@
 # Commons — one shared brain for all your AIs
 
+![Commons dashboard](docs/img/dashboard-overview.png)
+
 **Commons is a memory + coordination hub that every AI agent installs as a skill and connects to over MCP** —
 Claude Code, Claude Desktop, Cursor, Codex, ChatGPT, Grok, Muse and custom agents. They share memory, pick up each
 other's unfinished work, learn how *you* like things done, and split big tasks between them with debate, review
@@ -31,6 +33,135 @@ See [FLAWS_AND_GAPS.md](FLAWS_AND_GAPS.md) for known risks.
 
 v0.1 features remain: shared memory with hybrid search and token-budgeted results, one graph across memory/code/sessions,
 code indexing, handoffs, reasoning log, agent inbox, secret references, conflict detection.
+
+## v0.4: shared skill pool, research, model routing, org chart, librarian, MCP hub
+
+| | |
+|---|---|
+| ![org chart](docs/img/dashboard-orgchart.png) | ![MCP hub](docs/img/dashboard-mcp.png) |
+| ![skills](docs/img/dashboard-skills.png) | ![librarian](docs/img/dashboard-librarian.png) |
+
+**Skill pool.** Commons is now the skill registry. Agents install only a tiny *bootstrap* skill and fetch everything
+else on demand: `skill_list / skill_search / skill_get` (token-budgeted), `skill_publish / skill_update / skill_fork`,
+`skill_rate`, `skill_rollback`, `skill_history` (full versions + diffs). Every version passes a gate before it can become
+active: secret redaction, a prompt-injection / exfiltration scanner, then review by another agent, a configured
+`skill_reviewer` model, or you (no self-review). Usage and success are tracked per agent and model; skills are graph
+nodes (`version_of`, `used_by`, `authored_by`, `depends_on`, `forked_from`).
+
+**Skill discovery and import.** `commons skills discover` (also run daily by `commons scheduler`) uses the GitHub REST
+API, authenticated with a secret ref (`commons skills configure --token-ref env://GITHUB_TOKEN`), to find public
+SKILL.md skills, Claude Code plugins and skill repos, AGENTS.md / Cursor-rules collections and awesome-lists. It
+respects rate limits and does no HTML scraping. Results are ranked as **hot/trending** (star velocity over 1d/7d, from
+daily snapshots) and **all-time popular** (stars and forks). They are stored as a catalog of metadata (source URL,
+license, pinned commit), and nothing activates automatically. `commons skills add <id>` or the dashboard's
+**Add to pool** imports the pinned version through the gate: a license allow-list, scanning, provenance, and a
+mandatory review. Upstream changes show up as new *pending* versions with diffs. `commons skills import` moves skills
+already on this machine into the pool, de-duplicating them: `~/.claude/skills`, project `.claude/skills`, Claude Code
+plugins, `.cursor/rules`, `AGENTS.md`, `~/.codex` and custom paths. Add `--replace-local` to swap each local copy for a
+pointer; the originals are backed up.
+
+**Research.** `research(query)` searches and fetches with a pluggable provider (Brave, Tavily, Exa, SearXNG, or plain
+`fetch` of URLs). Keys are secret refs. Pages are extracted to text, redacted and stored as cited `source` memories plus
+a research note that feeds the project KB. Results are cached.
+
+**Model providers and routing.** Connect Anthropic, OpenAI, OpenRouter, Google, xAI or a local Ollama with secret refs
+only (`commons models add-provider openrouter openrouter --key-ref env://OPENROUTER_API_KEY`). The model registry
+records context size, cost, capabilities, learned scores and which agents can run which models, and refreshes itself
+from provider APIs to detect **new models**. You choose a **distributor** model (any id, e.g. an Opus-class model
+direct or via OpenRouter; nothing is hard-coded) with `set_role_model("distributor", "<provider>/<model>")`. It plans
+DAGs, builds the task-type → agent+model routing table, and when a new model appears it benchmarks it with cheap probes
+under a $ budget, then proposes a reallocation (or applies it if auto-approve is on). The planner, preference
+extractor, KB summarizer, skill reviewer and librarian use this layer when it's configured and heuristics otherwise.
+The `@llm` worker mode runs API-only seats. A mock provider powers the tests and demo.
+
+**Org chart.** `tree(root, depth, max_tokens)` and `commons tree` give a layer-by-layer outline with **stable index
+paths** (`1.3.2`, `agents/2.1`) that agents can pass back to drill down. The layout is Workspace › Projects › (Jobs &
+tasks, Workflows, Sessions, Knowledge base, Code dirs › files › classes › functions, Schedules › runs, Skills, Memories,
+Leftovers), with alternate roots *agent › model › tasks* and *by skill*. It exports to Mermaid `flowchart TD` and to a
+Markdown outline. The dashboard shows a tidy top-down tree with lazy-loaded, collapsible layers, child counts, hover
+cards, breadcrumbs, search-jump-expand, zoom/pan with a minimap, and an outline mode.
+
+**Librarian.** A built-in agent that keeps everything organized. It runs as a configured cheap model (role
+`librarian`), as any connected agent claiming `librarian` subtasks (`librarian_run(delegate=true)`), or on heuristics
+alone. Incrementally after writes and on the scheduler, within a $ budget, it:
+- de-duplicates and merges near-duplicates
+- auto-tags and assigns orphans to projects
+- repairs graph links
+- flags stale or contradicting items
+- writes a one-line summary per tree node
+- builds a "where to find X" index for `find(query)`, which returns the best few tree paths + ids for a few tokens
+- tidies the skill pool
+
+Every change is logged with provenance and can be undone. Merges go to a review queue unless auto-approve is on. Tools:
+`librarian_run / status / proposals / approve / undo`, `find`.
+
+**MCP hub.** Commons proxies your upstream MCP servers. Register each server once (stdio command or HTTP/SSE URL);
+credentials are secret refs only. You can also import existing Claude Desktop / Cursor / Claude Code configs with
+`commons mcp import`; literal keys are **not** copied but turned into `env://` refs. Agents see namespaced tools
+(`github__create_issue`) through `mcp_search` (one line each), `mcp_describe` (one schema) and `mcp_call`, so only the
+schemas they need cost tokens. On top of that, the hub adds:
+- per-agent allow / deny / approve policies per server and tool (globs)
+- risk tags (read / write / destructive), with destructive calls needing human approval by default
+- per-agent rate limits
+- an audit log of every call, with arguments redacted
+- usage attribution
+- health checks that reconnect or restart servers
+- a cache for read-only results
+
+Upstream output is redacted and wrapped in `<untrusted source="mcp:server/tool">` markers.
+
+**MCP catalog.** `commons mcp catalog` and `commons mcp add-preset <id>` (or **Add** in the dashboard) connect major
+vendors in one step. The catalog is a versioned data file (`src/commons_memory/data/mcp_catalog.json`). You can extend
+it with `~/.commons/mcp_catalog.json`. Each preset declares its transport, endpoint/command, auth type, required secret
+refs, default per-tool risk tags and a health check (`tools/list`).
+
+*Verified* presets were checked on 2026-10-11 against each vendor's own docs or official repo, linked in the `docs`
+field:
+- **Remote endpoints:** GitHub (`api.githubcopilot.com/mcp/`, plus a local Docker image), GitLab (`/api/v4/mcp`),
+  Atlassian Rovo (`mcp.atlassian.com/v2/mcp`), Linear, Notion, Slack, Google Gmail / Drive / Calendar (Workspace MCP
+  endpoints), Cloudflare API + docs, Stripe, Supabase, Vercel, Sentry, PagerDuty, Datadog, HubSpot, Salesforce
+  hosted MCP, Figma.
+- **Local servers:** Azure MCP (`@azure/mcp`), AWS API MCP (`awslabs.aws-api-mcp-server`), Shopify Dev MCP, Playwright
+  MCP, filesystem reference server.
+
+Zapier is listed as *community/unverified* because its URL is user-specific. Microsoft 365 is omitted because no
+official general-purpose server was verified. OAuth-only servers need you to obtain a token once and store it as a
+secret ref; Commons does not run interactive OAuth flows yet.
+
+**Dashboard redesign.** The dashboard is dark-first with a light-theme toggle and a CSS-variable design system:
+- glassy panels, gradient accents and a sidebar with icons
+- a **⌘K / Ctrl-K command palette** for pages, librarian locations and memory
+- keyboard shortcuts: `1–9`, `[ ]`, `t`, `r`, `+/-`, `?`
+- a live activity feed, animated per-agent status dots, SVG sparklines and stacked daily cost bars
+- toasts, empty states, focus rings, `prefers-reduced-motion` support and a mobile layout
+
+It needs no build step and has no dependencies. ![mobile](docs/img/dashboard-mobile.png)
+
+![Discover: trending and popular public skills](docs/img/dashboard-discover.png)
+![Import local skills](docs/img/dashboard-import.png)
+
+### Shared context store (handoffs without re-paying tokens)
+
+Agents snapshot their working context into a **context pack**: L0 gist (one paragraph), L1 brief (goal / state /
+decisions / open threads / next steps), L2 detailed titled sections (notes, file excerpts), L3 raw refs (ids, paths +
+hashes, URLs; never inlined). Sections are content-addressed (sha256) blobs, so identical text is stored once across
+packs and agents, and `delta=true` snapshots send only changed sections. A handoff or `submit_task(context_pack=...)`
+passes the **pack id**; each subtask receives only the L1 within a token budget and can `context_load(pack, "L2",
+sections=[...])` or L3 refs if it needs them.
+
+Prompt caching: the L0+L1 block is rendered as a byte-stable, timestamp-free **prefix** and placed first in worker
+prompts. `ProviderLayer.chat(..., cache_prefix=...)` sends it as an Anthropic `cache_control: ephemeral` system block,
+or as the leading message for OpenAI/OpenRouter/xAI (they cache identical prefixes automatically). Cached input tokens
+(`cache_read_input_tokens` / `prompt_tokens_details.cached_tokens`) go into `usage.cached_tokens` and cost estimates
+at about 10% of the input price. Token counts are estimated per model: tiktoken for OpenAI models when installed,
+otherwise a calibrated chars-per-token ratio. `context_fit(pack, model)` picks the deepest layer that fits the receiving
+model's context window (from the model registry, or known defaults).
+
+Tools: `context_save / context_load / context_diff / context_fit`. CLI: `commons context list|load|diff|fit|savings`.
+The dashboard **Context** page shows packs, per-layer token sizes, new vs reused bytes, delta diffs, tokens saved by
+layering, and provider cache hits.
+
+![Context packs](docs/img/dashboard-context.png)
 
 ## v0.3: everything is a graph, and every project has a living knowledge base
 
@@ -251,6 +382,12 @@ behind TLS (reverse proxy) before exposing it beyond localhost.
 | Usage | `report_usage`, `usage_summary` |
 | Knowledge base | `kb_get`, `kb_search`, `kb_list`, `kb_refresh` |
 | Graph views | `graph_view`, `graph_rebuild` |
+| Skill pool | `skill_list`, `skill_search`, `skill_get`, `skill_publish`, `skill_update`, `skill_review`, `skill_history`, `skill_rollback`, `skill_rate`, `skill_fork`, `skill_catalog`, `skill_catalog_add` |
+| Research | `research` |
+| Models | `provider_add`, `models_refresh`, `models_list`, `agent_models`, `set_role_model`, `routing_table`, `models_probe`, `routing_proposals` |
+| Org chart | `tree`, `tree_find` |
+| Librarian | `find`, `librarian_run`, `librarian_status`, `librarian_proposals`, `librarian_approve`, `librarian_undo` |
+| MCP hub | `mcp_servers`, `mcp_search`, `mcp_describe`, `mcp_call` |
 | Misc | `stats` |
 
 **Token-saving search output** (default `format="text"`):
@@ -327,11 +464,14 @@ Commons composes ideas from excellent projects — use them directly if they fit
 ## Roadmap
 
 - **v0.1**: memory, search, graph, code index, sessions/handoff, reasoning log, inbox, secret refs, CLI.
-- **v0.3 (this release)**: everything is linked into the graph (+ `graph rebuild` backfill and scoped views); automatic,
+- **v0.4 (this release)**: shared skill pool with review gate + GitHub skill discovery + local import; research tool;
+  model providers, distributor model, routing table, new-model probing; org-chart tree with index paths; librarian agent
+  + `find`; MCP hub/aggregator with verified vendor catalog; redesigned dashboard.
+- **v0.3**: everything is linked into the graph (+ `graph rebuild` backfill and scoped views); automatic,
   cited, per-project knowledge base with misc topic clustering, Obsidian export, pickup digests and a dashboard KB browser.
 - **v0.2**: skills/installers, capability profiles and learning, orchestration patterns and gates, leftovers and
   recurring runs, preference learning, workers, dashboard, usage and cost tracking, kill switch, backup and export.
-- **next**: LLM-written KB prose by default when a summarizer is configured, embedding-based topic clustering; Postgres + pgvector backend; Graphiti adapter; tree-sitter for more languages; LLM planner, summarizer and preference
+- **next**: interactive OAuth for upstream MCP servers; persistent upstream sessions (today each call reconnects); LLM-written KB prose by default when a summarizer is configured, embedding-based topic clustering; Postgres + pgvector backend; Graphiti adapter; tree-sitter for more languages; LLM planner, summarizer and preference
   extractor presets; full A2A server endpoint; OAuth 2.1 and per-project ACLs; trust scores weighting memory by provenance;
   OpenTelemetry traces; dashboard live updates over SSE; push notifications to wake agents instead of polling.
 

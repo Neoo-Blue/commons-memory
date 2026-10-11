@@ -44,7 +44,7 @@ class Usage:
 
     def report(self, agent_id: str | None, *, tokens_in: int = 0, tokens_out: int = 0, model: str | None = None,
                cost: float | None = None, seconds: float = 0.0, project: str | None = None, job_id: str | None = None,
-               subtask_id: str | None = None, note: str = "") -> dict:
+               subtask_id: str | None = None, note: str = "", cached_tokens: int = 0) -> dict:
         if tokens_in < 0 or tokens_out < 0:
             raise CommonsError("token counts must be >= 0")
         c = cost if cost is not None else estimate_cost(model, tokens_in, tokens_out)
@@ -58,6 +58,8 @@ class Usage:
                 " VALUES(?,?,?,?,?,?,?,?,?,?,?)", (now(), agent_id, pid, job_id, subtask_id, model, tokens_in,
                                                     tokens_out, c, seconds, note))
             rowid = cur.lastrowid
+            if cached_tokens:
+                self.s.db.execute("UPDATE usage SET cached_tokens=? WHERE id=?", (cached_tokens, rowid))
         from .graphlinks import link_usage
         link_usage(self.s, rowid)
         out = {"recorded": True, "cost": c}

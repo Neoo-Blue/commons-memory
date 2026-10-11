@@ -152,6 +152,19 @@ class Broker:
         self.store.audit(lease["agent_id"], "secret.resolve", lease["ref"], {"lease": lease_id})
         return value
 
+    def resolve_internal(self, ref: str, purpose: str) -> str:
+        """Server-side use of a registered ref (e.g. provider API keys). The value never leaves the process,
+        is never returned to a model, and every use is audited."""
+        if not self.store.q("SELECT 1 FROM secret_refs WHERE ref=?", (ref,)):
+            raise CommonsError(f"secret ref {ref} not registered")
+        scheme = ref.split("://", 1)[0]
+        backend = self.backends.get(scheme)
+        if not backend:
+            raise CommonsError(f"no backend for {scheme}://")
+        value = backend.resolve(ref)
+        self.store.audit(None, "secret.resolve.internal", ref, {"purpose": purpose})
+        return value
+
     def revoke(self, lease_id: str | None = None, agent_id: str | None = None, ref: str | None = None) -> dict:
         if lease_id:
             self.store.x("UPDATE leases SET revoked=1 WHERE id=?", (lease_id,))

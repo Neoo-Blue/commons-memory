@@ -200,9 +200,14 @@ class Orchestrator:
     # ---------------------------------------------------------------- submit
     def submit(self, task: str, *, pattern: str = "auto", project: str | None = None, agent_id: str | None = None,
                n: int = 3, budget: dict | None = None, dag: list[dict] | None = None, title: str = "",
-               recurring_id: str | None = None, leftovers: list[dict] | None = None) -> dict:
+               recurring_id: str | None = None, leftovers: list[dict] | None = None,
+               context_pack: str | None = None) -> dict:
         task, _ = redact(task)
-        dag = dag or plan(task, pattern, n)
+        if not dag and pattern in ("auto", "llm"):
+            dag = self._llm_plan(task)
+            if dag:
+                pattern = "llm"
+        dag = dag or plan(task, pattern if pattern != "llm" else "auto", n)
         if leftovers:
             for i, lo in enumerate(leftovers):
                 dag.append({"key": f"leftover{i + 1}", "type": lo.get("task_type") or "general",
@@ -217,6 +222,11 @@ class Orchestrator:
         if self.paused():
             raise CommonsError(f"orchestration paused: {self.paused()} (resume with set_paused(false))")
         jid = new_id("job")
+        if context_pack:  # pass an id, not text: subtasks load the layer they need
+            from .contextpacks import ContextStore
+            cp = ContextStore(self.s)._pack(context_pack)["id"]
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (f"job_ctx:{jid}", cp))
+            self.s.relate(jid, cp, "uses_context")
         pid = self.s.project_id(project)
         budget = budget or {}
         self.s.x("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -245,6 +255,27 @@ class Orchestrator:
         from .graphlinks import link_job
         link_job(self.s, jid)
         return self.status(jid)
+
+    def _llm_plan(self, task: str) -> list[dict] | None:
+        """Ask the configured planner/distributor model for a DAG; None -> heuristic planner."""
+        from .providers import ProviderLayer
+        pl = ProviderLayer(self.s)
+        if not pl.role_model("planner"):
+            return None
+        agents = [{"agent": c["agent"], "model": c["model"]} for rows in pl.candidates().values() for c in rows[:2]]
+        out = pl.call_role("planner", "Decompose this task into a DAG of subtasks. Types: research, plan, code, review, "
+                           "debate, judge, red_team, test, summarize. Put review/test/red_team keys in 'gates' of the "
+                           "work they check. Return ONLY a JSON array of {key,type,title,body,deps,gates}.\n"
+                           f"AVAILABLE: {json.dumps(agents[:20])}\nTASK:\n{task}")
+        try:
+            dag = json.loads(re.search(r"\[.*\]", out or "", re.S).group(0))
+            keys = {d["key"] for d in dag}
+            if dag and all(set(d.get("deps", []) + d.get("gates", [])) <= keys and d.get("type") for d in dag):
+                _check_acyclic(dag)
+                return dag
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     # ---------------------------------------------------------------- kill switch
     def paused(self) -> str | None:
@@ -301,6 +332,10 @@ class Orchestrator:
             ranked = self.profiles.rank(st["type"], exclude)
             if not ranked:
                 continue
+            from .providers import ProviderLayer
+            route = ProviderLayer(self.s).route_for(st["type"])
+            if route:  # distributor's routing table nudges allocation
+                ranked = [(sc + (0.3 if a["id"] == route["agent_id"] else 0), a) for sc, a in ranked]
             pen = 1.0 if st["type"] in ("debate", "vote") else 0.3
             best = max(ranked, key=lambda x: x[0] - pen * siblings.count(x[1]["id"]) - 0.1 * used.get(x[1]["id"], 0))
             used[best[1]["id"]] = used.get(best[1]["id"], 0) + 1
@@ -364,7 +399,23 @@ class Orchestrator:
             from .kb import KB
             dg = KB(self.s).digest(project, max_tokens=160)
             ctx = (dg + "\n\n" + ctx) if dg else ctx
-        return {"subtask_id": st["id"], "job_id": job["id"], "job_title": job["title"], "type": st["type"],
+        from .providers import ProviderLayer
+        from .skillpool import SkillPool
+        route = ProviderLayer(self.s).route_for(st["type"])
+        model = None
+        if route and agent_id:
+            own = {r["model_id"] for r in self.s.q("SELECT model_id FROM agent_models WHERE agent_id=?", (agent_id,))}
+            model = route["model_id"] if route["model_id"] in own or not own else sorted(own)[0]
+        skills = SkillPool(self.s).suggest(f"{st['type']} {st['title']}")
+        ctx = None
+        cpr = self.s.q("SELECT value FROM meta WHERE key=?", (f"job_ctx:{job['id']}",))
+        if cpr:
+            from .contextpacks import ContextStore
+            ld = ContextStore(self.s).load(cpr[0]["value"], "L1", 1500, model, agent_id=agent_id)
+            ctx = {"pack_id": ld["pack_id"], "layer": ld["layer"], "tokens": ld["tokens"], "prefix": ld["prefix"] or ld["text"],
+                   "hint": f"context_load('{ld['pack_id']}', layer='L2'|'L3') for more"}
+        return {"context": ctx, "model": model, "skills": [f"{x['name']}: {x['description'][:80]}" for x in skills],
+                "subtask_id": st["id"], "job_id": job["id"], "job_title": job["title"], "type": st["type"],
                 "title": st["title"], "instructions": st["body"], "attempt": st["attempts"],
                 "lease_expires": iso(st["lease_expires"]), "budget": json.loads(st["budget"] or "{}"),
                 "dependency_results": dep_results, "preferences": prefs["text"], "project": project,
@@ -443,6 +494,9 @@ class Orchestrator:
         item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
                                agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
         self.s.relate(subtask_id, item["id"], "produced")
+        if st["type"] == "librarian":
+            from .librarian import Librarian
+            Librarian(self.s).apply_actions(result, agent_id)
         if st["type"] == "judge":
             self.s.record_decision(st["title"].replace("Judge & synthesize: ", ""), result[:500],
                                    agent_id=agent_id, project=project, related_ids=[job["id"], subtask_id])

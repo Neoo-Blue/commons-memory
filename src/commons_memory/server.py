@@ -21,6 +21,8 @@ from .secrets import Broker
 from .store import CommonsError, Store
 
 INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
+0) pickup() to check in; find(query) or tree() to locate things; skill_list()/skill_get() for how-tos.
+0) find(query) or tree() to locate things; skill_list()/skill_get() to fetch how-to skills from the shared pool.
 1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
 2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
 3) session_start → checkpoint → handoff so another AI can resume(). Use inbox() to pick up delegated tasks.
@@ -293,6 +295,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
 
     from .server_v2 import register_v2
     register_v2(mcp, store, who)
+    from .server_v4 import register_v4
+    register_v4(mcp, store, who)
     return mcp
 
 

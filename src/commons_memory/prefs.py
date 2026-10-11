@@ -77,8 +77,14 @@ class Preferences:
                 source: str = "feedback", store: bool = True) -> list[dict]:
         """Heuristically extract candidate preferences from a correction/feedback message."""
         cands: list[tuple[str, float]] = []
+        from .providers import ProviderLayer
+        llm = ProviderLayer(self.s).call_role("pref_extractor", "Extract the user's durable preferences from this "
+                                              "feedback, one per line, imperative style. Reply NONE if there are none.\n\n"
+                                              + text)
+        if llm and llm.strip().upper() != "NONE":
+            cands += [(ln.strip("-* ").strip(), 0.6) for ln in llm.splitlines() if ln.strip()]
         hook = os.environ.get("COMMONS_PREF_EXTRACTOR")
-        if hook:
+        if hook and not cands:
             try:
                 out = subprocess.run(hook, shell=True, input=text, capture_output=True, text=True, timeout=60).stdout
                 cands += [(ln.strip("-* ").strip(), 0.6) for ln in out.splitlines() if ln.strip()]
