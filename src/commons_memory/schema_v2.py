@@ -48,3 +48,16 @@ _orig_migrate = migrate
 def migrate(db):  # noqa: F811
     _orig_migrate(db)
     db.executescript(SCHEMA_V2_USAGE)
+
+
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS kb_state(bucket TEXT PRIMARY KEY, dirty INTEGER, dirtied_at REAL, built_at REAL);
+CREATE TABLE IF NOT EXISTS kb_pages(bucket TEXT, section TEXT, title TEXT, content TEXT, citations TEXT,
+  updated_at REAL, PRIMARY KEY(bucket, section));
+"""
+_v2_migrate = migrate
+
+
+def migrate(db):  # noqa: F811
+    _v2_migrate(db)
+    db.executescript(SCHEMA_V3)

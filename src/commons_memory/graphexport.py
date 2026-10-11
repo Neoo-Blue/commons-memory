@@ -41,14 +41,16 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><title>Commons graph<
 <style>body{margin:0;font:12px system-ui;background:#0f1117;color:#ddd}#c{display:block}
 #p{position:fixed;top:8px;left:8px;background:#1b1e27cc;padding:8px;border-radius:6px;max-width:340px}
 input{width:200px}</style></head><body><div id="p"><b>Commons graph</b> — <span id="s"></span><br>
-<input id="q" placeholder="filter by name…"> <small>drag to pan, wheel to zoom, click node</small><div id="i"></div></div>
+<input id="q" placeholder="filter by name…"> <small>drag to pan, wheel to zoom, click node</small><div id="lg"></div><div id="i"></div></div>
 <canvas id="c"></canvas><script>
 const G=__DATA__;const C=document.getElementById('c'),X=C.getContext('2d');
 const col={project:'#f6c344',file:'#5aa9e6',function:'#7bd389',method:'#a1e3a1',class:'#e07a5f',module:'#9a8c98',
-memory:'#c77dff',decision:'#ff6b6b',fact:'#ffd6a5',handoff:'#4cc9f0',checkpoint:'#90e0ef',agent:'#f72585',session:'#b5179e',concept:'#bdb2ff',task:'#ffadad'};
+memory:'#c77dff',decision:'#ff6b6b',fact:'#ffd6a5',handoff:'#4cc9f0',checkpoint:'#90e0ef',agent:'#f72585',session:'#b5179e',concept:'#bdb2ff',task:'#ffadad',
+job:'#ff9f1c',subtask:'#2ec4b6',workflow:'#ffbf69',task_type:'#cbf3f0',schedule:'#e9c46a',leftover:'#f4a261',preference:'#90be6d',usage:'#577590',secret_ref:'#ef476f',lease:'#d62828',model:'#adb5bd',scope:'#6c757d',job_result:'#c77dff'};
 const N=Object.entries(G.nodes).map(([id,d],i)=>({id,...d,x:Math.cos(i)*300*Math.random(),y:Math.sin(i)*300*Math.random(),vx:0,vy:0}));
 const M=Object.fromEntries(N.map(n=>[n.id,n]));const E=G.edges.filter(e=>M[e.src]&&M[e.dst]);
 document.getElementById('s').textContent=N.length+' nodes, '+E.length+' edges';
+document.getElementById('lg').innerHTML=[...new Set(N.map(n=>n.type))].map(t=>'<span style="white-space:nowrap;margin-right:6px"><span style="color:'+(col[t]||'#888')+'">●</span> '+t+'</span>').join(' ');
 let ox=0,oy=0,sc=1,q='',sel=null;function rs(){C.width=innerWidth;C.height=innerHeight}rs();onresize=rs;
 function step(){const k=40;for(let a of N){for(let b of N){if(a===b)continue;let dx=a.x-b.x,dy=a.y-b.y,d=dx*dx+dy*dy+.01;if(d<90000){let f=k*k/d;a.vx+=dx*f*.01;a.vy+=dy*f*.01}}}
 for(let e of E){let a=M[e.src],b=M[e.dst],dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)+.01,f=(d-k)*.01;a.vx+=dx/d*f*d*.05;a.vy+=dy/d*f*d*.05;b.vx-=dx/d*f*d*.05;b.vy-=dy/d*f*d*.05}

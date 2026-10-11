@@ -1,4 +1,4 @@
-# Known flaws, risks and mitigations (v0.2)
+# Known flaws, risks and mitigations (v0.3)
 
 An honest list of the risks we know about. If you deploy Commons beyond a single trusted machine, read this first.
 
@@ -20,3 +20,8 @@ An honest list of the risks we know about. If you deploy Commons beyond a single
 | **Scale** | Vector search is brute force in Python | Fine to ~50k memories on a laptop | Postgres/pgvector backend planned |
 | **Planner quality** | Heuristic decomposition is naive | Explicit DAGs and `pattern="llm"` with `COMMONS_PLANNER_CMD` | No built-in LLM planner |
 | **Clock / cron** | Recurring runs depend on a scheduler process | `commons scheduler` loop or system cron + `--once`; `run_recurring` by hand | Missed runs aren't back-filled (the next run carries the leftovers anyway) |
+| **KB quality** | Extractive summaries pick noisy sentences (e.g. agent boilerplate); topic clustering is keyword-based | Worker protocol lines and agent prefixes are stripped; every statement is cited so readers can verify; `COMMONS_KB_SUMMARIZER` LLM hook | Not true abstractive summaries by default; clusters can be odd on tiny datasets |
+| **KB staleness** | A page lags behind recent writes | Dirty flags on every write; rebuild on read after the debounce, by the scheduler, or on demand; `stale` flag returned by `kb_get` | Debounce means up to `COMMONS_KB_DEBOUNCE` seconds of staleness; there is no background thread without `commons scheduler` |
+| **KB as an injection / poisoning amplifier** | A poisoned memory gets promoted into the KB digest shown to every agent | Digests are short, cited and include provenance; conflicts are listed under open questions; superseded facts are excluded | The KB does not weigh sources by trust yet |
+| **Graph growth** | Usage, verdict and run links add many nodes | Scoped views (project/job/workflow/schedule/node) and depth limits; links are unique (no duplicates on rebuild) | No pruning/archiving of old usage nodes yet |
+| **Secret refs in the graph** | Graph exports reveal which secrets exist | Only reference strings and lease ids are linked, never values; the redaction scanner still applies to every write | Reference names themselves may be sensitive — filter `secret_ref` nodes before sharing exports |

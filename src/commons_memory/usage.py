@@ -52,9 +52,14 @@ class Usage:
         if job_id and not pid:
             r = self.s.q("SELECT project_id FROM jobs WHERE id=?", (job_id,))
             pid = r[0]["project_id"] if r else None
-        self.s.x("INSERT INTO usage(ts,agent_id,project_id,job_id,subtask_id,model,tokens_in,tokens_out,cost,seconds,note)"
-                 " VALUES(?,?,?,?,?,?,?,?,?,?,?)", (now(), agent_id, pid, job_id, subtask_id, model, tokens_in,
-                                                     tokens_out, c, seconds, note))
+        with self.s.lock:
+            cur = self.s.db.execute(
+                "INSERT INTO usage(ts,agent_id,project_id,job_id,subtask_id,model,tokens_in,tokens_out,cost,seconds,note)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)", (now(), agent_id, pid, job_id, subtask_id, model, tokens_in,
+                                                    tokens_out, c, seconds, note))
+            rowid = cur.lastrowid
+        from .graphlinks import link_usage
+        link_usage(self.s, rowid)
         out = {"recorded": True, "cost": c}
         cap = daily_cap()
         if cap is not None and self.spent_today() >= cap:

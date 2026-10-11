@@ -175,6 +175,47 @@ def register_v2(mcp, store, who):
         """Delete one preference, or everything=true to wipe the user profile."""
         return _js(orch.prefs.forget(pref_id or None, everything))
 
+    # ------------------------------------------------------------ knowledge base & graph views
+    from .graphexport import export as _export
+    from .graphlinks import rebuild as _rebuild
+    from .graphlinks import subgraph as _subgraph
+    from .kb import KB
+    kb = KB(store)
+
+    @mcp.tool()
+    def kb_get(project: str = "", section: str = "", max_tokens: int = 800) -> str:
+        """Auto-maintained knowledge base for a project ('misc' or 'misc/<topic>' for unassigned memories).
+        section: overview|decisions|architecture|glossary|references|howtos|people|open_questions|timeline|preferences
+        (empty = all, within max_tokens). Every statement cites record ids [mem_…] you can expand()."""
+        return kb.get(project or "misc", section, max_tokens)["text"]
+
+    @mcp.tool()
+    def kb_search(query: str, project: str = "", limit: int = 15, max_tokens: int = 600) -> str:
+        """Search knowledge-base statements (with citations) across all projects or one."""
+        return kb.search(query, project, limit, max_tokens)["text"]
+
+    @mcp.tool()
+    def kb_list() -> str:
+        """Knowledge-base buckets (projects, misc, misc/<topic>) with freshness and citation counts."""
+        return _js(kb.list())
+
+    @mcp.tool()
+    def kb_refresh(project: str = "") -> str:
+        """Rebuild the KB for one project (or all) now."""
+        return _js(kb.build(project) if project else kb.build_all())
+
+    @mcp.tool()
+    def graph_rebuild() -> str:
+        """Backfill graph links for every record (schedules, runs, decisions, preferences, workflows, verdicts,
+        usage, leases, secret refs). Idempotent."""
+        return _js(_rebuild(store))
+
+    @mcp.tool()
+    def graph_view(scope: str = "project", id: str = "", depth: int = 2, format: str = "mermaid", limit: int = 300) -> str:
+        """Scoped graph: scope=project (name) | job (job id) | workflow (pattern name) | schedule (rec id) | node (any id).
+        format: mermaid|graphml|json|html."""
+        return _export(_subgraph(store, scope, id, depth, limit), format)
+
     # ------------------------------------------------------------ usage
     @mcp.tool()
     def report_usage(tokens_in: int = 0, tokens_out: int = 0, model: str = "", cost: float | None = None,

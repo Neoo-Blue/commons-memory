@@ -98,6 +98,18 @@ def main(argv: list[str] | None = None) -> int:
     bk.add_argument("out")
     ex = sub.add_parser("export-memory", help="export all memories/decisions/preferences as JSONL (portable)")
     ex.add_argument("out")
+    gr = sub.add_parser("graph", help="graph maintenance and scoped views")
+    gr.add_argument("action", choices=["rebuild", "view"])
+    gr.add_argument("--scope", default="project", choices=["project", "job", "workflow", "schedule", "node"])
+    gr.add_argument("--id", default="")
+    gr.add_argument("--depth", type=int, default=2)
+    gr.add_argument("--format", default="mermaid", choices=["mermaid", "graphml", "json", "html"])
+    gr.add_argument("--out", "-o")
+    kbp = sub.add_parser("kb", help="knowledge base: build | get | list | search | export")
+    kbp.add_argument("action", choices=["build", "get", "list", "search", "export"])
+    kbp.add_argument("arg", nargs="?", default="", help="project/bucket, search query, or export dir")
+    kbp.add_argument("--section", default="")
+    kbp.add_argument("--max-tokens", type=int, default=4000)
     us = sub.add_parser("usage", help="cost/usage summary")
     us.add_argument("--by", default="agent", choices=["agent", "project", "job", "model", "day"])
     i = sub.add_parser("index", help="index a code repo into the graph")
@@ -229,6 +241,10 @@ def main(argv: list[str] | None = None) -> int:
             for r in o.run_due():
                 print(json.dumps(r), flush=True)
             o.reap()
+            from .kb import KB
+            rebuilt = KB(store).refresh_dirty()
+            if rebuilt:
+                print(json.dumps({"kb_rebuilt": rebuilt}), flush=True)
             if args.once:
                 break
             time.sleep(args.interval)
@@ -293,6 +309,33 @@ def main(argv: list[str] | None = None) -> int:
             for r in store.q("SELECT id,type,name,path,line FROM entities WHERE type NOT IN ('file','function','class','method','module')"):
                 f.write(json.dumps({"kind": "entity", **dict(r)}) + "\n"); n += 1
         print(f"exported {n} records to {args.out}")
+    elif args.cmd == "graph":
+        from .graphexport import export
+        from .graphlinks import rebuild, subgraph
+        if args.action == "rebuild":
+            print(json.dumps(rebuild(store)))
+        else:
+            out = export(subgraph(store, args.scope, args.id, args.depth), args.format)
+            if args.out:
+                open(args.out, "w", encoding="utf-8").write(out)
+                print(f"wrote {args.out}")
+            else:
+                sys.stdout.write(out)
+    elif args.cmd == "kb":
+        from .kb import KB
+        kb = KB(store)
+        if args.action == "build":
+            print(json.dumps(kb.build(args.arg) if args.arg else kb.build_all()))
+        elif args.action == "get":
+            print(kb.get(args.arg or "misc", args.section, args.max_tokens)["text"])
+        elif args.action == "list":
+            for b in kb.list():
+                print(f"{b['bucket']:<30} built {b['built_at'] or '-':<22} {'DIRTY' if b['dirty'] else 'fresh':<6} "
+                      f"{b['citations']} citations")
+        elif args.action == "search":
+            print(kb.search(args.arg)["text"])
+        else:
+            print(json.dumps(kb.export_markdown(args.arg or "commons-kb")))
     elif args.cmd == "usage":
         from .usage import Usage
         for r in Usage(store).summary(args.by):

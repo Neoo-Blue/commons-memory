@@ -107,6 +107,35 @@ class API:
     def recurring(self, q):
         return self.o.list_recurring()
 
+    def kb_list(self, q):
+        from .kb import KB
+        return KB(self.s).list()
+
+    def kb_page(self, q):
+        from .kb import KB, SECTIONS, TITLES
+        kb = KB(self.s)
+        b = q.get("bucket") or "misc"
+        stale = kb._ensure(b)
+        pages = {r["section"]: {"title": r["title"], "content": r["content"], "citations": json.loads(r["citations"] or "[]"),
+                                "updated_at": iso(r["updated_at"])}
+                 for r in self.s.q("SELECT * FROM kb_pages WHERE bucket=?", (b,))}
+        return {"bucket": b, "stale": stale, "sections": [s for s in SECTIONS if s in pages], "titles": TITLES,
+                "pages": pages}
+
+    def backlinks(self, q):
+        rid = q["id"]
+        kb = [{"bucket": r["bucket"], "section": r["section"]} for r in
+              self.s.q("SELECT bucket, section FROM kb_pages WHERE citations LIKE ?", (f'%"{rid}"%',))]
+        edges = self.s.neighbors(rid, depth=1, limit=40)
+        return {"id": rid, "label": self.s.label(rid), "kb": kb, "edges": edges["edges"], "nodes": edges["nodes"]}
+
+    def graph_scopes(self, q):
+        return {"projects": [r["name"] for r in self.s.q("SELECT name FROM projects ORDER BY name")],
+                "jobs": [{"id": r["id"], "title": r["title"]} for r in
+                         self.s.q("SELECT id, title FROM jobs ORDER BY created_at DESC LIMIT 50")],
+                "workflows": [r["name"] for r in self.s.q("SELECT DISTINCT name FROM entities WHERE type='workflow'")],
+                "schedules": [{"id": r["id"], "title": r["name"]} for r in self.s.q("SELECT id, name FROM recurring")]}
+
     def projects(self, q):
         return [dict(r) for r in self.s.q("SELECT id,name FROM projects ORDER BY name")]
 
@@ -124,6 +153,12 @@ class API:
             return self.o.cancel(body["id"], "cancelled from dashboard")
         if path == "/api/leftover/resolve":
             return self.o.resolve_leftover(body["id"], "resolved from dashboard")
+        if path == "/api/kb/refresh":
+            from .kb import KB
+            return KB(self.s).build(body.get("bucket") or "misc")
+        if path == "/api/graph/rebuild":
+            from .graphlinks import rebuild
+            return rebuild(self.s)
         if path == "/api/lease/revoke":
             return self.b.revoke(body["id"])
         raise CommonsError("unknown action")
@@ -178,7 +213,11 @@ def make_handler(api: API, token: str | None):
                 if u.path in ("/", "/index.html"):
                     return self._send(200, PAGE, "text/html; charset=utf-8", extra)
                 if u.path == "/graph.html":
-                    g = api.s.export_graph(q.get("project") or None, q.get("items", "1") == "1")
+                    if q.get("scope") and q.get("id"):
+                        from .graphlinks import subgraph
+                        g = subgraph(api.s, q["scope"], q["id"], int(q.get("depth", 2)))
+                    else:
+                        g = api.s.export_graph(q.get("project") or None, q.get("items", "1") == "1")
                     return self._send(200, to_html(g), "text/html; charset=utf-8")
                 if u.path == "/metrics":
                     return self._send(200, metrics(api), "text/plain; version=0.0.4")
@@ -225,7 +264,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Commons dashb
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 :root{--bg:#0f1117;--card:#181b24;--fg:#e6e6e6;--mut:#8b93a7;--acc:#6ea8fe;--ok:#4caf50;--bad:#ef5350;--warn:#ffb300}
-*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+*{box-sizing:border-box}a{color:var(--acc)}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 nav{display:flex;gap:4px;flex-wrap:wrap;padding:8px 12px;background:#12141c;border-bottom:1px solid #222;position:sticky;top:0}
 nav b{margin-right:12px}nav a{color:var(--mut);padding:6px 10px;border-radius:6px;cursor:pointer;text-decoration:none}
 nav a.on{background:var(--card);color:var(--fg)}main{padding:14px;max-width:1300px;margin:auto}
@@ -237,12 +276,13 @@ button{background:#2a3040;color:var(--fg);border:1px solid #39405a;border-radius
 button.bad{border-color:var(--bad)}input{background:#11131a;color:var(--fg);border:1px solid #333;border-radius:6px;padding:5px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}.big{font-size:24px;font-weight:600}
 .bar{height:14px;background:var(--acc);border-radius:3px}pre{white-space:pre-wrap;background:#11131a;padding:8px;border-radius:6px;max-height:300px;overflow:auto}
-iframe{width:100%;height:78vh;border:0;border-radius:8px}
+iframe{width:100%;height:78vh;border:0;border-radius:8px}.kb{line-height:1.6}.cite{font-size:11px;color:var(--acc)}
 </style></head><body>
 <nav><b>⛬ Commons</b><span id="tabs"></span><span style="margin-left:auto" id="ks"></span></nav><main id="m">loading…</main>
 <script>
-const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Preferences","Graph","Secrets","Recurring"];
-let tab=location.hash.slice(1)||"Overview";
+const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Secrets","Recurring"];
+let [tab,hq]=(location.hash.slice(1)||"Overview").split("?");
+if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get("scope"),id:u.get("id")||""};if(u.get("bucket"))window.kb=u.get("bucket");if(u.get("cite"))setTimeout(()=>cite(u.get("cite")),800)}
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const api=p=>fetch("/api/"+p,{credentials:"same-origin"}).then(r=>r.json());
 const post=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json()).then(()=>render());
@@ -270,11 +310,33 @@ async Memory(){const q=window.mq||"";const [r,c]=await Promise.all([api("search?
 <div class="card"><h3>Conflicts (${c.length})</h3>${c.map(x=>`<div><b>${E(x.subject)}.${E(x.predicate)}</b>: <button onclick="post('conflicts/resolve',{id:'${x.id}',keep:'${x.a}'})">keep “${E(x.a_item?.value)}” (${E(x.a_item?.agent)})</button> <button onclick="post('conflicts/resolve',{id:'${x.id}',keep:'${x.b}'})">keep “${E(x.b_item?.value)}” (${E(x.b_item?.agent)})</button></div>`).join("")||'<span class="mut">none</span>'}</div>`},
 async Preferences(){const p=await api("prefs");return `<div class="card"><h3>What Commons learned about you</h3><p class="mut">Everything here is injected into agents' task pickups. Edit, confirm or delete anything.</p><table><tr><th>preference</th><th>scope</th><th>confidence</th><th>source</th><th>evidence</th><th></th></tr>${p.map(x=>`<tr><td><input value="${E(x.statement)}" id="p_${x.id}" size=45></td><td>${E(x.scope)}</td><td>${(x.confidence*100).toFixed(0)}% <span class="mut">×${x.observations}</span></td><td class="mut">${E(x.source)}</td><td class="mut">${E((x.evidence||[]).slice(-1)[0]||"").slice(0,90)}</td>
 <td><button onclick="post('prefs/confirm',{id:'${x.id}',statement:$('#p_${x.id}').value})">save/confirm</button> <button class="bad" onclick="post('prefs/forget',{id:'${x.id}'})">forget</button></td></tr>`).join("")}</table><p><button class="bad" onclick="confirm('Delete ALL preferences?')&&post('prefs/forget',{everything:true})">forget everything</button></p></div>`},
-async Graph(){const p=await api("projects");const cur=window.gp||"";return `<div class="card">Project: <select onchange="gp=this.value;render()"><option value="">(all)</option>${p.map(x=>`<option ${x.name==cur?"selected":""}>${E(x.name)}</option>`).join("")}</select> <a href="/graph.html?project=${encodeURIComponent(cur)}" target="_blank">open full screen</a></div><iframe src="/graph.html?project=${encodeURIComponent(cur)}&items=1"></iframe>`},
+async Graph(){const sc=await api("graph_scopes");const g=window.gs||{scope:"",id:""};
+const opt=(scope,v,t)=>`<option value="${scope}|${E(v)}" ${g.scope==scope&&g.id==v?"selected":""}>${E(t)}</option>`;
+const src=g.scope?`/graph.html?scope=${g.scope}&id=${encodeURIComponent(g.id)}&depth=${window.gd||2}`:"/graph.html?items=1";
+return `<div class="card">View: <select onchange="const [a,b]=this.value.split('|');gs={scope:a,id:b};render()"><option value="|">everything</option>
+<optgroup label="Projects">${sc.projects.map(p=>opt("project",p,p)).join("")}</optgroup>
+<optgroup label="Jobs / tasks">${sc.jobs.map(j=>opt("job",j.id,j.title.slice(0,60))).join("")}</optgroup>
+<optgroup label="Workflows">${sc.workflows.map(w=>opt("workflow",w,w)).join("")}</optgroup>
+<optgroup label="Schedules">${sc.schedules.map(s=>opt("schedule",s.id,s.title)).join("")}</optgroup>
+${g.scope=="node"?opt("node",g.id,"node "+g.id):""}</select>
+depth <select onchange="gd=this.value;render()">${[1,2,3].map(d=>`<option ${d==(window.gd||2)?"selected":""}>${d}</option>`).join("")}</select>
+<a href="${src}" target="_blank">open full screen</a> · <button onclick="post('graph/rebuild',{})">rebuild links</button></div><iframe src="${src}"></iframe>`},
+async Knowledge(){const L=await api("kb_list");const b=window.kb||(L[0]&&L[0].bucket)||"misc";const P=await api("kb_page?bucket="+encodeURIComponent(b));const sec=window.ks&&P.pages[window.ks]?window.ks:P.sections[0];
+const md=s=>E(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\[\[(misc\/[\w-]+)\]\]/g,(m,x)=>`<a href="#" onclick="kb='${x}';render();return false">${x}</a>`).replace(/\[((?:mem|dec|fct|hof|chk|ent|prj|ses|agt|tsk|job|sub|lft|prf|rec|lea|usg)_[0-9a-f]+)\]/g,(m,id)=>`<a href="#" class="cite" onclick="cite('${id}');return false">[${id.slice(0,7)}…]</a>`).replace(/\n/g,"<br>");
+const pg=P.pages[sec]||{content:"",citations:[]};
+return `<div style="display:grid;grid-template-columns:220px 1fr 320px;gap:12px"><div class="card"><h3>Buckets</h3>${L.map(x=>`<div><a href="#" onclick="kb='${E(x.bucket)}';ks='';render();return false" ${x.bucket==b?'style="font-weight:700"':""}>${E(x.bucket)}</a> <span class="mut">${x.dirty?"·stale":""}</span></div>`).join("")}<p><button onclick="post('kb/refresh',{bucket:'${E(b)}'})">rebuild ${E(b)}</button></p></div>
+<div class="card"><div>${P.sections.map(s=>`<button onclick="ks='${s}';render()" ${s==sec?'style="border-color:var(--acc)"':""}>${E(P.titles[s])}</button>`).join(" ")}</div>
+<h2>${E(P.titles[sec]||"")} <span class="mut" style="font-size:12px">${E(b)} · updated ${E(pg.updated_at||"")} · ${pg.citations.length} sources</span></h2><div class="kb">${md(pg.content)}</div></div>
+<div class="card" id="bl"><h3>Source</h3><p class="mut">Click a citation to see the record, its graph neighbours and where else it is cited.</p></div></div>`}};
+async function cite(id){const b=await api("backlinks?id="+id);const d=await api("item?id="+id).catch(()=>({}));$("#bl").innerHTML=`<h3>${E(b.label[1])}</h3><div class="mut">${E(b.label[0])} · <code>${id}</code></div>
+<p><a href="#" onclick="gs={scope:'node',id:'${id}'};go('Graph');return false">open in graph</a> · <a href="#" onclick="mq='${id}';go('Memory');show('${id}');return false">open in memory</a></p>
+<pre>${E((d.content||d.statement||d.text||JSON.stringify(d,null,1)).slice(0,1200))}</pre><h4>Cited in</h4>${b.kb.map(k=>`<div><a href="#" onclick="kb='${E(k.bucket)}';ks='${k.section}';render();return false">${E(k.bucket)} / ${k.section}</a></div>`).join("")}
+<h4>Links</h4>${b.edges.slice(0,25).map(e=>`<div class="mut">${E(b.nodes[e.src].name.slice(0,30))} —${e.type}→ ${E(b.nodes[e.dst].name.slice(0,30))}</div>`).join("")}`}
+Object.assign(V,{
 async Secrets(){const a=await api("audit");return `<div class="card"><h3>Secret references</h3><p class="mut">Values are never stored or displayed.</p><table>${a.refs.map(r=>`<tr><td><code>${E(r.ref)}</code></td><td>${E(r.description)}</td><td class="mut">agents: ${E(r.allowed_agents.join(", ")||"any")} · max ttl ${r.max_ttl}s</td></tr>`).join("")}</table>
 <h3>Leases</h3><table>${a.leases.map(l=>`<tr><td>${l.id}</td><td><code>${E(l.ref)}</code></td><td>${E(l.agent)}</td><td>${E(l.scope)}</td><td class="mut">exp ${E(l.expires_at)}</td><td>${l.active?`<button class="bad" onclick="post('lease/revoke',{id:'${l.id}'})">revoke</button>`:'<span class="mut">'+(l.revoked?"revoked":"expired")+"</span>"}</td></tr>`).join("")}</table>
 <h3>Audit log</h3><table>${a.log.map(l=>`<tr><td class="mut">${E(l.ts)}</td><td>${E(l.action)}</td><td>${E(l.target)}</td><td class="mut">${E(l.detail||"")}</td></tr>`).join("")}</table></div>`},
-async Recurring(){const r=await api("recurring");return `<div class="card"><h3>Recurring schedules</h3><table><tr><th>name</th><th>cron</th><th>next run</th><th>last run</th><th>last job</th><th>task</th></tr>${r.map(x=>`<tr><td>${E(x.name)}</td><td><code>${E(x.cron)}</code></td><td>${E(x.next_run)}</td><td class="mut">${E(x.last_run)}</td><td class="mut">${E(x.last_job||"")}</td><td>${E(x.task.slice(0,120))}</td></tr>`).join("")}</table></div>`}};
+async Recurring(){const r=await api("recurring");return `<div class="card"><h3>Recurring schedules</h3><table><tr><th>name</th><th>cron</th><th>next run</th><th>last run</th><th>last job</th><th>task</th></tr>${r.map(x=>`<tr><td>${E(x.name)}</td><td><code>${E(x.cron)}</code></td><td>${E(x.next_run)}</td><td class="mut">${E(x.last_run)}</td><td class="mut">${E(x.last_job||"")}</td><td>${E(x.task.slice(0,120))}</td></tr>`).join("")}</table></div>`}});
 async function openJob(id){const j=await api("job?id="+id);$("#j_"+id).innerHTML=`<table><tr><th>key</th><th>type</th><th>status</th><th>agent</th><th>gate</th><th>attempts</th><th>result</th></tr>${j.subtasks.map(s=>`<tr><td>${E(s.key)}</td><td>${pill(s.type)}</td><td>${pill(s.status)}</td><td>${E(s.agent)}</td><td>${s.gates.length?"gated by "+s.gates.length:s.gate_of?"gate":""} ${s.verdict?pill(s.verdict):""}</td><td>${s.attempts}</td><td><details><summary class="mut">${E((s.result||"").slice(0,70))}</summary><pre>${E(s.result||"")}</pre></details></td></tr>`).join("")}</table>${j.result?`<h4>Merged result</h4><pre>${E(j.result)}</pre>`:""}`}
 async function show(id){const d=await api("item?id="+id);const el=$("#det");el.hidden=false;el.textContent=JSON.stringify(d,null,1)}
 async function render(){tabs();const o=await api("overview");$("#ks").innerHTML=o.paused?`<b class="failed">PAUSED</b> <button onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})">⏻ kill switch</button>`;

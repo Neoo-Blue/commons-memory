@@ -220,6 +220,10 @@ class Store:
         for rid in related_ids or []:
             if self._exists(rid):
                 self.relate(iid, rid, "related_to", agent_id=agent_id)
+        if kind == "decision":
+            from .graphlinks import link_item
+            link_item(self, iid)
+        self.kb_dirty(pid)
         out = {"id": iid, "kind": kind, "summary": summary}
         if found:
             out["redacted"] = found
@@ -229,6 +233,12 @@ class Store:
             if conflicts:
                 out["conflicts_with"] = conflicts
         return out
+
+    def kb_dirty(self, project_id: str | None) -> None:
+        """Mark a knowledge-base bucket stale (rebuilt lazily / by scheduler, debounced)."""
+        key = self.project_name(project_id) if project_id else "misc"
+        self.x("INSERT INTO kb_state(bucket, dirty, dirtied_at, built_at) VALUES(?,1,?,0) "
+               "ON CONFLICT(bucket) DO UPDATE SET dirty=1, dirtied_at=excluded.dirtied_at", (key, now()))
 
     def _check_conflict(self, iid: str, subject: str, predicate: str, value: str | None) -> list[str]:
         rows = self.q("SELECT id, value FROM items WHERE kind='fact' AND subject=? AND predicate=? AND id<>? "
@@ -263,7 +273,8 @@ class Store:
         return {"resolved": conflict_id, "kept": keep_id, "superseded": loser}
 
     def _exists(self, any_id: str) -> bool:
-        for t in ("items", "entities", "sessions", "agents", "inbox", "jobs", "subtasks", "leftovers"):
+        for t in ("items", "entities", "sessions", "agents", "inbox", "jobs", "subtasks", "leftovers", "recurring",
+                  "preferences", "leases"):
             if self.q(f"SELECT 1 FROM {t} WHERE id=?", (any_id,)):
                 return True
         return False
@@ -375,7 +386,7 @@ class Store:
             if r:
                 d = dict(r[0]) | {"meta": json.loads(r[0]["meta"] or "{}"), "created_at": iso(r[0]["created_at"])}
             else:
-                for t in ("sessions", "inbox", "jobs", "subtasks", "leftovers", "preferences"):
+                for t in ("sessions", "inbox", "jobs", "subtasks", "leftovers", "preferences", "recurring", "leases"):
                     r = self.q(f"SELECT * FROM {t} WHERE id=?", (any_id,))
                     if r:
                         d = dict(r[0])
@@ -444,7 +455,15 @@ class Store:
         r = self.q("SELECT body FROM inbox WHERE id=?", (any_id,))
         if r:
             return "task", (r[0]["body"] or "")[:60]
-        for t, col, typ in (("jobs", "title", "job"), ("subtasks", "title", "subtask"), ("leftovers", "text", "leftover")):
+        if "://" in any_id:
+            return "secret_ref", any_id
+        if any_id.startswith("usg_"):
+            r = self.q("SELECT cost, tokens_in, tokens_out, model FROM usage WHERE id=?", (int(any_id[4:]),))
+            if r:
+                return "usage", f"${r[0]['cost']:.4f} {r[0]['model'] or ''} ({(r[0]['tokens_in'] or 0) + (r[0]['tokens_out'] or 0)} tok)"
+        for t, col, typ in (("jobs", "title", "job"), ("subtasks", "title", "subtask"), ("leftovers", "text", "leftover"),
+                            ("recurring", "name", "schedule"), ("preferences", "statement", "preference"),
+                            ("leases", "ref", "lease")):
             r = self.q(f"SELECT {col} AS v FROM {t} WHERE id=?", (any_id,))
             if r:
                 return typ, (r[0]["v"] or "")[:60]
@@ -572,6 +591,8 @@ class Store:
                    (lid, redact(text)[0], typ, prio, s["project_id"], sid, None, "open", None,
                     agent_id or s["agent_id"], now(), now()))
             self.relate(lid, sid, "left_over_from")
+            self.relate(lid, s["project_id"], "in_project") if s["project_id"] else None
+        self.kb_dirty(s["project_id"])
         if to_agent:
             t = self.post_task(agent_id or s["agent_id"], to_agent, f"Resume session {sid}: {summary}", kind="handoff",
                                context_ids=[res["id"], sid] + (relevant_ids or []), project=s["project_id"])

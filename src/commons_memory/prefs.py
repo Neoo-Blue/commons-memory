@@ -59,12 +59,19 @@ class Preferences:
             conf = min(1.0, max(effective_confidence(p["confidence"], p["last_confirmed"]), confidence) + 0.15)
             self.s.x("UPDATE preferences SET confidence=?, evidence=?, observations=observations+1, last_confirmed=?,"
                      " updated_at=?, status='active' WHERE id=?", (conf, json.dumps(ev[-10:]), t, t, p["id"]))
+            self._link(p["id"], pid)
             return {"id": p["id"], "statement": p["statement"], "confidence": round(conf, 2), "reinforced": True}
         pid_ = new_id("prf")
         self.s.x("INSERT INTO preferences VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (pid_, statement, norm, category, pid, task_type, confidence, source,
                   json.dumps([evidence] if evidence else []), "active", 1, t, t, t))
+        self._link(pid_, pid)
         return {"id": pid_, "statement": statement, "confidence": confidence, "reinforced": False}
+
+    def _link(self, pref_id, project_id):
+        from .graphlinks import link_preference
+        link_preference(self.s, pref_id)
+        self.s.kb_dirty(project_id)
 
     def extract(self, text: str, *, project: str | None = None, task_type: str | None = None,
                 source: str = "feedback", store: bool = True) -> list[dict]:
@@ -147,9 +154,11 @@ class Preferences:
         if everything:
             n = self.s.q("SELECT COUNT(*) c FROM preferences")[0]["c"]
             self.s.x("DELETE FROM preferences")
+            self.s.x("DELETE FROM relations WHERE src LIKE 'prf_%'")
             return {"deleted": n}
         self._get(pref_id)
         self.s.x("DELETE FROM preferences WHERE id=?", (pref_id,))
+        self.s.x("DELETE FROM relations WHERE src=? OR dst=?", (pref_id, pref_id))
         return {"deleted": 1}
 
     def _get(self, pref_id):

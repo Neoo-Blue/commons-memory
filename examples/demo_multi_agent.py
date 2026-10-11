@@ -4,6 +4,7 @@ and a learned user preference applied.
 
     python examples/demo_multi_agent.py
 """
+import json
 import os
 import subprocess
 import sys
@@ -97,6 +98,45 @@ checks = {
 }
 for k, v in checks.items():
     print(f"   {'PASS' if v else 'FAIL'}  {k}")
+print("\n== 9. v0.3: graph everything + automatic knowledge base")
+code = Path(tmp) / "shop-src"
+(code / "checkout").mkdir(parents=True)
+(code / "checkout" / "cart.py").write_text("class Cart:\n    \"\"\"Shopping cart.\"\"\"\n    def total(self):\n        return apply_tax(0)\n\n"
+                                          "def apply_tax(x):\n    return round(x * 1.2, 2)\n")
+(code / "checkout" / "api.ts").write_text("import { Cart } from './cart';\nexport function checkout(c) { return pay(c); }\n"
+                                          "export const pay = (c) => c;\n")
+print(sh("index", str(code), "--project", "shop"), end="")
+cc = store.ensure_agent("claude-code")
+store.add_item("memory", "Payments go through Stripe; webhook docs at https://stripe.com/docs/webhooks. "
+               "Checkout code lives in checkout/cart.py.", project="shop", agent_id=cc, entities=["Stripe", "Cart"])
+store.add_item("memory", "To release the shop, run `make release` after the review gates pass.", project="shop",
+               agent_id=cc, tags=["runbook"])
+# simulate a database created by v0.2 (no auto links), then backfill
+store.x("DELETE FROM relations WHERE type IN ('run_of','uses_pattern','reviews','approves','rejects','applies_to',"
+        "'billed_to','spent_by','decided_by','about','has_type','executed_by','argues_in','judges')")
+print("graph rebuild:", sh("graph", "rebuild"), end="")
+print(sh("kb", "build", "shop"), end="")
+kbtext = sh("kb", "get", "shop", "--max-tokens", "1400")
+print(kbtext[:2200])
+vault = os.path.join(tmp, "vault")
+print(sh("kb", "export", vault), end="")
+from commons_memory.graphlinks import subgraph
+jg = subgraph(store, "job", big["job_id"])
+v3 = {
+    "graph rebuild backfilled links": json.loads(sh("graph", "rebuild"))["added"] == 0,
+    "job graph links verdicts + workflow": any(e["type"] in ("approves", "rejects") for e in jg["edges"])
+        and any(n["type"] == "workflow" for n in jg["nodes"].values()),
+    "recurring runs linked to schedule": bool(store.q("SELECT 1 FROM relations WHERE type='run_of'")),
+    "KB cites decisions": "Key decisions" in kbtext and "[dec_" in kbtext,
+    "KB architecture from code graph": "apply_tax" in sh("kb", "get", "shop", "--section", "architecture"),
+    "KB preferences + open questions": "type hints" in kbtext and "Open questions" in kbtext,
+    "Obsidian vault exported": os.path.exists(os.path.join(vault, "shop", "decisions.md")),
+    "pickup includes KB digest": "Project KB digest" in sh("pickup", "--agent", "cursor", "--project", "shop"),
+}
+for k, v in v3.items():
+    print(f"   {'PASS' if v else 'FAIL'}  {k}")
+checks.update(v3)
+
 print("\nusage by agent:")
 print(sh("usage", "--by", "agent"))
 print("debate synthesis excerpt:", (debate_res or "")[:200].replace("\n", " | "))

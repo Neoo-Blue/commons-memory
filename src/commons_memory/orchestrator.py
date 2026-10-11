@@ -242,6 +242,8 @@ class Orchestrator:
             self.s.relate(jid, pid, "in_project")
         self.allocate(jid)
         self._auto(jid)
+        from .graphlinks import link_job
+        link_job(self.s, jid)
         return self.status(jid)
 
     # ---------------------------------------------------------------- kill switch
@@ -358,6 +360,10 @@ class Orchestrator:
         project = self.s.project_name(job["project_id"])
         prefs = self.prefs.get(project=project, task_type=st["type"], query=st["title"], max_tokens=250)
         ctx = self.s.search(st["title"], project=project, max_tokens=200, limit=5)["text"] if project else ""
+        if project:
+            from .kb import KB
+            dg = KB(self.s).digest(project, max_tokens=160)
+            ctx = (dg + "\n\n" + ctx) if dg else ctx
         return {"subtask_id": st["id"], "job_id": job["id"], "job_title": job["title"], "type": st["type"],
                 "title": st["title"], "instructions": st["body"], "attempt": st["attempts"],
                 "lease_expires": iso(st["lease_expires"]), "budget": json.loads(st["budget"] or "{}"),
@@ -449,6 +455,9 @@ class Orchestrator:
             self.profiles.record_outcome(agent_id, st["type"], True, subtask_id=subtask_id, tokens=tokens, seconds=seconds)
             self._evaluate_gates(st["gate_of"])
         self._auto(st["job_id"])
+        from .graphlinks import link_job
+        link_job(self.s, st["job_id"])
+        self.s.kb_dirty(job["project_id"])
         return self.status(st["job_id"], brief=True) | {"verdict": v}
 
     def _evaluate_gates(self, gated_id: str) -> None:
@@ -552,12 +561,13 @@ class Orchestrator:
         if dup:  # avoid duplicate work: same unfinished item reported twice
             self.s.x("UPDATE leftovers SET priority=MAX(priority, ?), updated_at=? WHERE id=?", (priority, now(), dup[0]["id"]))
             return {"id": dup[0]["id"], "text": text, "duplicate": True}
+        from .graphlinks import link_leftover
         lid = new_id("lft")
         self.s.x("INSERT INTO leftovers VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                  (lid, text.strip(), task_type, priority, pid, source_id, recurring_id, "open", None,
                   agent_id, now(), now()))
-        if source_id and self.s._exists(source_id):
-            self.s.relate(lid, source_id, "left_over_from")
+        link_leftover(self.s, lid)
+        self.s.kb_dirty(pid)
         return {"id": lid, "text": text}
 
     def resolve_leftover(self, leftover_id: str, note: str = "", agent_id: str | None = None) -> dict:
@@ -581,6 +591,8 @@ class Orchestrator:
         self.s.x("INSERT OR REPLACE INTO recurring VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (rid, name, cron, redact(task)[0], pattern, self.s.project_id(project), _j(budget or {}), agent_id, 1,
                   None, nxt.timestamp(), None, now()))
+        from .graphlinks import link_recurring
+        link_recurring(self.s, rid)
         return {"id": rid, "name": name, "next_run": iso(nxt.timestamp())}
 
     def run_due(self, force: str | None = None, at: float | None = None) -> list[dict]:
@@ -596,6 +608,8 @@ class Orchestrator:
             nxt = next_cron(r["cron"], datetime.fromtimestamp(t))
             self.s.x("UPDATE recurring SET last_run=?, next_run=?, last_job=? WHERE id=?",
                      (t, nxt.timestamp(), job["job_id"], r["id"]))
+            from .graphlinks import link_recurring
+            link_recurring(self.s, r["id"])
             out.append({"recurring": r["name"], "job_id": job["job_id"], "carried_leftovers": len(carried),
                         "next_run": iso(nxt.timestamp())})
         return out
@@ -617,6 +631,8 @@ class Orchestrator:
                                               + min(1.0, (t - self.s.q("SELECT created_at FROM leftovers WHERE id=?",
                                                                          (lo["id"],))[0]["created_at"]) / 604800)))
         prefs = self.prefs.get(project=project, max_tokens=max_tokens // 3)
+        from .kb import KB
+        digest = KB(self.s).digest(project, max_tokens=max_tokens // 4) if project else ""
         lines = []
         if subs:
             lines.append("READY SUBTASKS (claim_subtask):")
@@ -630,6 +646,8 @@ class Orchestrator:
         text = "\n".join(lines) or "Nothing pending."
         if prefs["text"]:
             text += "\n\n" + prefs["text"]
+        if digest:
+            text += "\n\n" + digest
         while estimate_tokens(text) > max_tokens and "\n" in text:
             text = text.rsplit("\n", 1)[0]
         return {"text": text, "subtasks": [s["id"] for s in subs], "inbox": [i["id"] for i in inbox],

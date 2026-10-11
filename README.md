@@ -32,6 +32,36 @@ See [FLAWS_AND_GAPS.md](FLAWS_AND_GAPS.md) for known risks.
 v0.1 features remain: shared memory with hybrid search and token-budgeted results, one graph across memory/code/sessions,
 code indexing, handoffs, reasoning log, agent inbox, secret references, conflict detection.
 
+## v0.3: everything is a graph, and every project has a living knowledge base
+
+**Graph everything.** Schedules and their runs (`run_of`), decisions (`decided_by`, `about` code/entities, `in_project`,
+`in_session`), preferences (`applies_to` project / task type / global, `learned_from` agent), workflow patterns
+(`uses_pattern`), debate rounds (`argues_in`, `judges`), review verdicts (`reviews`, `approves`/`rejects`), subtask DAG edges
+(`depends_on`, `has_type`, `executed_by`), leftovers (`for_schedule`, `carries`), usage (`billed_to` job/project, `spent_by`
+agent, `used_model`), leases and secret references (`lease_of`, `held_by`; references only, never values) are linked on write.
+`commons graph rebuild` (or the `graph_rebuild` tool) backfills older databases and is idempotent.
+Scoped views: `graph_view(scope=project|job|workflow|schedule|node, id)`, `commons graph view --scope job --id job_… --format html`,
+and the dashboard Graph page has project, job, workflow and schedule filters plus depth.
+
+**Automatic knowledge base.** Each project, plus `misc` for unassigned memories (auto-clustered into `misc/<topic>`), gets a
+wiki with these sections: overview · key decisions & rationale · architecture & components (from the code graph) · glossary &
+entities · references (URLs, repos, files) · how-tos & runbooks · people & agents (with spend) · open questions & leftovers ·
+timeline · preferences that apply. **Every statement cites its source record ids** (`[dec_…]`, `[mem_…]`, `[ent_…]`).
+
+- Writes mark a bucket dirty. It is rebuilt on read, by `commons scheduler`, or by `commons kb build`, at most every
+  `COMMONS_KB_DEBOUNCE` seconds (default 10).
+- Extractive summaries by default. `COMMONS_KB_SUMMARIZER="<cmd>"` pipes each section through your LLM; citations are kept.
+- MCP tools: `kb_get(project, section, max_tokens)`, `kb_search`, `kb_list`, `kb_refresh`. Every `pickup` and subtask packet
+  includes a compact KB digest (~150 tokens).
+- `commons kb export ./vault` writes an Obsidian-friendly vault: `<project>/index.md`, one page per section with
+  `[[records/<id>]]` wikilinks, and `records/<id>.md` with "Cited in" backlinks.
+- Dashboard **Knowledge** page: buckets, section tabs, and clickable citations that open the record, its graph neighbourhood and
+  every other KB page that cites it.
+
+| Knowledge base | Graph scoped to a workflow |
+|---|---|
+| ![kb](docs/img/dashboard-kb.png) | ![graph](docs/img/dashboard-graph-workflow.png) |
+
 ## Multi-agent quickstart: one big task across Claude Code + Grok + Cursor
 
 ```bash
@@ -219,6 +249,8 @@ behind TLS (reverse proxy) before exposing it beyond localhost.
 | Continuity | `pickup`, `add_leftover`, `resolve_leftover`, `list_leftovers`, `schedule_recurring`, `run_recurring`, `list_recurring` |
 | Preferences | `observe_preference`, `extract_preferences`, `get_preferences`, `confirm_preference`, `forget_preference` |
 | Usage | `report_usage`, `usage_summary` |
+| Knowledge base | `kb_get`, `kb_search`, `kb_list`, `kb_refresh` |
+| Graph views | `graph_view`, `graph_rebuild` |
 | Misc | `stats` |
 
 **Token-saving search output** (default `format="text"`):
@@ -295,9 +327,11 @@ Commons composes ideas from excellent projects — use them directly if they fit
 ## Roadmap
 
 - **v0.1**: memory, search, graph, code index, sessions/handoff, reasoning log, inbox, secret refs, CLI.
-- **v0.2 (this release)**: skills/installers, capability profiles and learning, orchestration patterns and gates, leftovers and
+- **v0.3 (this release)**: everything is linked into the graph (+ `graph rebuild` backfill and scoped views); automatic,
+  cited, per-project knowledge base with misc topic clustering, Obsidian export, pickup digests and a dashboard KB browser.
+- **v0.2**: skills/installers, capability profiles and learning, orchestration patterns and gates, leftovers and
   recurring runs, preference learning, workers, dashboard, usage and cost tracking, kill switch, backup and export.
-- **next**: Postgres + pgvector backend; Graphiti adapter; tree-sitter for more languages; LLM planner, summarizer and preference
+- **next**: LLM-written KB prose by default when a summarizer is configured, embedding-based topic clustering; Postgres + pgvector backend; Graphiti adapter; tree-sitter for more languages; LLM planner, summarizer and preference
   extractor presets; full A2A server endpoint; OAuth 2.1 and per-project ACLs; trust scores weighting memory by provenance;
   OpenTelemetry traces; dashboard live updates over SSE; push notifications to wake agents instead of polling.
 

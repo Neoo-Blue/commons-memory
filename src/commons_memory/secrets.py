@@ -97,6 +97,8 @@ class Broker:
                      (ref, description, self.store.project_id(project), json.dumps(allowed_agents or []),
                       min(max_ttl, MAX_TTL), agent_id, now()))
         self.store.audit(agent_id, "secret.register", ref)
+        from .graphlinks import link_secret_ref
+        link_secret_ref(self.store, ref)
         return {"ref": ref, "registered": True}
 
     def list_refs(self, project: str | None = None) -> list[dict]:
@@ -119,6 +121,8 @@ class Broker:
         lid = new_id("lea")
         exp = now() + ttl
         self.store.x("INSERT INTO leases VALUES(?,?,?,?,?,?,?,?)", (lid, ref, agent_id, scope, purpose, exp, 0, now()))
+        from .graphlinks import link_lease
+        link_lease(self.store, lid)
         self.store.audit(agent_id, "secret.lease", ref, {"lease": lid, "scope": scope, "ttl": ttl, "purpose": purpose})
         return {"lease_id": lid, "ref": ref, "scope": scope, "expires_at": iso(exp),
                 "usage": f"commons secret-exec {lid} --as VARNAME -- <command>  (value injected into env, never shown)"}

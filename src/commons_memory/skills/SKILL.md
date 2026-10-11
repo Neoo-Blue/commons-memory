@@ -12,8 +12,10 @@ agents) share. Treat it as the team's long-term memory, task board and rulebook.
 ## 1. Check in (start of every session)
 1. `pickup(project=...)` → ready subtasks assigned to you, your inbox, leftovers ranked by your expertise,
    and **the user's preferences — follow them without being asked again**.
-2. If continuing someone's work: `resume(project=...)` (or `resume(session_id=...)`) for the handoff packet.
-3. `session_start(goal, project)` and keep the returned `session_id`.
+2. Need the big picture of a project? `kb_get(project, section="overview"|"decisions"|"architecture"|...)` —
+   an auto-maintained, cited wiki (cheaper than many searches). `kb_search(query)` across all projects.
+3. If continuing someone's work: `resume(project=...)` (or `resume(session_id=...)`) for the handoff packet.
+4. `session_start(goal, project)` and keep the returned `session_id`.
 
 ## 2. Pull context before acting (token-cheap)
 - `search(query, project=..., max_tokens=400)` returns one-line summaries with ids. Only `expand(id)` what you need.
