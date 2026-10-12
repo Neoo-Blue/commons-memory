@@ -211,7 +211,9 @@ class API:
         for r in self.s.q("SELECT kind, summary, agent_id, created_at FROM items ORDER BY created_at DESC LIMIT 25"):
             ev.append({"ts": r["created_at"], "type": r["kind"], "text": r["summary"][:140],
                        "agent": self.s.label(r["agent_id"])[1] if r["agent_id"] else None})
-        for r in self.s.q("SELECT ts, action, target FROM audit ORDER BY ts DESC LIMIT 25"):
+        for r in self.s.q("SELECT ts, action, target FROM audit WHERE action NOT LIKE '%.internal' ORDER BY ts DESC LIMIT 40"):
+            if ev and ev[-1]["type"] == r["action"] and ev[-1]["text"] == str(r["target"] or "")[:140]:
+                continue  # the same plumbing event repeated (e.g. one per LLM call) is one line
             ev.append({"ts": r["ts"], "type": r["action"], "text": str(r["target"] or "")[:140], "agent": None})
         for r in self.s.q("SELECT ts, server, tool, status, agent_id FROM mcp_calls ORDER BY ts DESC LIMIT 15"):
             ev.append({"ts": r["ts"], "type": "mcp." + r["status"], "text": f"{r['server']}__{r['tool']}",
@@ -781,7 +783,8 @@ input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px sol
 .empty{text-align:center;padding:34px 10px;color:var(--mut)}.empty b{display:block;color:var(--fg);font-size:15px;margin:8px 0 4px}.empty .ico{font-size:30px;opacity:.8}
 #toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:50}
 .toast{min-width:240px;max-width:380px;padding:11px 14px;border-radius:12px;background:var(--card2);border:1px solid var(--line);box-shadow:var(--sh);animation:slide .25s ease;font-size:13px}
-.toast button{margin-left:8px;padding:3px 8px}.mact button{padding:4px 8px}.bulk input,.bulk select{min-width:140px}
+.toast button{margin-left:8px;padding:3px 8px}.mact button{padding:3px 8px;font-size:12px;background:transparent;border-color:var(--line)}
+@media (hover:hover){.mrow .mact{opacity:0;transition:opacity .12s}.mrow:hover .mact,.mrow.cur .mact,.mrow:focus-within .mact{opacity:1}}.bulk input,.bulk select{min-width:140px}
 .toast.ok{border-left:3px solid var(--ok)}.toast.err{border-left:3px solid var(--bad)}
 #pal{position:fixed;inset:0;background:rgba(5,7,12,.55);backdrop-filter:blur(4px);display:none;z-index:40;align-items:flex-start;justify-content:center;padding-top:12vh}
 #pal.on{display:flex}#pal .box{width:min(640px,92vw);background:var(--card2);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden;animation:fade .15s}
@@ -835,7 +838,7 @@ aside.open{transform:none}.menu-btn{display:inline-block}.search{min-width:0;fle
 div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1fr"]{grid-template-columns:1fr!important}
 .card table{min-width:640px}
 header{padding:10px 12px;gap:8px}header h1{font-size:16px;flex:1}
-.mrow{grid-template-columns:28px minmax(0,1fr)}.mact{grid-column:1/-1;justify-content:flex-start}.msum{grid-column:2}}
+.mrow{grid-template-columns:28px minmax(0,1fr)}.mact{grid-column:1/-1;justify-content:flex-start}.msum{grid-column:2}.ksl{display:none}}
 @media (max-width:520px){.grid4{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style></head><body>
@@ -914,7 +917,7 @@ function memRow(x,i,detail){const cur=i===window.mcur,open=window.mopen===x.id,o
 if(open&&detail&&detail.id===x.id){if(window.medit===x.id){const draft=window._draft&&window._draft.id===x.id?window._draft:null;const body=draft?draft.content:(detail.content||detail.statement||detail.text||"");const tags=draft?draft.tags:((detail.tags||[]).join(", "));
 extra=`<div class="medit"><textarea id="med" aria-label="Content">${E(body)}</textarea><div><input id="metags" aria-label="Tags" value="${E(tags)}" placeholder="tags, comma separated"> <button type="button" class="pri" data-m="save" data-id="${E(x.id)}">save</button> <button type="button" data-m="cancel">cancel</button> <span class="mut">esc cancels, cmd or ctrl+enter saves</span></div></div>`}
 else{const body=detail.content||detail.statement||detail.text||JSON.stringify(detail,null,1);extra=`<div class="drawer"><div class="mut">${E(detail.title||"")} ${detail.tags&&detail.tags.length?"· "+E(detail.tags.join(", ")):""}</div><pre>${E(String(body))}</pre></div>`}}
-return `<div class="mrow${cur?" cur":""}${on?" on":""}" data-i="${i}"><input type="checkbox" data-m="sel" data-id="${E(x.id)}" data-i="${i}" ${on?"checked":""} aria-label="Select"><div class="mmeta">${pill(x.kind)} ${x.project?`<span class="mut">${E(x.project)}</span>`:""} ${x.agent?`<span class="mut">${E(x.agent)}</span>`:""} <span class="mut">${E(rel(x.created_at))}</span>${x.conflict?' <b class="failed">conflict</b>':""}${x.authenticated?"":' <span class="mut" title="written without an api key">unverified</span>'}</div><div class="mact"><button type="button" data-m="open" data-id="${E(x.id)}">${open?"close":"expand"}</button> <button type="button" data-m="edit" data-id="${E(x.id)}">edit</button> <button type="button" data-m="del" data-id="${E(x.id)}">delete</button> <button type="button" data-m="graph" data-id="${E(x.id)}">open in graph</button></div><div class="msum">${E(x.summary||"")}</div>${extra}</div>`}
+return `<div class="mrow${cur?" cur":""}${on?" on":""}" data-i="${i}"><input type="checkbox" data-m="sel" data-id="${E(x.id)}" data-i="${i}" ${on?"checked":""} aria-label="Select"><div class="mmeta">${pill(x.kind)} ${x.project?`<span class="mut">${E(x.project)}</span>`:""} ${x.agent?`<span class="mut">${E(x.agent)}</span>`:""} <span class="mut">${E(rel(x.created_at))}</span>${x.conflict?' <b class="failed">conflict</b>':""}${x.agent&&!x.authenticated?' <span class="mut" title="written by a named agent without an api key">unverified</span>':""}</div><div class="mact"><button type="button" data-m="open" data-id="${E(x.id)}">${open?"close":"expand"}</button> <button type="button" data-m="edit" data-id="${E(x.id)}">edit</button> <button type="button" data-m="del" data-id="${E(x.id)}">delete</button> <button type="button" data-m="graph" data-id="${E(x.id)}">open in graph</button></div><div class="msum">${x.title&&!(x.summary||"").startsWith(x.title.slice(0,40))?`<b>${E(x.title)}</b><br><span class="mut">${E(x.summary||"")}</span>`:E(x.summary||"")}</div>${extra}</div>`}
 function bulkExtra(){if(window.mbulk==="tag")return ` <input id="btag" placeholder="tag" aria-label="Tag"> <button type="button" data-bulk="tag-go">Apply</button>`;if(window.mbulk==="move")return ` <select id="bproj" aria-label="Project"><option value="">(no project)</option>${(window.mprojects||[]).map(p=>`<option value="${E(p.name)}">${E(p.name)}</option>`).join("")}</select> <button type="button" data-bulk="move-go">Apply</button>`;return ""}
 document.addEventListener("click",async e=>{const bulk=e.target.closest&&e.target.closest("[data-bulk]");
 if(bulk){const act=bulk.dataset.bulk,ids=memIds();if(act==="clear"){window.msel=[];window.mbulk="";render();return}if(act==="tag"||act==="move"){window.mbulk=window.mbulk===act?"":act;render();return}
@@ -1123,7 +1126,7 @@ async function show(id){if(typeof id!=="string"||!id)return;window.mopen=id;wind
 window.addEventListener("message",ev=>{const d=ev.data;if(!d||typeof d!=="object"||d.type!=="commons:open"||typeof d.id!=="string"||!d.id)return;show(d.id)});
 let _rseq=0;
 async function render(){tabs();const seq=++_rseq;if(window.medit&&$("#med"))window._draft={id:window.medit,content:$("#med").value,tags:($("#metags")&&$("#metags").value)||""};
-try{const o=await api("overview");if(seq!==_rseq)return;$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})">⏻ Kill switch</button>`;
+try{const o=await api("overview");if(seq!==_rseq)return;$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})" aria-label="Kill switch">⏻<span class="ksl"> Kill switch</span></button>`;
 if(tab==="Memory"&&!$("#mq"))$("#m").innerHTML='<div class="card"><div class="skel"></div><div class="skel w"></div><div class="skel"></div><div class="skel w"></div><div class="skel"></div></div>';
 const html=await V[tab]();if(seq!==_rseq)return;const m=$("#m");if(m.dataset.tab!=tab){m.style.animation="none";m.offsetHeight;m.style.animation=""}m.dataset.tab=tab;m.innerHTML=html;if(tab=="Org chart")ocInit();
 if(tab==="Memory"&&window._mfocus){window._mfocus=false;const el=$("#mq");if(el){el.focus();const n=window._mcaret==null?el.value.length:Math.min(window._mcaret,el.value.length);try{el.setSelectionRange(n,n)}catch(err){}}}}

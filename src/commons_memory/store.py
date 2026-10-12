@@ -623,7 +623,7 @@ class Store:
                 t = estimate_tokens(line)
             used += t
             lines.append(line)
-            results.append({"id": r["id"], "kind": r["kind"], "summary": r["summary"], "project": r["project_name"],
+            results.append({"id": r["id"], "kind": r["kind"], "title": r["title"], "summary": r["summary"], "project": r["project_name"],
                             "agent": r["agent_name"], "created_at": iso(r["created_at"]), "conflict": bool(r["conflict"]),
                             "authenticated": bool(r["authenticated"])})
         more = max(0, total - len(results))
