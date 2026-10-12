@@ -1,2 +1,2 @@
 """Commons: unified cross-AI memory hub (MCP gateway + SQLite store)."""
-__version__ = "0.6.0"
+__version__ = "0.7.0"
