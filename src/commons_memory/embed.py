@@ -76,6 +76,7 @@ class FastEmbedEmbedder(Embedder):
         self.model = model or os.environ.get("COMMONS_EMBED_MODEL") or DEFAULT_FASTEMBED
         th = os.environ.get("COMMONS_EMBED_THREADS")
         self._m = TextEmbedding(self.model, **({"threads": int(th)} if th else {}))
+        self._qcache: dict[str, list[float]] = {}
         self.dim = len(next(iter(self._m.embed(["probe"]))))
         # legacy name for the original default so existing vectors stay valid
         self.name = "fastembed" if self.model == DEFAULT_FASTEMBED else f"fastembed:{self.model}"
@@ -84,9 +85,15 @@ class FastEmbedEmbedder(Embedder):
         return [list(map(float, v)) for v in self._m.embed(list(texts), batch_size=16)]
 
     def embed_query(self, text):
-        qe = getattr(self._m, "query_embed", None)  # model-specific query instruction (bge, e5, ...)
-        v = next(iter(qe([text]))) if qe else next(iter(self._m.embed([text])))
-        return list(map(float, v))
+        # agents repeat queries (pickup, resume, hooks): a small cache skips the ~10-20 ms model call
+        hit = self._qcache.get(text)
+        if hit is None:
+            qe = getattr(self._m, "query_embed", None)  # model-specific query instruction (bge, e5, ...)
+            hit = list(map(float, next(iter(qe([text]))) if qe else next(iter(self._m.embed([text])))))
+            if len(self._qcache) >= 512:
+                self._qcache.pop(next(iter(self._qcache)))
+            self._qcache[text] = hit
+        return list(hit)
 
 
 class OpenAICompatEmbedder(Embedder):
