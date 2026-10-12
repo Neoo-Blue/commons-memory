@@ -97,11 +97,11 @@ different tool, so a correct answer proves it used the shared hub. grok-build an
 | ping (delivery + wake) | ok, 36-128 s | ok, 15-53 s | ok, 183 s |
 | recall (`remember` -> `search`) | ok, 220 s | ok, 155 s | ok, 187 s |
 | why (`record_decision` -> `why`) | ok, 220 s | ok, 158 s | ok, 192 s |
-| resume (`handoff` -> `resume`) | see note | ok, 18 s | see note |
+| resume (`handoff` -> `resume`) | ok, 79 s | ok, 18 s | ok, 309 s |
 | code + review job (`cross_review`) | wrote `is_leap`, 2 approvals, passes 8/8 cases, 201 s | (reviewer) | - |
 
 Times are wall clock including each agent's own model run. The first resume round exposed two real problems, both
-fixed: `handoff` did not return its `session_id`, and four concurrent handoffs without one shared a session. The
+fixed (the row above is the re-run): `handoff` did not return its `session_id`, and four concurrent handoffs without one shared a session. The
 user's `grok` chat bot was offline for the whole run and answered nothing.
 
 ### Latency and footprint (`commons bench scale`)

@@ -350,14 +350,30 @@ QA_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verd
              "properties": {"verdict": {"type": "string", "enum": ["CORRECT", "WRONG"]}}}
 
 
-def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label):
+def _day(ts) -> str:  # "8 May 2023" reads (and gets echoed back) like the benchmarks' gold answers; ISO is the old style
+    from .ids import iso
+    return iso(ts)[:10] if os.environ.get("COMMONS_QA_DATES") == "iso" else time.strftime("%-d %B %Y", time.gmtime(ts))
+
+
+def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label, neighbors: int = 0):
     from .ids import iso
     ids, _, _ = s.rank(question, limit=k, as_of=as_of)
     ctx = []
-    for i in ids or []:
-        r = s.q("SELECT content, created_at FROM items WHERE id=?", (i,))
-        if r:
-            ctx.append(f"[{iso(r[0]['created_at'])[:10]}] {r[0]['content'][:700]}")
+    if neighbors:  # each hit with the turns around it from the same session, in time order, grouped by date
+        rows = {}
+        for i in ids or []:
+            r = s.q("SELECT rowid AS rid, created_at FROM items WHERE id=?", (i,))
+            if r:
+                for x in s.q("SELECT rowid AS rid, content, created_at FROM items WHERE created_at=? AND rowid BETWEEN ? AND ?",
+                             (r[0]["created_at"], r[0]["rid"] - neighbors, r[0]["rid"] + neighbors)):
+                    rows[x["rid"]] = x
+        for x in sorted(rows.values(), key=lambda x: (x["created_at"], x["rid"])):
+            ctx.append(f"[{_day(x['created_at'])}] {x['content'][:700]}")
+    else:
+        for i in ids or []:
+            r = s.q("SELECT content, created_at FROM items WHERE id=?", (i,))
+            if r:
+                ctx.append(f"[{_day(r[0]['created_at'])}] {r[0]['content'][:700]}")
     prompt = f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
     a = pl.chat(model, prompt, system="ROLE: reader.", cache_prefix=QA_READER, max_tokens=200, role="grader")
     answer = (a["text"] or "").strip()
@@ -371,7 +387,8 @@ def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label):
 
 
 def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str | None = None, k: int = 20,
-       limit: int | None = None, workers: int = 8, embedder: str = "auto", seed: int = 7, log=lambda m: None) -> dict:
+       limit: int | None = None, workers: int = 8, embedder: str = "auto", seed: int = 7, log=lambda m: None,
+       neighbors: int = 0) -> dict:
     """End-to-end answer accuracy (LLM reader + LLM judge), the metric mem0/Zep publish. LoCoMo: categories 1-4
     (adversarial category 5 excluded, as in the mem0 paper). LongMemEval-S: a seeded random sample of `limit`
     questions (each needs its own embedded haystack). Retrieval is the same Store.rank behind search()."""
@@ -400,7 +417,7 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                 qs = [q for q in conv["qa"] if q.get("category") in (1, 2, 3, 4) and "answer" in q]
                 with ThreadPoolExecutor(max_workers=workers) as ex:
                     res = list(ex.map(lambda q: _qa_one(pl, model, judge, s, q["question"], q["answer"], ref, k,
-                                                        time.strftime("%d %B %Y", time.gmtime(ref))), qs))
+                                                        time.strftime("%d %B %Y", time.gmtime(ref)), neighbors), qs))
                 for q, (ans, ok, c_) in zip(qs, res):
                     rows.append({"id": conv["sample_id"], "type": f"cat{q['category']}", "q": q["question"],
                                  "gold": str(q["answer"]), "answer": ans, "correct": int(ok)})
@@ -424,7 +441,8 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                         s.add_item("note", f"user: {t['content']}" + (f"\nassistant: {reply}" if reply else ""), created_at=ts)
                 s.reindex()
                 gold = q["answer"] if not q["question_id"].endswith("_abs") else "The information is not available (abstain)."
-                return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_date(q["question_date"]), k, q["question_date"])
+                return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_date(q["question_date"]), k, q["question_date"],
+                                  neighbors)
             finally:
                 _cleanup(d)
         with ThreadPoolExecutor(max_workers=max(1, workers // 2)) as ex:
@@ -435,7 +453,8 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                 if len(rows) % 20 == 0:
                     log(f"{len(rows)}/{len(data)}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
     os.makedirs(out, exist_ok=True)
-    tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}"
+    tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}" + (f"-n{neighbors}" if neighbors else "") + \
+        ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "")
     with open(os.path.join(out, f"{tag}.jsonl"), "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

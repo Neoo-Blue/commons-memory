@@ -112,6 +112,13 @@ class KB:
         """Cluster unassigned memories: by embeddings when a semantic embedder is configured, else by keyword."""
         if items is None:
             items = [dict(r) for r in self.s.q("SELECT * FROM items WHERE project_id IS NULL AND superseded_by IS NULL")]
+        key = (len(items), max((i["created_at"] or 0) for i in items) if items else 0, min_size)
+        if getattr(self, "_topics_key", None) == key:  # every misc/<topic> page asks again within one build
+            return self._topics
+        self._topics_key, self._topics = key, self._misc_topics(items, min_size)
+        return self._topics
+
+    def _misc_topics(self, items: list[dict], min_size: int) -> dict[str, list[str]]:
         mode = os.environ.get("COMMONS_KB_CLUSTER", "auto")
         emb = self.s.embedder
         if emb and (mode == "semantic" or (mode == "auto" and emb.name != "hash")):
@@ -136,17 +143,40 @@ class KB:
             return None
         thr = float(os.environ.get("COMMONS_KB_CLUSTER_SIM", "0.55" if self.s.embedder.name != "hash" else "0.35"))
         clusters: list[dict] = []
-        for d in docs:
-            v = vecs.get(d["id"])
-            if v is None:
-                continue
-            best = max(clusters, key=lambda c: cosine(c["c"], v), default=None)
-            if best and cosine(best["c"], v) >= thr:
-                n = len(best["ids"])
-                best["c"] = [(a * n + b) / (n + 1) for a, b in zip(best["c"], v)]
-                best["ids"].append(d["id"])
-            else:
-                clusters.append({"c": list(v), "ids": [d["id"]]})
+        try:  # same greedy centroid pass, but one BLAS dot per item instead of a python loop per cluster x dimension
+            import numpy as np
+        except ImportError:
+            np = None
+        if np is not None:
+            dim = len(next(iter(vecs.values())))
+            cent = np.zeros((max(16, len(vecs)), dim), dtype=np.float32)
+            for d in docs:
+                v = vecs.get(d["id"])
+                if v is None:
+                    continue
+                va = np.asarray(v, dtype=np.float32)
+                if clusters:
+                    sims = cent[:len(clusters)] @ va
+                    j = int(sims.argmax())
+                    if sims[j] >= thr:
+                        n = len(clusters[j]["ids"])
+                        cent[j] = (cent[j] * n + va) / (n + 1)
+                        clusters[j]["ids"].append(d["id"])
+                        continue
+                cent[len(clusters)] = va
+                clusters.append({"ids": [d["id"]]})
+        else:
+            for d in docs:
+                v = vecs.get(d["id"])
+                if v is None:
+                    continue
+                best = max(clusters, key=lambda c: cosine(c["c"], v), default=None)
+                if best and cosine(best["c"], v) >= thr:
+                    n = len(best["ids"])
+                    best["c"] = [(a * n + b) / (n + 1) for a, b in zip(best["c"], v)]
+                    best["ids"].append(d["id"])
+                else:
+                    clusters.append({"c": list(v), "ids": [d["id"]]})
         byid = {d["id"]: d for d in docs}
         df_all = Counter(t for d in docs for t in set(_terms(f"{d['title']} {d['content']}")))
         out: dict[str, list[str]] = defaultdict(list)
