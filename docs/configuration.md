@@ -103,6 +103,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |
+| `COMMONS_TOOLS` | — | Which tools MCP clients list: `core` (default, ~20 routine tools plus `tools`/`call` to reach the rest), `all`, or `core,name,...`. Per-agent: `commons agent tools NAME PROFILE`; per-connection: `?tools=` on the MCP URL | cli_v7.py, toolprofile.py |
 | `COMMONS_TREE_SITTER` | `1` | Use tree-sitter for JS/TS code indexing (`0` = regex fallback) | codeindex.py |
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
 | `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py |

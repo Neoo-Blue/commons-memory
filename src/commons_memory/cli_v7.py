@@ -70,6 +70,10 @@ def add_parsers(sub) -> None:
     x.add_argument("--once", action="store_true")
     x.add_argument("--timeout", type=int, default=3600)
     x.add_argument("--print-unit", choices=["systemd", "launchd", "windows"], help="print a service unit and exit")
+    asub.add_parser("list", help="registered agents with presence and tool profile")
+    x = asub.add_parser("tools", help="show or set the tools an agent's client lists (core | all | core,name,...)")
+    x.add_argument("agent")
+    x.add_argument("profile", nargs="?", help="omit to show; '-' to clear (falls back to COMMONS_TOOLS, then core)")
 
     b = sub.add_parser("bus", help="agent-bus migration")
     bs = b.add_subparsers(dest="sub", required=True)
@@ -293,7 +297,8 @@ def handle(args, store) -> int:  # noqa: C901
     elif c == "presence":
         from .messaging import board
         for a in board(store):
-            print(f"{a.get('agent', '?'):<20} {a.get('state', '?'):<9} {json.dumps({k: v for k, v in a.items() if k not in ('agent', 'state', 'id')}, default=str)[:120]}")
+            print(f"{a.get('agent', '?'):<20} {a.get('state', '?'):<9} seen {_ago(a.get('last_seen') or a.get('last_heartbeat')):<10} "
+                  f"{'wakeable' if a.get('wakeable') else '-':<9} channels {len(a.get('channels') or [])}  {a.get('status') or ''}")
     elif c == "wake":
         from .messaging import Channels, Dispatcher, emit
         ch = Channels(store)
@@ -311,6 +316,22 @@ def handle(args, store) -> int:  # noqa: C901
             _out(Dispatcher.dead_letters(store))
         else:
             _out({"redriven": Dispatcher.redrive(store, args.id)})
+    elif c == "agent" and args.sub in ("list", "tools"):
+        from .toolprofile import _agent_profile, set_agent_profile
+        if args.sub == "tools":
+            if args.profile:
+                _out(set_agent_profile(store, args.agent, "" if args.profile == "-" else args.profile))
+            else:
+                a = store.get_agent(args.agent)
+                _out({"agent": args.agent, "tools": _agent_profile(store, a["id"]) if a else None,
+                      "default": os.environ.get("COMMONS_TOOLS") or "core"})
+            return 0
+        from .messaging import board
+        pres = {a.get("agent"): a for a in board(store)}
+        for a in store.list_agents():
+            p = pres.get(a["name"], {})
+            print(f"{a['name']:<20} {p.get('state', '?'):<9} seen {_ago(a.get('last_seen')):<10} "
+                  f"tools {_agent_profile(store, a['id']) or '(default)':<12} {a.get('vendor') or ''} {a.get('model') or ''}")
     elif c == "agent":
         if args.print_unit:
             from .expose import service_unit
@@ -419,3 +440,23 @@ def handle(args, store) -> int:  # noqa: C901
             if n["rationale"]:
                 print(f"{'':<14} why: {n['rationale'][:150]}")
     return 0
+
+
+def _ago(ts) -> str:
+    """'3m ago' / 'never' for an epoch timestamp (None or 0 means never seen)."""
+    import datetime as dt
+    import time
+    try:
+        ts = float(ts or 0)
+    except (TypeError, ValueError):
+        try:
+            ts = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return "?"
+    if ts <= 0:
+        return "never"
+    d = max(0, time.time() - ts)
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if d >= n:
+            return f"{int(d // n)}{unit} ago"
+    return "just now"

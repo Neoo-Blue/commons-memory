@@ -105,3 +105,4 @@ COMMONS_RERANK_TOP	How many top hits the reranker reorders
 COMMONS_URL	Commons server base URL for hooks/clients (empty = local DB)
 COMMONS_MCP_HOST	MCP bind host as seen by the dashboard Connect page (set by `commons serve`; override for split deployments)
 COMMONS_MCP_PORT	MCP port as seen by the dashboard Connect page (set by `commons serve`)
+COMMONS_TOOLS	Which tools MCP clients list: `core` (default, ~20 routine tools plus `tools`/`call` to reach the rest), `all`, or `core,name,...`. Per-agent: `commons agent tools NAME PROFILE`; per-connection: `?tools=` on the MCP URL

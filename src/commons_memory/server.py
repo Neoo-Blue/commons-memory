@@ -22,11 +22,11 @@ from .secrets import Broker
 from .store import CommonsError, Store
 
 INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
-0) pickup() to check in; find(query) or tree() to locate things; skill_list()/skill_get() for how-tos.
-0) find(query) or tree() to locate things; skill_list()/skill_get() to fetch how-to skills from the shared pool.
+0) pickup() and msg_recv() to check in. Your client lists the core tools; tools(query) searches the other ~130 and
+   call(tool, args) runs any of them (find, tree, skill_get, submit_task, fs_read, ...).
 1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
 2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
-3) session_start → checkpoint → handoff so another AI can resume(). Use inbox() to pick up delegated tasks.
+3) claim_subtask → heartbeat → complete_subtask for assigned work; handoff() before you stop so another AI can resume().
 4) Never write secret values; reference them as env://NAME, vault://path#key, op://vault/item/field."""
 
 
@@ -329,6 +329,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v81(mcp, store, who)
     from .toolargs import install as friendly_args
     friendly_args(mcp)
+    from .toolprofile import install as tool_profiles
+    tool_profiles(mcp, store)
     from .telemetry import instrument_mcp
     instrument_mcp(mcp)
     return mcp

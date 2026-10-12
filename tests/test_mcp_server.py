@@ -19,7 +19,8 @@ def text(res):
     return content[0].text
 
 
-async def test_tool_surface_in_process(tmp_path):
+async def test_tool_surface_in_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("COMMONS_TOOLS", "all")
     mcp = build_server(Store(str(tmp_path / "s.db"), embedder="hash"))
     names = {t.name for t in await mcp.list_tools()}
     expected = {"remember", "search", "expand", "timeline", "graph_query", "neighbors", "export_graph", "index_code",
@@ -64,8 +65,9 @@ async def test_stdio_end_to_end(tmp_path):
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
-            tools = await s.list_tools()
-            assert len(tools.tools) >= 30
+            tools = {t.name for t in (await s.list_tools()).tools}
+            assert {"pickup", "search", "remember", "handoff", "tools", "call"} <= tools  # core profile by default
+            assert "index_code" not in tools  # hidden, but still callable by name and via call()
             idx = json.loads((await s.call_tool("index_code", {"path": str(ROOT / "src"), "project": "commons"})).content[0].text)
             assert idx["symbols"] > 50
             syms = json.loads((await s.call_tool("code_symbols", {"name": "add_item", "project": "commons"})).content[0].text)
@@ -79,3 +81,39 @@ async def test_stdio_end_to_end(tmp_path):
             mer = (await s.call_tool("export_graph", {"format": "mermaid", "project": "commons",
                                                        "include_items": False})).content[0].text
             assert "graph LR" in mer
+
+
+async def test_core_tool_profile(tmp_path, monkeypatch):
+    """v0.9: the default listing is the lean core profile; tools() finds the rest, call() runs it, the identity
+    params disappear for header-authenticated callers, and per-agent / ?tools= profiles override the default."""
+    from commons_memory.auth import PRINCIPAL
+    from commons_memory.toolprofile import CORE, REQUESTED, set_agent_profile
+    monkeypatch.delenv("COMMONS_TOOLS", raising=False)
+    st = Store(str(tmp_path / "p.db"), embedder="hash")
+    mcp = build_server(st)
+    assert all(mcp._tool_manager.get_tool(n) for n in CORE)
+    listed = {t.name: t for t in await mcp.list_tools()}
+    assert set(listed) == set(CORE) and len(mcp._tool_manager.all_tools()) > 100
+    assert "api_key" in listed["remember"].inputSchema["properties"]  # stdio/unauthenticated still sees identity
+    found = text(await mcp.call_tool("tools", {"query": "drive file write"}))
+    assert found.splitlines()[0].startswith("fs_write(")
+    out = text(await mcp.call_tool("call", {"tool": "remember", "args": {"text": "profiles keep context small"}}))
+    assert json.loads(out)["id"].startswith("mem_")
+    assert "profiles keep context small" in text(await mcp.call_tool("call", {"tool": "search", "args": {"q": "profiles"}}))
+    with pytest.raises(Exception):
+        await mcp.call_tool("call", {"tool": "no_such_tool"})
+    aid = st.register_agent("lean")["id"]
+    tok = PRINCIPAL.set(aid)
+    try:
+        listed = {t.name: t for t in await mcp.list_tools()}
+        assert "api_key" not in listed["remember"].inputSchema["properties"]
+        assert "agent" not in listed["pickup"].inputSchema["properties"]
+        set_agent_profile(st, "lean", "core,submit_task")
+        assert "submit_task" in {t.name for t in await mcp.list_tools()}
+        set_agent_profile(st, "lean", "all")
+        assert len(await mcp.list_tools()) == len(mcp._tool_manager.all_tools())
+        r = REQUESTED.set("core")  # ?tools=core on the URL beats the stored profile
+        assert len(await mcp.list_tools()) == len(CORE)
+        REQUESTED.reset(r)
+    finally:
+        PRINCIPAL.reset(tok)

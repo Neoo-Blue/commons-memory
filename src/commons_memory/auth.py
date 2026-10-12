@@ -251,10 +251,15 @@ class AuthMiddleware:
         if principal:
             _touch(self.s, principal)
         tok_ctx = PRINCIPAL.set(principal or ANON)
+        from .toolprofile import REQUESTED
+        want = urllib.parse.parse_qs((scope.get("query_string") or b"").decode()).get("tools")
+        tools_ctx = REQUESTED.set(want[0]) if want else None
         try:
             return await self.app(scope, receive, send)
         finally:
             PRINCIPAL.reset(tok_ctx)
+            if tools_ctx is not None:
+                REQUESTED.reset(tools_ctx)
 
     async def _ws(self, scope, receive, send):
         """WebSockets authenticate before accept (Authorization/X-Api-Key header or ?token= on /agent/ paths)."""
