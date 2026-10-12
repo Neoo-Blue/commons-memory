@@ -90,3 +90,28 @@ def test_empty_graph():
     assert res["communities"] == []
     html_out = render(g)
     assert "No nodes in graph" in html_out
+
+
+def test_overview_and_community_views():
+    from commons_memory import graphview as gv
+    nodes, edges = {}, []
+    for c in range(6):  # 6 dense groups of 80 nodes, each with its own file node, sparsely linked to the next group
+        nodes[f"f{c}"] = {"type": "file", "name": f"src/pkg/mod{c}.py"}
+        for i in range(80):
+            nodes[f"n{c}_{i}"] = {"type": "function", "name": f"mod{c}.fn{i}"}
+            edges.append({"src": f"f{c}", "dst": f"n{c}_{i}", "type": "defines"})
+            edges.append({"src": f"n{c}_{i}", "dst": f"n{c}_{(i + 1) % 80}", "type": "calls"})
+        edges.append({"src": f"n{c}_0", "dst": f"n{(c + 1) % 6}_0", "type": "calls"})
+    nodes["m_json"] = {"type": "module", "name": "json"}  # external import hub: excluded from the map
+    edges += [{"src": f"f{c}", "dst": "m_json", "type": "imports"} for c in range(6)]
+    ov = gv.overview({"nodes": nodes, "edges": edges}, max_nodes=100)
+    assert ov["scope"] == "overview" and ov["total_nodes"] == len(nodes) - 1
+    assert all(d["type"] == "cluster" for d in ov["nodes"].values()) and len(ov["nodes"]) >= 6
+    assert any("mod" in d["name"] and ".py" in d["name"] for d in ov["nodes"].values())  # labelled by file
+    some = next(iter(ov["nodes"].values()))["cluster"]
+    sub = gv.community({"nodes": nodes, "edges": edges}, str(some))
+    inside = [n for n, d in sub["nodes"].items() if not d.get("outside")]
+    assert len(inside) >= 40 and "m_json" not in sub["nodes"]
+    small = gv.overview({"nodes": dict(list(nodes.items())[:30]), "edges": []}, max_nodes=100)
+    assert "scope" not in small or small.get("scope") != "overview"  # small graphs are shown as-is
+    assert "commons:open" in gv.render(ov) and "community" in gv.render(ov)

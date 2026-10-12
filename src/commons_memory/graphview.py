@@ -722,6 +722,7 @@ body.presentation #canvas-container { top: 0 !important; }
 
   function getNodeColor(n) {
     if (colorMode === 'type') {
+      if (n.type === 'cluster') return COMM_PALETTE[Math.abs(parseInt(n.cluster, 10) || 0) % COMM_PALETTE.length];
       return TYPE_COLORS[n.type] || hashColor(n.type);
     }
     return COMM_PALETTE[n.community % COMM_PALETTE.length];
@@ -2298,9 +2299,13 @@ body.presentation #canvas-container { top: 0 !important; }
 def overview(g: dict, max_nodes: int = 400, max_clusters: int = 60) -> dict:
     """Big graphs open as a cluster map: one node per community (top `max_clusters` by size, the rest folded into
     "other"), edges aggregated with counts. Open a cluster with community(g, id). Small graphs come back unchanged."""
-    a = analyze(g)
-    if len(a["nodes"]) <= max_nodes:
-        return a
+    if len(g.get("nodes") or {}) <= max_nodes:
+        return analyze(g)
+    # external imports (unresolved `module` entities: json, os, __future__) link to every file and would glue all
+    # communities into one; they say nothing about this codebase's architecture
+    drop = {n for n, d in g["nodes"].items() if d.get("type") == "module"}
+    a = analyze({**g, "nodes": {n: d for n, d in g["nodes"].items() if n not in drop},
+                 "edges": [e for e in g.get("edges", []) if e["src"] not in drop and e["dst"] not in drop]})
     comms = sorted(a["communities"], key=lambda c: -c["size"])
     keep = {c["id"] for c in comms[:max_clusters]}
     cid = {n: (d["community"] if d["community"] in keep else "other") for n, d in a["nodes"].items()}
@@ -2309,8 +2314,9 @@ def overview(g: dict, max_nodes: int = 400, max_clusters: int = 60) -> dict:
         members[c].append(n)
     nodes = {}
     for c in comms[:max_clusters]:
-        top = sorted(members[c["id"]], key=lambda n: -a["nodes"][n]["rank"])[:2]
-        names = " · ".join(str(a["nodes"][n].get("name"))[:28] for n in top)
+        files = [n for n in members[c["id"]] if a["nodes"][n].get("type") == "file"]
+        top = sorted(files or members[c["id"]], key=lambda n: -a["nodes"][n]["rank"])[:2]
+        names = " · ".join(str(a["nodes"][n].get("name")).rsplit("/", 1)[-1][:28] for n in top)
         nodes[f"cluster:{c['id']}"] = {"type": "cluster", "name": f"{names} (+{c['size'] - len(top)})" if c["size"] > len(top)
                                        else names, "size": c["size"], "cluster": c["id"]}
     if members.get("other"):
@@ -2328,6 +2334,9 @@ def overview(g: dict, max_nodes: int = 400, max_clusters: int = 60) -> dict:
 
 def community(g: dict, cluster: str, limit: int = 600) -> dict:
     """One community from the cluster map, plus the nodes it links to directly (marked `outside`)."""
+    drop = {n for n, d in g.get("nodes", {}).items() if d.get("type") == "module"}
+    g = {**g, "nodes": {n: d for n, d in g["nodes"].items() if n not in drop},
+         "edges": [e for e in g.get("edges", []) if e["src"] not in drop and e["dst"] not in drop]}
     a = analyze(g)
     if cluster == "other":
         big = {c["id"] for c in sorted(a["communities"], key=lambda c: -c["size"])[:60]}

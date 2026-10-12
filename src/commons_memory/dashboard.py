@@ -563,7 +563,12 @@ def make_handler(api: API, token: str | None):
                         g = subgraph(api.s, q["scope"], q["id"], int(q.get("depth", 2)))
                     else:
                         g = api.s.export_graph(q.get("project") or None, q.get("items", "1") == "1")
-                    return self._send(200, to_html(g), "text/html; charset=utf-8")
+                    from . import graphview
+                    if q.get("community"):  # a cluster opened from the overview
+                        g = graphview.community(g, q["community"])
+                    elif q.get("level") != "all":  # big graphs open as a cluster map (level=all forces everything)
+                        g = graphview.overview(g)
+                    return self._send(200, graphview.render(g), "text/html; charset=utf-8")
                 if u.path == "/drive/raw":
                     from .dashboard_v7 import drive_raw
                     data, mime = drive_raw(api, q)
