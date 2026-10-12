@@ -10,6 +10,12 @@ import time
 import urllib.parse
 import urllib.request
 
+# headless agent CLIs that read the wake prompt on stdin (claude flags checked against claude --help, 2026-10)
+DAEMON_PRESETS = {"claude": "claude -p --output-format text --permission-prompts none",
+                  "codex": "codex exec --skip-git-repo-check --sandbox workspace-write -",
+                  "gemini": "gemini --output-format text",
+                  "cursor": "agent -p --output-format text --trust"}
+
 CMDS = {"project-rename", "msg", "presence", "wake", "agent", "bus", "route", "drive", "sched", "mission", "breakdown"}
 
 
@@ -63,9 +69,14 @@ def add_parsers(sub) -> None:
     asub = a.add_subparsers(dest="sub", required=True)
     x = asub.add_parser("daemon")
     x.add_argument("--agent", required=True)
-    x.add_argument("--cmd", default="", help="command to spawn on wake (prompt on stdin), e.g. 'claude -p'")
+    # dest must not be "cmd": that is the top-level subcommand's dest, and overwriting it made the whole command a no-op
+    x.add_argument("--cmd", dest="agent_cmd", default="", help="command to spawn on wake (prompt on stdin), e.g. 'claude -p'")
+    x.add_argument("--preset", choices=sorted(DAEMON_PRESETS), help="agent CLI to wake: " + ", ".join(
+        f"{k} = {v}" for k, v in DAEMON_PRESETS.items()))
     x.add_argument("--url", help="remote Commons base URL (http://host:8770); default local DB")
     x.add_argument("--api-key", default=os.environ.get("COMMONS_API_KEY"))
+    x.add_argument("--api-key-file", help="read the key from this file (default ~/.commons/agents/<agent>.key when it exists)")
+    x.add_argument("--install", action="store_true", help="install and start as a login service (launchd/systemd)")
     x.add_argument("--wait", type=float, default=25)
     x.add_argument("--once", action="store_true")
     x.add_argument("--timeout", type=int, default=3600)
@@ -208,10 +219,10 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                    "with the full result" if subs else "claim_subtask() for assigned work") +
                   "; answer questions with msg_send; finish with handoff() and report_usage(). Be concise.")
         ok = True
-        if args.cmd:
-            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.cmd}")
+        if args.agent_cmd:
+            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}")
             try:
-                r = subprocess.run(shlex.split(args.cmd), input=prompt, text=True, capture_output=True, timeout=args.timeout)
+                r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True, timeout=args.timeout)
                 ok = r.returncode == 0
                 log((r.stdout or r.stderr or "")[-2000:])
             except (OSError, subprocess.TimeoutExpired) as e:
@@ -351,15 +362,27 @@ def handle(args, store) -> int:  # noqa: C901
             print(f"{a['name']:<20} {p.get('state', '?'):<9} seen {_ago(a.get('last_seen')):<10} "
                   f"tools {_agent_profile(store, a['id']) or '(default)':<12} {a.get('vendor') or ''} {a.get('model') or ''}")
     elif c == "agent":
-        if args.print_unit:
+        if args.preset and not args.agent_cmd:
+            args.agent_cmd = DAEMON_PRESETS[args.preset]
+        keyfile = args.api_key_file or os.path.join(os.environ.get("COMMONS_HOME") or os.path.expanduser("~/.commons"),
+                                                    "agents", f"{args.agent}.key")
+        if not args.api_key and args.url and os.path.exists(keyfile):
+            args.api_key = open(keyfile).read().strip()
+        if args.print_unit or args.install:
+            import platform as _pf
             from .expose import service_unit
-            unit = service_unit(args.print_unit, db=store.path)
-            daemon_args = f"agent daemon --agent {args.agent}" + (f" --cmd {shlex.quote(args.cmd)}" if args.cmd else "") + \
-                (f" --url {args.url}" if args.url else "")
-            unit = unit.replace("serve --transport http --host 127.0.0.1 --port 8765", daemon_args)
-            unit = unit.replace("Commons memory hub (MCP over HTTP)", f"Commons agent daemon for {args.agent}")
-            print(unit.replace("commons.service", f"commons-agent-{args.agent}.service"))
-            return 0
+            kind = args.print_unit or ("launchd" if _pf.system() == "Darwin" else "systemd")
+            argv = ["agent", "daemon", "--agent", args.agent, "--parallel", str(args.parallel)]
+            argv += ["--cmd", args.agent_cmd] if args.agent_cmd else []
+            argv += ["--url", args.url, "--api-key-file", keyfile] if args.url else []
+            name = f"commons-agent-{args.agent}"
+            unit = service_unit(kind, db=store.path, args=argv, name=name, harden=False,
+                                description=f"Commons agent daemon for {args.agent} (instant wake)",
+                                env={"PATH": os.environ.get("PATH", "")})
+            if not args.install:
+                print(unit)
+                return 0
+            return _install_unit(kind, name, unit)
         return daemon(args, store)
     elif c == "bus":
         _out(bus_import(store, args.url, os.environ.get(args.token_env, ""), args.agent, args.limit))
@@ -478,3 +501,24 @@ def _ago(ts) -> str:
         if d >= n:
             return f"{int(d // n)}{unit} ago"
     return "just now"
+
+
+def _install_unit(kind: str, name: str, unit: str) -> int:
+    """Write a login service for the agent daemon and start it now."""
+    if kind == "launchd":
+        path = os.path.expanduser(f"~/Library/LaunchAgents/dev.commons.{name}.plist")
+        cmds = [["launchctl", "unload", path], ["launchctl", "load", "-w", path]]
+    elif kind == "systemd":
+        path = os.path.expanduser(f"~/.config/systemd/user/{name}.service")
+        cmds = [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", name]]
+    else:
+        print(unit)
+        print("(Windows: run the commands above)", file=sys.stderr)
+        return 0
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(unit)
+    for c in cmds:
+        subprocess.run(c, capture_output=True)
+    print(f"installed {path}; the agent now wakes instantly when Commons sends it work (logs next to the database)")
+    return 0

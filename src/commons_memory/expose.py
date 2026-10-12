@@ -21,9 +21,11 @@ connection snippets (~/.commons/connect/) use the reachable URL.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -421,43 +423,48 @@ def proxy_config(kind: str, domain: str, port: int, host: str = "127.0.0.1") -> 
 """
 
 
-def service_unit(kind: str, port: int = 8765, host: str = "127.0.0.1", db: str | None = None, exe: str | None = None) -> str:
+def service_unit(kind: str, port: int = 8765, host: str = "127.0.0.1", db: str | None = None, exe: str | None = None,
+                 args: list[str] | None = None, name: str = "commons", description: str = "Commons memory hub (MCP over HTTP)",
+                 harden: bool = True, env: dict | None = None) -> str:
+    """A service definition for `commons serve` (default) or any other commons command (`args`, e.g. the agent
+    daemon, which runs an agent CLI and therefore must not be sandboxed: harden=False)."""
     exe = exe or shutil.which("commons") or f"{sys.executable} -m commons_memory"
     db = db or str(_home() / "commons.db")
-    args = f"serve --transport http --host {host} --port {port}"
+    argv = args if args is not None else ["serve", "--transport", "http", "--host", host, "--port", str(port)]
+    env = {"COMMONS_DB": db, "COMMONS_REQUIRE_KEYS": "1"} | (env or {})
+    label = "dev.commons.server" if name == "commons" else f"dev.commons.{name}"
     if kind == "systemd":
+        hard = f"NoNewPrivileges=true\nProtectSystem=strict\nReadWritePaths={Path(db).parent}\n" if harden else ""
+        envs = "".join(f"Environment={k}={v}\n" for k, v in env.items())
         return f"""[Unit]
-Description=Commons memory hub (MCP over HTTP)
+Description={description}
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
-Environment=COMMONS_DB={db}
-Environment=COMMONS_REQUIRE_KEYS=1
-ExecStart={exe} {args}
+{envs}ExecStart={exe} {" ".join(shlex.quote(a) for a in argv)}
 Restart=on-failure
 RestartSec=3
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths={Path(db).parent}
-
+{hard}
 [Install]
 WantedBy=default.target
-# install: save as ~/.config/systemd/user/commons.service ; systemctl --user enable --now commons
+# install: save as ~/.config/systemd/user/{name}.service ; systemctl --user enable --now {name}
 """
     if kind == "launchd":
-        parts = "".join(f"<string>{a}</string>" for a in [*exe.split(), *args.split()])
+        parts = "".join(f"<string>{html.escape(a)}</string>" for a in [*exe.split(), *argv])
+        envs = "".join(f"<key>{k}</key><string>{html.escape(str(v))}</string>" for k, v in env.items())
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>dev.commons.server</string>
+  <key>Label</key><string>{label}</string>
   <key>ProgramArguments</key><array>{parts}</array>
-  <key>EnvironmentVariables</key><dict><key>COMMONS_DB</key><string>{db}</string><key>COMMONS_REQUIRE_KEYS</key><string>1</string></dict>
+  <key>EnvironmentVariables</key><dict>{envs}</dict>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>{Path(db).parent}/server.log</string>
+  <key>StandardErrorPath</key><string>{Path(db).parent}/{name}.log</string>
 </dict></plist>
-<!-- install: save as ~/Library/LaunchAgents/dev.commons.server.plist ; launchctl load -w that file -->
+<!-- install: save as ~/Library/LaunchAgents/{label}.plist ; launchctl load -w that file -->
 """
+    args = " ".join(argv)
     if kind == "windows":
         return f"""REM Windows: run Commons as a service with NSSM (https://nssm.cc) or WinSW.
 nssm install Commons "{exe}" {args}

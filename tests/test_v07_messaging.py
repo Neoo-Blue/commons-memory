@@ -212,7 +212,7 @@ def test_bus_import_and_daemon(store, tmp_path):
     # daemon wakes a local CLI and acks on success
     m.send(store.ensure_agent("boss"), "worker1", "do the thing", mtype="task")
     out = tmp_path / "prompt.txt"
-    args = SimpleNamespace(agent="worker1", cmd=f"tee {out}", url=None, api_key=None, wait=0, once=True, timeout=30)
+    args = SimpleNamespace(agent="worker1", agent_cmd=f"tee {out}", url=None, api_key=None, wait=0, once=True, timeout=30)
     assert daemon(args, store, log=lambda *_: None) == 0
     assert "do the thing" in out.read_text()
     assert m.unread(store.get_agent("worker1")["id"]) == 0

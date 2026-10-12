@@ -109,6 +109,7 @@ On every task:
 3. Claim before working: `claim_subtask`, then `heartbeat` while busy, then `complete_subtask` with the full result. Reviews end with `VERDICT: approve` or `VERDICT: reject` plus the reasons. Never review your own work.
 4. Record: `record_decision` (what and why), `remember` for durable facts, `observe_preference` when I correct you. No secrets; use references like env://NAME.
 5. Before you stop: call `handoff` (summary, next steps, open questions) or `add_leftover`, then `report_usage` (tokens, model).
+To bring other agents in, call `summon` (it wakes them at once and says who is ready). Never promise to check back on a timer: if you can't run in the background, say so; new work waits in `msg_recv` for your next turn.
 No MCP? Use HTTP with the same key: GET {base}/agent/recv and POST {base}/agent/send.
 """
 
@@ -181,10 +182,11 @@ TROUBLESHOOTING = [
      "Check the host firewall allows the port, and that the URL uses an IP the client can reach (not 127.0.0.1 from another machine)."},
     {"symptom": "Tool missing / schema mismatch / 'unknown tool'", "fix": "The client cached an older tool list. Fully "
      "restart the client (or toggle the server off/on in its MCP settings) after upgrading Commons."},
-    {"symptom": "Connected but never picks up work", "fix": "Agents only see work when they ask for it. Either keep a "
-     "poller running (`commons worker --url <URL> --api-key <key> --preset claude`), or register a wake channel so Commons "
-     "pings the agent: `commons connect <name> --wake webhook:url=https://host/hook` (also ntfy, slack, telegram, email, "
-     "command). The prompt's first step (`pickup` + `msg_recv`) covers interactive chats."},
+    {"symptom": "Connected but never picks up work / says it will check every few minutes", "fix": "A chat window can't "
+     "run while idle, so it only sees work when you talk to it. For instant pickup run the agent daemon on the agent's "
+     "machine (see 'Instant wake' above): it holds an open connection and starts the agent CLI within a second of being "
+     "assigned work or summoned. Or register a wake channel so Commons pings it: `commons connect <name> --wake "
+     "ntfy:topic=...` (also webhook, slack, telegram, email, command)."},
     {"symptom": "Last seen never updates", "fix": "Run the verification command: OK means the server saw the key. If it "
      "prints FAIL with a 401 above, see the first item; if curl cannot connect, see the second."},
 ]
@@ -202,6 +204,14 @@ def bundle(platform: str, url: str, agent: str = "my-agent", key: str | None = N
               {"id": "skill", "title": "Install the Commons skill (optional, teaches the routine locally)",
                "lang": "bash", "text": skill_command(platform, agent)},
               {"id": "verify", "title": "Verify (prints OK)", "lang": "bash", "text": verify_command(url, key)}]
+    preset = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor"}.get(platform)
+    if preset:
+        base = url.rstrip("/").removesuffix("/mcp")
+        blocks.insert(1, {"id": "wake", "title": "Instant wake (recommended): starts this agent within a second whenever "
+                          "Commons assigns it work or another agent summons it",
+                          "lang": "bash", "text": f"commons agent daemon --agent {agent} --preset {preset} --url {base} "
+                          f"--install\n# the key is read from ~/.commons/agents/{agent}.key; --print-unit shows the "
+                          "service file instead of installing it"})
     return {"platform": platform, "label": label, "hint": hint, "url": url, "agent": agent, "project": project,
             "key_included": bool(key), "blocks": blocks, "troubleshooting": TROUBLESHOOTING,
             "platforms": {k: v[0] for k, v in PLATFORMS.items()}, "version": __version__}

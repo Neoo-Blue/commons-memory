@@ -16,8 +16,13 @@ def test_bundle_every_platform(plat):
     b = C.bundle(plat, "http://192.168.50.111:8770", "grok", "cmk_SECRET", "proj")
     assert b["url"] == "http://192.168.50.111:8770/mcp"
     ids = [x["id"] for x in b["blocks"]]
-    assert ids == ["config", "prompt", "skill", "verify"]
+    cli = plat in ("claude-code", "codex", "cursor", "gemini")
+    assert ids == (["config", "wake", "prompt", "skill", "verify"] if cli else ["config", "prompt", "skill", "verify"])
     txt = {x["id"]: x["text"] for x in b["blocks"]}
+    if cli:  # v0.9 instant wake: one command installs the agent daemon; the key never goes on the command line
+        assert "commons agent daemon --agent grok --preset" in txt["wake"] and "--install" in txt["wake"]
+        assert "cmk_SECRET" not in txt["wake"]
+    assert "summon" in txt["prompt"] and "timer" in txt["prompt"]
     assert (plat == "docker" or "cmk_SECRET" in txt["config"]) and "cmk_SECRET" in txt["verify"] and "cmk_SECRET" in txt["prompt"]
     assert "Your agent name: grok" in txt["prompt"] and 'project="proj"' in txt["prompt"]
     assert "http://192.168.50.111:8770/mcp" in txt["prompt"] and "/agent/recv" in txt["prompt"]
