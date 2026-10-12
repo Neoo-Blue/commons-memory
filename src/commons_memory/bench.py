@@ -194,3 +194,61 @@ def _run(name, fn, jobs, out, workers, cfg, group_key, flat=False):
 def _agg(rows):
     keys = [k for k in (rows[0] if rows else {}) if "@" in k]
     return {k: round(statistics.mean(r[k] for r in rows), 4) for k in keys}
+
+
+# ---------------------------------------------------------------------------------------------- self-check
+SELF_SYSTEM = """You write evaluation questions for a memory system. For each memory, write ONE question that a person
+would ask later, when they half-remember the topic, and that this memory answers. Paraphrase: don't copy distinctive
+phrases, names of files, or the title verbatim; ask the way someone who forgot the details would.
+Reply with JSON only: {"q":[{"i":0,"question":"..."}]} with one entry per input index."""
+SELF_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["q"], "properties": {"q": {
+    "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["i", "question"],
+                               "properties": {"i": {"type": "integer"}, "question": {"type": "string"}}}}}}
+
+
+def selfcheck(s, sample: int = 100, model: str | None = None, seed: int = 7, kinds: tuple = ("memory", "decision", "fact"),
+              log=lambda m: None) -> dict:
+    """Is this store doing its job? Sample real memories, let a model write a paraphrased question each one answers,
+    and measure whether search ranks that memory first / in the top 5 / top 10 (known-item retrieval on your own data).
+    The summary is kept in meta 'selfcheck:last' for the dashboard."""
+    import random
+    from .providers import ProviderLayer
+    from .store import CommonsError
+    pl = ProviderLayer(s)
+    model = model or pl.role_model("curator") or pl.role_model("grader")
+    if not model:
+        raise CommonsError("self-check needs a model: --model provider/model or set the curator role")
+    ids = [r["id"] for r in s.q(f"SELECT id FROM items WHERE kind IN ({','.join('?' * len(kinds))}) AND superseded_by IS NULL "
+                                f"AND length(content) > 40 ORDER BY id", list(kinds))]
+    pick = random.Random(seed).sample(ids, min(sample, len(ids)))
+    items = [dict(r) for i in pick for r in s.q("SELECT id, kind, project_id, title, content FROM items WHERE id=?", (i,))]
+    rows, cost = [], 0.0
+    for b in range(0, len(items), 20):
+        chunk = items[b:b + 20]
+        payload = [{"i": n, "title": it["title"], "memory": it["content"][:900]} for n, it in enumerate(chunk)]
+        try:
+            r = pl.chat(model, json.dumps(payload, ensure_ascii=False), system="ROLE: grader.", cache_prefix=SELF_SYSTEM,
+                        max_tokens=120 * len(chunk) + 600, role="grader", effort="minimal", schema=SELF_SCHEMA)
+            qs = {q["i"]: q["question"] for q in json.loads(r["text"])["q"]}
+            cost += r.get("cost", 0)
+        except Exception as e:  # noqa: BLE001
+            log(f"question batch failed: {str(e)[:160]}")
+            continue
+        for n, it in enumerate(chunk):
+            q = qs.get(n)
+            if not q:
+                continue
+            ranked, _, _ = s.rank(q, limit=10)
+            pos = (ranked or []).index(it["id"]) + 1 if it["id"] in (ranked or []) else None
+            rows.append({"id": it["id"], "kind": it["kind"], "question": q, "rank": pos})
+        log(f"{len(rows)}/{len(items)} questions scored")
+
+    def agg(rs):
+        m = len(rs) or 1
+        return {"n": len(rs), **{f"hit@{k}": round(sum(1 for r in rs if r["rank"] and r["rank"] <= k) / m, 3) for k in (1, 5, 10)},
+                "mrr": round(sum(1 / r["rank"] for r in rs if r["rank"]) / m, 3)}
+    out = {"model": model, "sample": len(rows), "items_in_store": len(ids), "cost": round(cost, 4), **agg(rows),
+           "by_kind": {k: agg([r for r in rows if r["kind"] == k]) for k in sorted({r["kind"] for r in rows})},
+           "misses": [r for r in rows if not r["rank"]][:15], "ts": time.time()}
+    s.x("INSERT OR REPLACE INTO meta VALUES('selfcheck:last', ?)", (json.dumps({k: v for k, v in out.items() if k != "misses"}),))
+    return out
