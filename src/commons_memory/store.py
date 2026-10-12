@@ -737,6 +737,9 @@ class Store:
             self.relate(tid, from_agent, "requested_by")
         if to_id != "*":
             self.relate(tid, to_id, "assigned_to")
+            from .messaging import emit
+            emit(self, to_id, {"notification": "escalation", "handoff": "handoff"}.get(kind, "inbox"), ref=tid, preview=body,
+                 sender=self.label(from_agent)[1] if from_agent else None)
         for c in context_ids or []:
             if self._exists(c):
                 self.relate(tid, c, "context")

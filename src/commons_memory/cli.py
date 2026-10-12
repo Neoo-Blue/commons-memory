@@ -353,6 +353,11 @@ def _main(argv: list[str] | None = None) -> int:
                    help="do not redact the secret value from the command's stdout/stderr")
     x.add_argument("command", nargs="*")
     sub.add_parser("stats")
+    cn.add_argument("--wake", action="append", default=[],
+                    help="wake channel KIND:key=value,key=value (repeatable), e.g. webhook:url=https://host/hook, "
+                         "ntfy:topic=my-agent, command:claude -p")
+    from .cli_v7 import CMDS as V7, add_parsers as v7_parsers, handle as v7_handle
+    v7_parsers(sub)
     args = p.parse_args(argv)
 
     if args.cmd == "serve":
@@ -398,6 +403,8 @@ def _main(argv: list[str] | None = None) -> int:
 
     from .store import Store
     store = Store(args.db)
+    if args.cmd in V7:
+        return v7_handle(args, store)
     if args.cmd == "init":
         print(f"Commons database ready at {store.path} (embedder: {store.stats()['embedder']})\n")
         from .expose import reachable_url
@@ -596,6 +603,14 @@ def _main(argv: list[str] | None = None) -> int:
                             cost=args.cost, speed=args.speed, availability="online",
                             max_concurrent=args.max_concurrent, platform=args.platform)
         path = save_key(args.agent, reg["api_key"])
+        if args.wake:
+            from .messaging import Channels
+            for spec in args.wake:
+                kind, _, rest = spec.partition(":")
+                cfg = {"cmd": rest} if kind == "command" else dict(kv.split("=", 1) for kv in rest.split(",") if "=" in kv)
+                r = Channels(store).add(reg["id"], kind, cfg, local_owner=True)
+                print(f"wake channel {kind} added ({r['id']})"
+                      + (f"; signing secret (shown once): {r['secret']}" if r.get("secret") else ""))
         print(f"registered {args.agent} ({reg['id']}); api key saved to {path} (chmod 600)")
         if not args.no_install and args.platform in ("claude-code", "claude-desktop", "cursor", "codex", "chatgpt",
                                                      "grok", "muse", "generic"):

@@ -186,6 +186,15 @@ def _v5(db):
     add_columns(db)
     from .retro import SCHEMA_V6
     db.executescript(SCHEMA_V6)
+    from .messaging import SCHEMA_V7
+    db.executescript(SCHEMA_V7)
+    from .routing import SCHEMA as ROUTING_SCHEMA
+    db.executescript(ROUTING_SCHEMA)
+    from .drive import SCHEMA as DRIVE_SCHEMA
+    db.executescript(DRIVE_SCHEMA)
+    from .scheduler import SCHEMA as SCHED_SCHEMA, add_columns as sched_columns
+    db.executescript(SCHED_SCHEMA)
+    sched_columns(db)
 
 
 _v4e_migrate = migrate

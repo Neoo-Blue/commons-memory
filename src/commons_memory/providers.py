@@ -29,7 +29,7 @@ KINDS = {
     "ollama": "http://127.0.0.1:11434",
     "mock": "mock://",
 }
-ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro"]
+ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro", "difficulty"]
 TASK_TYPES = ["research", "plan", "code", "review", "red_team", "test", "summarize", "debate", "judge", "general"]
 
 # Small, cheap, automatically checkable probes per task type.
@@ -215,10 +215,20 @@ class ProviderLayer:
 
     # ------------------------------------------------------------------ chat
     def chat(self, model_id: str, prompt: str, system: str = "", max_tokens: int = 1024, role: str = "",
-             agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "") -> dict:
+             agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "",
+             effort: dict | str | None = None) -> dict:
+        """effort: a level ("minimal|low|medium|high|max") or a dict from routing.effort_spec(); mapped to the
+        provider's native knob (Anthropic thinking budget, OpenAI/xAI reasoning_effort, Gemini thinkingBudget,
+        OpenRouter reasoning.effort, Ollama think)."""
         from .telemetry import span
+        if isinstance(effort, str):
+            from .routing import effort_spec
+            effort = effort_spec(effort)
         with span("llm.chat", model=model_id, role=role or "chat", job=job_id) as sp:
+            self._effort = effort
             out = self._chat(model_id, prompt, system, max_tokens, role, agent_id, job_id, cache_prefix)
+            if effort and isinstance(out, dict):
+                out["effort"] = effort.get("level")
             if sp is not None and isinstance(out, dict):
                 for k in ("tokens_in", "tokens_out", "cached_tokens"):
                     sp.set_attribute(f"commons.{k}", int(out.get(k) or 0))
@@ -234,6 +244,12 @@ class ProviderLayer:
         p = self._p(provider)
         prompt, _ = redact(prompt)  # never ship secrets to a model
         kind, base = p["kind"], p["base_url"].rstrip("/")
+        from .routing import provider_params
+        eff = getattr(self, "_effort", None)
+        xp = provider_params(kind, model, eff) if eff else {}
+        if eff and eff.get("max_tokens"):
+            max_tokens = max(max_tokens, int(eff["max_tokens"]))
+        self.last_request_params = xp
         if kind == "mock":
             text = _mock_chat(json.loads(p["config"] or "{}"), model, system, cache_prefix + prompt)
             tin, tout = len(system + cache_prefix + prompt) // 4, len(text) // 4
@@ -246,9 +262,11 @@ class ProviderLayer:
         elif kind == "anthropic":
             sysblocks = ([{"type": "text", "text": system}] if system else []) + \
                 ([{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}] if cache_prefix else [])
-            r = _http("POST", f"{base}/v1/messages", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"},
-                      {"model": model, "max_tokens": max_tokens, "system": sysblocks or None,
-                       "messages": [{"role": "user", "content": prompt}]})
+            body = {"model": model, "max_tokens": max_tokens, "system": sysblocks or None,
+                    "messages": [{"role": "user", "content": prompt}]}
+            if xp.get("thinking"):  # budget must fit inside max_tokens
+                body["max_tokens"] = max_tokens + xp["thinking"]["budget_tokens"]
+            r = _http("POST", f"{base}/v1/messages", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}, body | xp)
             text = "".join(c.get("text", "") for c in r.get("content", []))
             u = r.get("usage", {})
             cached = u.get("cache_read_input_tokens", 0) or 0
@@ -256,7 +274,7 @@ class ProviderLayer:
         elif kind == "google":
             r = _http("POST", f"{base}/models/{model}:generateContent?key={self._key(p)}",
                       body={"contents": [{"parts": [{"text": (system + "\n\n" if system else "") + cache_prefix + prompt}]}],
-                            "generationConfig": {"maxOutputTokens": max_tokens}})
+                            "generationConfig": {"maxOutputTokens": max_tokens} | xp.get("generationConfig", {})})
             text = "".join(pt.get("text", "") for c in r.get("candidates", [])[:1] for pt in c["content"]["parts"])
             u = r.get("usageMetadata", {})
             tin, tout = u.get("promptTokenCount", 0), u.get("candidatesTokenCount", 0)
@@ -265,8 +283,11 @@ class ProviderLayer:
             key = self._key(p)
             msgs = ([{"role": "system", "content": system}] if system else []) + \
                 ([{"role": "system", "content": cache_prefix}] if cache_prefix else []) + [{"role": "user", "content": prompt}]
-            r = _http("POST", url, {"Authorization": f"Bearer {key}"} if key else {},
-                      {"model": model, "messages": msgs, "max_tokens": max_tokens})
+            body = {"model": model, "messages": msgs, "max_tokens": max_tokens} | xp
+            if kind == "openai" and "reasoning_effort" in body:  # reasoning models take max_completion_tokens, no temperature
+                body["max_completion_tokens"] = body.pop("max_tokens")
+                body.pop("temperature", None)
+            r = _http("POST", url, {"Authorization": f"Bearer {key}"} if key else {}, body)
             text = r["choices"][0]["message"]["content"] or ""
             tin, tout = r.get("usage", {}).get("prompt_tokens", 0), r.get("usage", {}).get("completion_tokens", 0)
             cached = ((r.get("usage", {}).get("prompt_tokens_details") or {}).get("cached_tokens") or 0)

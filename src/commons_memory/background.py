@@ -21,9 +21,9 @@ from .store import Store
 
 INTERVALS = {  # seconds (env COMMONS_EVERY_<NAME> overrides)
     "recurring": 30, "reap": 30, "escalate": 60, "kb": 5, "librarian": 600, "models": 3600, "routing_validate": 3600,
-    "discovery": 86400, "prune": 86400, "backup": 86400,
+    "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3,
 }
-LIGHT = ("kb", "librarian", "reap")
+LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push")
 
 
 def _every(name: str) -> float:
@@ -88,6 +88,17 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
         n = Broker(s).reap_expired()
         return (r or []) + ([{"dynamic_leases_revoked": n}] if n else [])
     run("reap", reap)
+
+    def wake():
+        from .messaging import Dispatcher
+        r = Dispatcher.run_due(s)
+        return r if any(r.values()) else None
+    run("wake", wake)
+
+    def a2a_push():
+        from .a2a_server import push_due
+        return push_due(s) or None
+    run("a2a_push", a2a_push)
 
     def esc():
         from .escalation import Escalator

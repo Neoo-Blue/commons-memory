@@ -77,6 +77,10 @@ class Profiles:
         self.s.x("INSERT INTO outcomes(agent_id,task_type,success,rating,subtask_id,tokens,seconds,note,created_at)"
                  " VALUES(?,?,?,?,?,?,?,?,?)", (agent_id, task_type, int(bool(success)), rating, subtask_id, tokens,
                                                 seconds, note, now()))
+        if subtask_id:
+            from .routing import Router
+            oc = {"gate rejected": "rejected", "lease timeout": "timeout"}.get(note, "success" if success else "failed")
+            Router(self.s).record_outcome(subtask_id, oc, rating)
         if subtask_id and note in ("gate rejected", "gates passed", "lease timeout"):
             # real task outcome -> learned model score (feeds routing + post-switch A/B validation)
             m = self.s.q("SELECT model FROM usage WHERE subtask_id=? AND model IS NOT NULL ORDER BY ts DESC LIMIT 1",
@@ -242,7 +246,7 @@ class Orchestrator:
             self.s.relate(jid, cp, "uses_context")
         pid = self.s.project_id(project)
         budget = budget or {}
-        self.s.x("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self.s.x("INSERT INTO jobs(id,title,body,pattern,project_id,submitted_by,status,budget,used,result,recurring_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (jid, title or task.strip().splitlines()[0][:120], task, pattern, pid, agent_id, "running",
                   _j(budget), _j({"tokens": 0, "seconds": 0.0, "cost": 0.0}), None, recurring_id, now(), now()))
         ids = {d["key"]: new_id("sub") for d in dag}
@@ -350,10 +354,17 @@ class Orchestrator:
             if route:  # distributor's routing table nudges allocation
                 ranked = [(sc + (0.3 if a["id"] == route["agent_id"] else 0), a) for sc, a in ranked]
             pen = 1.0 if st["type"] in ("debate", "vote") else 0.3
-            best = max(ranked, key=lambda x: x[0] - pen * siblings.count(x[1]["id"]) - 0.1 * used.get(x[1]["id"], 0))
+            adj = [(sc - pen * siblings.count(a["id"]) - 0.1 * used.get(a["id"], 0), a) for sc, a in ranked]
+            from .routing import Router
+            job = self.s.q("SELECT * FROM jobs WHERE id=?", (job_id,))
+            picked = Router(self.s).choose(st, adj, dict(job[0]) if job else None)
+            best = (0, picked[0]) if picked else max(adj, key=lambda x: x[0])
             used[best[1]["id"]] = used.get(best[1]["id"], 0) + 1
             self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (best[1]["id"], st["id"]))
             self.s.relate(st["id"], best[1]["id"], "assigned_to")
+            from .messaging import emit
+            emit(self.s, best[1]["id"], "review" if st["gate_of"] or st["type"] == "review" else "task",
+                 ref=st["id"], preview=st["title"], job=job_id, subtask=st["id"])
 
     # ---------------------------------------------------------------- claims
     def claimable(self, agent_id: str, limit: int = 10) -> list[dict]:
@@ -362,6 +373,8 @@ class Orchestrator:
             "SELECT s.* FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.status='pending' AND j.status='running' "
             "AND s.type<>'tally' AND (s.assigned_agent=? OR s.assigned_agent IS NULL) "
             "ORDER BY s.priority DESC, s.created_at", (agent_id,))]
+        from .scheduler import Scheduler
+        rows = Scheduler(self.s).order(rows)  # priorities, fair share, project limits/budgets, job deps, pauses
         out = []
         for st in rows:
             if agent_id in json.loads(st["excluded_agents"] or "[]") or agent_id in self._author_of_chain(st):
@@ -386,6 +399,11 @@ class Orchestrator:
                 cands = [c for c in cands if c["id"] == subtask_id]
             if not cands:
                 return None
+            if not subtask_id:  # per-agent capacity (profile max_concurrent; agents work several subtasks in parallel)
+                prof = json.loads((self.s.q("SELECT profile FROM agents WHERE id=?", (agent_id,)) or [{"profile": "{}"}])[0]["profile"] or "{}")
+                cap = int(prof.get("max_concurrent") or os.environ.get("COMMONS_AGENT_DEFAULT_CAPACITY", 4))
+                if self.profiles.load(agent_id) >= cap:
+                    return None
             st = cands[0]
             job = self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0]
             if self._over_budget(job):
@@ -424,6 +442,10 @@ class Orchestrator:
         if route and agent_id:
             own = {r["model_id"] for r in self.s.q("SELECT model_id FROM agent_models WHERE agent_id=?", (agent_id,))}
             model = route["model_id"] if route["model_id"] in own or not own else sorted(own)[0]
+        from .routing import Router
+        target = Router(self.s).current(st["id"])
+        if target and target["model"]:
+            model = target["model"]
         skills = SkillPool(self.s).suggest(f"{st['type']} {st['title']}")
         ctx = None
         cpr = self.s.q("SELECT value FROM meta WHERE key=?", (f"job_ctx:{job['id']}",))
@@ -432,7 +454,9 @@ class Orchestrator:
             ld = ContextStore(self.s).load(cpr[0]["value"], "L1", 1500, model, agent_id=agent_id)
             ctx = {"pack_id": ld["pack_id"], "layer": ld["layer"], "tokens": ld["tokens"], "prefix": ld["prefix"] or ld["text"],
                    "hint": f"context_load('{ld['pack_id']}', layer='L2'|'L3') for more"}
-        return {"context": ctx, "model": model, "skills": [f"{x['name']}: {x['description'][:80]}" for x in skills],
+        return {"context": ctx, "model": model, "effort": (target or {}).get("effort"),
+                "routing": {k: target[k] for k in ("decision_id", "difficulty", "mode", "rationale")} if target else None,
+                "skills": [f"{x['name']}: {x['description'][:80]}" for x in skills],
                 "subtask_id": st["id"], "job_id": job["id"], "job_title": job["title"], "type": st["type"],
                 "title": st["title"], "instructions": st["body"], "attempt": st["attempts"],
                 "lease_expires": iso(st["lease_expires"]), "budget": json.loads(st["budget"] or "{}"),

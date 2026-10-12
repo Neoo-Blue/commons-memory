@@ -306,6 +306,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v4(mcp, store, who)
     from .server_v5 import register_v5
     register_v5(mcp, store, who)
+    from .server_v7 import register_v7
+    register_v7(mcp, store, who)
     from .telemetry import instrument_mcp
     instrument_mcp(mcp)
     return mcp
@@ -334,6 +336,9 @@ def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db:
     inner = server.streamable_http_app()
     if os.environ.get("COMMONS_A2A", "1") == "1":
         inner = _lifespan_mount(inner, build_app(store, public))
+    from .agent_http import build_app as build_agent_app
+    from .agent_http import mount as mount_agent
+    inner = mount_agent(inner, build_agent_app(store))
     app = AuthMiddleware(inner, store, resource_url=public)
     ssl = {}
     if os.environ.get("COMMONS_TLS_CERT"):

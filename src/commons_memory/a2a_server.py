@@ -13,6 +13,7 @@ Inbound text is redacted and treated as an untrusted task description. Message m
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import uuid
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ def agent_card(base_url: str, version: str = "") -> dict:
             "description": "Shared memory + multi-agent orchestration hub. Send a task; Commons decomposes it and "
                            "routes it across connected agents with review gates, then returns the merged result.",
             "url": base_url.rstrip("/") + "/a2a", "preferredTransport": "JSONRPC",
-            "capabilities": {"streaming": True, "pushNotifications": False, "stateTransitionHistory": True},
+            "capabilities": {"streaming": True, "pushNotifications": True, "stateTransitionHistory": True},
             "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
             "securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}, "security": [{"bearer": []}],
             "skills": [{"id": "orchestrate", "name": "Orchestrate a task",
@@ -168,8 +169,22 @@ def build_app(store: Store, base_url: str = "http://127.0.0.1:8765", poll: float
                                      "result": await asyncio.to_thread(svc.task, params["id"], params.get("historyLength"))})
             if method == "tasks/cancel":
                 return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": await asyncio.to_thread(svc.cancel, params["id"])})
-            if method in ("tasks/pushNotificationConfig/set", "tasks/pushNotificationConfig/get"):
-                return JSONResponse(_rpc_err(rid, -32003, "push notifications not supported"))
+            if method == "tasks/pushNotificationConfig/set":
+                from .messaging import check_url
+                tid = params.get("taskId") or params.get("id")
+                cfg = params.get("pushNotificationConfig") or {}
+                await asyncio.to_thread(svc.task, tid)  # KeyError -> task not found
+                check_url(cfg.get("url", ""))  # allowlist + SSRF checks (raises CommonsError)
+                store.x("INSERT OR REPLACE INTO a2a_push(task_id,url,token,last_state,caller,updated_at) VALUES(?,?,?,?,?,?)",
+                        (tid, cfg["url"], cfg.get("token"), None, caller, time.time()))
+                return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {"taskId": tid, "pushNotificationConfig":
+                                                                             {"url": cfg["url"]}}})
+            if method == "tasks/pushNotificationConfig/get":
+                r = store.q("SELECT url FROM a2a_push WHERE task_id=?", (params.get("id") or params.get("taskId"),))
+                if not r:
+                    raise KeyError("no config")
+                return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {"taskId": params.get("id") or params.get("taskId"),
+                                                                             "pushNotificationConfig": {"url": r[0]["url"]}}})
             return JSONResponse(_rpc_err(rid, -32601, f"method not found: {method}"))
         except KeyError:
             return JSONResponse(_rpc_err(rid, -32001, "task not found"))
@@ -188,3 +203,30 @@ def mount(mcp_app, a2a_app):
             return await a2a_app(scope, receive, send)
         return await mcp_app(scope, receive, send)
     return app
+
+
+def push_due(store: Store) -> list[dict]:
+    """Background job: POST the task to each registered push URL when its state changed (A2A push notifications)."""
+    from .messaging import http_post
+    svc = A2AService(store)
+    out = []
+    for r in store.q("SELECT * FROM a2a_push"):
+        try:
+            t = svc.task(r["task_id"])
+        except KeyError:
+            store.x("DELETE FROM a2a_push WHERE task_id=?", (r["task_id"],))
+            continue
+        st = t["status"]["state"]
+        if st == r["last_state"]:
+            continue
+        h = {"Content-Type": "application/json"} | ({"X-A2A-Notification-Token": r["token"]} if r["token"] else {})
+        try:
+            code = http_post(r["url"], json.dumps(t).encode(), h)
+            ok = 200 <= code < 300
+        except Exception as e:  # noqa: BLE001
+            ok, code = False, str(e)[:100]
+        if ok:
+            store.x("UPDATE a2a_push SET last_state=?, updated_at=? WHERE task_id=?", (st, time.time(), r["task_id"]))
+        out.append({"task": r["task_id"], "state": st, "ok": ok, "code": code})
+    return out
+

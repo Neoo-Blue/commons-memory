@@ -154,6 +154,34 @@ class OAuthVerifier:
 
 
 # ---------------------------------------------------------------------------- ASGI middleware
+_QUERY_TOKEN_PATHS = ("/bus/", "/agent/")  # clients that can't set headers (EventSource, WebSocket, bus scripts)
+_last_touch: dict[str, float] = {}
+
+
+def _token(scope, hdrs: dict) -> str:
+    tok = hdrs.get("authorization", "")
+    if tok.lower().startswith("bearer "):
+        return tok[7:].strip()
+    tok = hdrs.get("x-api-key") or hdrs.get("x-bridge-token") or ""  # X-Bridge-Token: agent-bus compatibility
+    if not tok and scope.get("path", "").startswith(_QUERY_TOKEN_PATHS):
+        q = urllib.parse.parse_qs((scope.get("query_string") or b"").decode())
+        tok = (q.get("token") or [""])[0]
+    return tok
+
+
+def _touch(store, principal: str) -> None:
+    """Any authenticated request is a presence heartbeat (throttled to one write per 20 s per agent)."""
+    t = time.time()
+    if t - _last_touch.get(principal, 0) < 20 or principal.startswith("anon"):
+        return
+    _last_touch[principal] = t
+    try:
+        from .messaging import heartbeat
+        heartbeat(store, principal, client="http")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class AuthMiddleware:
     """Wraps the MCP streamable-HTTP ASGI app."""
 
@@ -173,19 +201,22 @@ class AuthMiddleware:
         await send({"type": "http.response.body", "body": body})
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
+        if scope["type"] == "websocket":
+            return await self._ws(scope, receive, send)
         if path == "/.well-known/oauth-protected-resource":
             meta = {"resource": self.resource_url or "commons", "bearer_methods_supported": ["header"],
                     "authorization_servers": [self.oauth.issuer] if self.oauth.issuer else [],
                     "resource_documentation": "https://github.com/Neoo-Blue/commons-memory#security-model"}
             return await self._send_json(send, 200, meta)
+        if path == "/bus/health":
+            return await self.app(scope, receive, send)
         if path.startswith("/.well-known/agent"):  # A2A agent card is public discovery metadata
             return await self.app(scope, receive, send)
         hdrs = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-        tok = hdrs.get("authorization", "")
-        tok = tok[7:].strip() if tok.lower().startswith("bearer ") else (hdrs.get("x-api-key") or "")
+        tok = _token(scope, hdrs)
         principal = None
         if "cf-ray" in hdrs:  # arrived through Cloudflare (cloudflared adds it; clients can't strip it)
             from .expose import CloudflareAccess
@@ -217,7 +248,32 @@ class AuthMiddleware:
         key = principal or f"ip:{(scope.get('client') or ['?'])[0]}"
         if not self.limiter.allow(key):
             return await self._send_json(send, 429, {"error": "rate limited"}, [(b"retry-after", b"5")])
+        if principal:
+            _touch(self.s, principal)
         tok_ctx = PRINCIPAL.set(principal or ANON)
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            PRINCIPAL.reset(tok_ctx)
+
+    async def _ws(self, scope, receive, send):
+        """WebSockets authenticate before accept (Authorization/X-Api-Key header or ?token= on /agent/ paths)."""
+        hdrs = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        tok = _token(scope, hdrs)
+        a = self.s.authenticate(tok) if tok else None
+        principal = a["id"] if a else None
+        if not principal and tok:
+            info = self.oauth.verify(tok)
+            principal = self.oauth.principal(info) if info else None
+        if not principal:
+            msg = await receive()  # websocket.connect
+            if msg.get("type") == "websocket.connect":
+                return await send({"type": "websocket.close", "code": 4401})
+            return
+        if not self.limiter.allow(principal):
+            await receive()
+            return await send({"type": "websocket.close", "code": 4429})
+        tok_ctx = PRINCIPAL.set(principal)
         try:
             return await self.app(scope, receive, send)
         finally:
