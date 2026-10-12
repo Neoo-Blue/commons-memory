@@ -83,7 +83,9 @@ def _srv(s, host="127.0.0.1", token=None):
 
 
 def _post(url, body, hdrs=None):
-    req = urllib.request.Request(url, json.dumps(body).encode(), {"X-Commons": "1", "Content-Type": "application/json", **(hdrs or {})})
+    # rejected requests are sent without a body: the server answers 401/403 before reading it, and macOS resets
+    # the connection when unread request data is left in the socket
+    req = urllib.request.Request(url, json.dumps(body).encode() if body is not None else b"", {"X-Commons": "1", "Content-Type": "application/json", **(hdrs or {})})
     try:
         return 200, json.loads(urllib.request.urlopen(req).read())
     except urllib.error.HTTPError as e:
@@ -115,8 +117,8 @@ def test_dashboard_key_creation_gated(tmp_path, monkeypatch):
     viewer = add_dashboard_user(s, "v", "viewer")["token"]
     srv, base = _srv(s, token="admintok")
     try:
-        assert _post(base + "/api/connect/key", {"name": "a"})[0] == 401
-        assert _post(base + "/api/connect/key", {"name": "a"}, {"Authorization": "Bearer " + viewer})[0] == 403
+        assert _post(base + "/api/connect/key", None)[0] == 401
+        assert _post(base + "/api/connect/key", None, {"Authorization": "Bearer " + viewer})[0] == 403
         code, r = _post(base + "/api/connect/key", {"name": "a"}, {"Authorization": "Bearer admintok"})
         assert code == 200 and r["api_key"]
     finally:
