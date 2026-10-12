@@ -70,12 +70,16 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
 
     # ---------------------------------------------------------------- memory
     @mcp.tool()
-    def remember(content: str, title: str = "", project: str = "", tags: list[str] | None = None,
+    def remember(content: str = "", title: str = "", project: str = "", tags: list[str] | None = None,
                  entities: list[str] | None = None, kind: str = "memory", related_ids: list[str] | None = None,
                  subject: str = "", predicate: str = "", value: str = "", session_id: str = "",
-                 agent: str = "", api_key: str = "") -> str:
-        """Store a memory (note, observation, fact). For facts give subject/predicate/value to enable conflict
-        detection. entities: names or ids to link in the graph. Secrets are auto-redacted; store refs like env://X."""
+                 text: str = "", agent: str = "", api_key: str = "") -> str:
+        """Store a memory (note, observation, fact). `content` is the text (`text` is accepted as an alias).
+        For facts give subject/predicate/value to enable conflict detection. entities: names or ids to link in the
+        graph. Secrets are auto-redacted; store refs like env://X."""
+        content = content or text
+        if not content.strip():
+            raise CommonsError("remember needs `content` (the memory text; `text` also works)")
         aid, auth = who(agent, api_key)
         return _fmt(store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
                                    entities=entities, related_ids=related_ids, subject=subject or None,
@@ -189,11 +193,15 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
 
     # ---------------------------------------------------------------- reasoning
     @mcp.tool()
-    def record_decision(what: str, why: str, alternatives: list[str] | None = None, evidence: list[str] | None = None,
+    def record_decision(what: str = "", why: str = "", alternatives: list[str] | None = None, evidence: list[str] | None = None,
                         project: str = "", session_id: str = "", related_ids: list[str] | None = None,
                         entities: list[str] | None = None, tags: list[str] | None = None,
-                        agent: str = "", api_key: str = "") -> str:
-        """Log a decision with rationale so other AIs can later ask why(). Link code/memory ids via related_ids."""
+                        decision: str = "", rationale: str = "", agent: str = "", api_key: str = "") -> str:
+        """Log a decision (`what`, alias `decision`) with its rationale (`why`, alias `rationale`) so other AIs can
+        later ask why(). Link code/memory ids via related_ids."""
+        what, why = what or decision, why or rationale
+        if not what.strip() or not why.strip():
+            raise CommonsError("record_decision needs `what` (alias `decision`) and `why` (alias `rationale`)")
         aid, _ = who(agent, api_key)
         return _fmt(store.record_decision(what, why, alternatives, aid, project or None, session_id or None,
                                           related_ids, evidence, entities, tags), "json")

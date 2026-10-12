@@ -107,3 +107,17 @@ def test_header_only_auth_updates_last_seen(store):
     finally:
         PRINCIPAL.reset(tok)
     assert store.q("SELECT last_seen FROM agents WHERE id=?", (aid,))[0]["last_seen"] > 0
+
+
+def test_remember_and_decision_aliases(store):
+    import asyncio
+    import pytest
+    from commons_memory.server import build_server
+    srv = build_server(store)
+    run = lambda t, a: asyncio.run(srv.call_tool(t, {**a, "agent": "x"}))
+    run("remember", {"text": "alias text works"})
+    assert store.search("alias text works")["results"]
+    run("record_decision", {"decision": "use aliases", "rationale": "agents guess field names"})
+    assert "agents guess" in store.why("use aliases")["text"]
+    with pytest.raises(Exception, match="needs `content`"):
+        run("remember", {})
