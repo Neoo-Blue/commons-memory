@@ -309,3 +309,120 @@ def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto",
     finally:
         _cleanup(d)
     return out
+
+
+# ---------------------------------------------------------------------------------------------- end-to-end QA
+QA_READER = """You are a memory assistant answering questions about two people's past conversations from retrieved
+memories. Each memory starts with its date. Read all of them; when memories conflict, prefer the most recent. Resolve
+relative times ("yesterday", "last week") against the memory's date and answer with the actual date or period. When
+the answer is implied rather than stated (a likely preference, an inference from what they said), give your best
+inference. Answer in at most one short sentence, no explanation. Say "I don't know" only when nothing relevant was
+retrieved."""
+QA_JUDGE = """You grade answers for a long-term memory benchmark. Given a question, the gold answer and a generated
+answer, label the generated answer CORRECT or WRONG. Be generous: if it states the same fact as the gold answer
+(same entity, number, or the same date / time period even in another format or with extra words), it is CORRECT.
+It is WRONG if it contradicts the gold answer, misses the key fact, or says it doesn't know.
+Reply with JSON only: {"verdict":"CORRECT"} or {"verdict":"WRONG"}."""
+QA_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict"],
+             "properties": {"verdict": {"type": "string", "enum": ["CORRECT", "WRONG"]}}}
+
+
+def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label):
+    from .ids import iso
+    ids, _, _ = s.rank(question, limit=k, as_of=as_of)
+    ctx = []
+    for i in ids or []:
+        r = s.q("SELECT content, created_at FROM items WHERE id=?", (i,))
+        if r:
+            ctx.append(f"[{iso(r[0]['created_at'])[:10]}] {r[0]['content'][:700]}")
+    prompt = f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
+    a = pl.chat(model, prompt, system="ROLE: reader.", cache_prefix=QA_READER, max_tokens=200, role="grader")
+    answer = (a["text"] or "").strip()
+    j = pl.chat(judge, f"Question: {question}\nGold answer: {gold}\nGenerated answer: {answer}", system="ROLE: grader.",
+                cache_prefix=QA_JUDGE, max_tokens=60, role="grader", schema=QA_SCHEMA)
+    try:
+        ok = json.loads(re.search(r"\{.*\}", j["text"], re.S).group(0))["verdict"] == "CORRECT"
+    except (AttributeError, ValueError, KeyError):
+        ok = "CORRECT" in (j["text"] or "").upper() and "WRONG" not in (j["text"] or "").upper()
+    return answer, ok, a.get("cost", 0) + j.get("cost", 0)
+
+
+def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str | None = None, k: int = 20,
+       limit: int | None = None, workers: int = 8, embedder: str = "auto", seed: int = 7, log=lambda m: None) -> dict:
+    """End-to-end answer accuracy (LLM reader + LLM judge), the metric mem0/Zep publish. LoCoMo: categories 1-4
+    (adversarial category 5 excluded, as in the mem0 paper). LongMemEval-S: a seeded random sample of `limit`
+    questions (each needs its own embedded haystack). Retrieval is the same Store.rank behind search()."""
+    import random
+    from concurrent.futures import ThreadPoolExecutor
+    from .providers import ProviderLayer
+    pl, judge = ProviderLayer(llm_store), judge or model
+    os.environ["COMMONS_TRUST_WEIGHTING"] = "0"
+    rows, cost = [], 0.0
+    if suite == "locomo":
+        convs = json.load(open(data_path))[: limit or None]
+        for conv in convs:
+            s, d = _store(embedder)
+            try:
+                c, turn = conv["conversation"], 0
+                n = 1
+                while f"session_{n}" in c:
+                    ts = _locomo_date(c.get(f"session_{n}_date_time", ""))
+                    for t in c[f"session_{n}"]:
+                        s.add_item("note", f"{t['speaker']}: {t['text']}" + (f" [shares image: {t['blip_caption']}]"
+                                   if t.get("blip_caption") else ""), created_at=ts)
+                        turn += 1
+                    n += 1
+                s.reindex()
+                ref = max(_locomo_date(c.get(f"session_{i}_date_time", "")) for i in range(1, n)) + 86400
+                qs = [q for q in conv["qa"] if q.get("category") in (1, 2, 3, 4) and "answer" in q]
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    res = list(ex.map(lambda q: _qa_one(pl, model, judge, s, q["question"], q["answer"], ref, k,
+                                                        time.strftime("%d %B %Y", time.gmtime(ref))), qs))
+                for q, (ans, ok, c_) in zip(qs, res):
+                    rows.append({"id": conv["sample_id"], "type": f"cat{q['category']}", "q": q["question"],
+                                 "gold": str(q["answer"]), "answer": ans, "correct": int(ok)})
+                    cost += c_
+                log(f"{conv['sample_id']}: {sum(r['correct'] for r in rows)}/{len(rows)} correct so far, ${cost:.2f}")
+            finally:
+                _cleanup(d)
+    else:
+        data = json.load(open(data_path))
+        data = random.Random(seed).sample(data, min(limit or len(data), len(data)))
+
+        def one(q):
+            s, d = _store(embedder)
+            try:
+                for sid, date, sess in zip(q["haystack_session_ids"], q["haystack_dates"], q["haystack_sessions"]):
+                    ts = _lme_date(date)
+                    for i, t in enumerate(sess):
+                        if t["role"] != "user":
+                            continue
+                        reply = sess[i + 1]["content"][:300] if i + 1 < len(sess) and sess[i + 1]["role"] == "assistant" else ""
+                        s.add_item("note", f"user: {t['content']}" + (f"\nassistant: {reply}" if reply else ""), created_at=ts)
+                s.reindex()
+                gold = q["answer"] if not q["question_id"].endswith("_abs") else "The information is not available (abstain)."
+                return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_date(q["question_date"]), k, q["question_date"])
+            finally:
+                _cleanup(d)
+        with ThreadPoolExecutor(max_workers=max(1, workers // 2)) as ex:
+            for q, (ans, ok, c_) in ex.map(one, data):
+                rows.append({"id": q["question_id"], "type": q["question_type"] + ("_abs" if q["question_id"].endswith("_abs") else ""),
+                             "q": q["question"], "gold": str(q["answer"]), "answer": ans, "correct": int(ok)})
+                cost += c_
+                if len(rows) % 20 == 0:
+                    log(f"{len(rows)}/{len(data)}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
+    os.makedirs(out, exist_ok=True)
+    tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}"
+    with open(os.path.join(out, f"{tag}.jsonl"), "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    n = len(rows) or 1
+    summ = {"benchmark": f"qa-{suite}", "reader": model, "judge": judge, "k": k, "n": len(rows),
+            "accuracy": round(sum(r["correct"] for r in rows) / n, 4), "cost": round(cost, 4),
+            "by_type": {t: {"n": len(v), "accuracy": round(sum(r["correct"] for r in v) / len(v), 4)}
+                        for t in sorted({r["type"] for r in rows}) for v in [[r for r in rows if r["type"] == t]]}}
+    import commons_memory
+    summ["commons_version"] = commons_memory.__version__
+    with open(os.path.join(out, f"{tag}.summary.json"), "w") as f:
+        json.dump(summ, f, indent=2)
+    return summ

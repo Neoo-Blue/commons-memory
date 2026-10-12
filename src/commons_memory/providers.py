@@ -55,10 +55,16 @@ PROBES["general"] = PROBES["research"][:1] + PROBES["plan"][:1]
 
 def _http(method: str, url: str, headers: dict | None = None, body: Any = None, timeout: float = 60) -> Any:
     data = json.dumps(body).encode() if body is not None else None
+    # Cloudflare-fronted APIs (OpenRouter, ...) answer 403/1010 to urllib's default "Python-urllib" user agent
+    from . import __version__
     req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - operator-configured provider URL
-        return json.loads(r.read() or b"{}")
+                                 headers={"Content-Type": "application/json", "User-Agent": f"commons-memory/{__version__}",
+                                          **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - operator-configured provider URL
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:  # keep the provider's reason; a bare "403 Forbidden" hides it
+        raise CommonsError(f"{method} {url.split('?')[0]} -> HTTP {e.code}: {e.read()[:300].decode(errors='replace')}") from e
 
 
 class ProviderLayer:

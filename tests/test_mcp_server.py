@@ -134,3 +134,18 @@ async def test_handoff_without_session_and_resume_reads_only(tmp_path):
     assert h2["packet"]["session_id"] != sid  # first session was handed off; a new one opens
     r = json.loads(text(await mcp.call_tool("resume", {"project": "web", "api_key": key})))
     assert r["handoff"]["summary"] == "did C"
+
+
+async def test_slow_sync_tool_does_not_block_others(tmp_path):
+    """v0.9: sync tools run in worker threads, so a long msg_recv long-poll can't freeze the hub for other calls."""
+    import asyncio
+    import time
+    st = Store(str(tmp_path / "b.db"), embedder="hash")
+    mcp = build_server(st)
+    key = json.loads(text(await mcp.call_tool("register_agent", {"name": "poller"})))["api_key"]
+    t0 = time.time()
+    slow = asyncio.create_task(mcp.call_tool("msg_recv", {"wait": 3, "api_key": key}))
+    await asyncio.sleep(0.2)
+    await mcp.call_tool("whoami", {})
+    assert time.time() - t0 < 2.0  # answered while the long-poll was still waiting
+    await slow

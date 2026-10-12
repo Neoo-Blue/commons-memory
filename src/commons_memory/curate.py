@@ -141,7 +141,14 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
             out_items.append(dict(out, confidence=conf, method=f"curator:{model}",
                                   status="keep" if conf >= auto_approve else "review"))
             counts["kept" if conf >= auto_approve else "queued"] += 1
-        res = sink(out_items) if out_items else {}
+        try:
+            res = sink(out_items) if out_items else {}
+        except Exception as e:  # noqa: BLE001 - the hub was unreachable: nothing was recorded, a re-run redoes this batch
+            with lock:
+                tot["failed_batches"] += 1
+                tot["cost"] += r.get("cost", 0)
+            log(f"sink failed: {str(e)[:160]}")
+            return
         with lock:
             for k_, v_ in counts.items():
                 tot[k_] += v_

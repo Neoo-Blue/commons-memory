@@ -338,6 +338,7 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v8(mcp, store, who)
     from .server_v81 import register_v81
     register_v81(mcp, store, who)
+    offload_sync_tools(mcp)
     from .toolargs import install as friendly_args
     friendly_args(mcp)
     from .toolprofile import install as tool_profiles
@@ -345,6 +346,23 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     from .telemetry import instrument_mcp
     instrument_mcp(mcp)
     return mcp
+
+
+def offload_sync_tools(mcp) -> None:
+    """FastMCP calls plain (sync) tool functions on the event-loop thread, so one slow call (an import batch
+    embedding on a NAS CPU, a 25 s msg_recv long-poll) froze the hub for every agent: whoami took 130 s under load.
+    Run them in worker threads instead; asyncio.to_thread copies contextvars, so identity and ACLs carry over."""
+    import asyncio
+    import functools
+    for t in mcp._tool_manager.list_tools():
+        if t.is_async:
+            continue
+        fn = t.fn
+
+        @functools.wraps(fn)
+        async def run(*a, __fn=fn, **kw):
+            return await asyncio.to_thread(__fn, *a, **kw)
+        t.fn, t.is_async = run, True
 
 
 def _lifespan_mount(mcp_app, a2a_app):
