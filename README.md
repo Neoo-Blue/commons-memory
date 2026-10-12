@@ -26,7 +26,7 @@ commons search "how do payments retry"
 # 4. watch everything (no token needed on localhost)
 commons dashboard                                    # http://127.0.0.1:8766
 ```
-Connect a second AI the same way and it can see the first one's memory immediately. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
+Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the ~20 core tools (about 3k tokens); `tools(query)` finds the other 130 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
 
 ## Feature tour
 | Area | What you get | Learn more |
@@ -34,9 +34,9 @@ Connect a second AI the same way and it can see the first one's memory immediate
 | **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · auto-capture hooks for Claude Code/Codex/Gemini/Cursor with typed observations ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
 | **Continuity** | Sessions, checkpoints, handoffs that resume in another AI · layered context packs (L0 gist → L3 full) so the next AI doesn't re-pay tokens · decisions with rationale and `why()` · leftovers and recurring jobs | [docs/guide.md](docs/guide.md) |
 | **Teamwork** | Submit a task and get a DAG: plan → parallel parts → cross-review (author ≠ reviewer) → debate/consensus → merge. Quality gates, budgets, leases with automatic reassignment, an escalation ladder, routing to the right agent + model + effort, multi-project scheduling, task breakdown view | [docs/guide.md](docs/guide.md), [docs/multitasking.md](docs/multitasking.md) |
-| **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS, `commons agent daemon`) | [docs/messaging.md](docs/messaging.md) |
+| **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS). `summon` calls every agent at once and reports who is ready; `commons agent daemon --preset claude --install` starts a CLI agent within a second of new work | [docs/messaging.md](docs/messaging.md) |
 | **Skills & tools** | Shared skill pool with versioning, review gate and rollback · MCP hub that proxies upstream servers with per-agent policy and human approval for destructive tools · research · Commons Drive (versioned shared files; S3, WebDAV, SFTP…) | [docs/drive.md](docs/drive.md) |
-| **You** | Preferences learned once and applied by every AI · retro learning from your past Claude/ChatGPT/Codex/Cursor history (review queue) | [docs/retro-learning.md](docs/retro-learning.md) |
+| **You** | Preferences learned once and applied by every AI · retro learning from your past Claude/ChatGPT/Codex/Cursor history (review queue) · `commons import claude-mem|mem0|claude-memory|sesame [--curate]` with an AI manager that keeps, merges or drops each item | [docs/retro-learning.md](docs/retro-learning.md) |
 | **Operations** | Dashboard (20+ pages, SSE live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
 
 ## Architecture
@@ -184,23 +184,30 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (retrieval, v0.8.0)
-Measured on CPU with no LLM in the loop. Full tables, caveats and per-question results are in
-[benchmarks/README.md](benchmarks/README.md).
+## Benchmarks (v0.9.0)
+Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
+results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
-| Benchmark | Metric | Commons (default: fastembed bge-small) |
+| What | Metric | Commons v0.9.0 |
 |---|---|---|
-| LongMemEval-S, 470 questions | session recall_any@5 | **97.7%** (any@10 99.6%) |
-| LoCoMo, 1,982 questions | evidence-turn R@10 | 71.1%, or **75.1%** with `--rerank` |
-| LoCoMo | evidence-session R@10 | **95.8%** |
+| LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.4% / 76.5%** (v0.8: 31.2 / 71.1) |
+| LoCoMo retrieval | evidence-session any@10 | **97.4%** (v0.8: 95.8) |
+| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **69.5%** |
+| Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
+| Tool schema an AI pays for each session | tokens | **2,970** for the core profile (v0.8: 33,057) |
+| Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
-These are retrieval recall numbers, not QA accuracy, and metric definitions differ between projects. Read the
-caveats before comparing them with others' claims.
+Read the caveats before comparing with other projects: published numbers differ in reader and judge models,
+question subsets and granularity. mem0's paper reports 66.9% LoCoMo QA (gpt-4o-mini reader and judge); its
+managed platform and Zep claim 92-95% under their own setups.
 
 ## Comparison
 | Project | Great at | Commons' angle |
 |---|---|---|
-| [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Adds a code graph, handoffs, decisions, orchestration and secrets |
+| [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Writes in milliseconds (no LLM on the write path), adds a code graph, handoffs, decisions, orchestration and secrets; `commons import mem0` brings your memories over |
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture for Claude Code | Same hook-based capture for Claude Code, Codex, Gemini and Cursor, shared by every agent; `commons import claude-mem --curate` imports and cleans its history |
+| [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Comparable retrieval (see benchmarks) plus multi-agent coordination |
+| [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Graphs come from the real code index and memory, with communities, impact paths and a cluster map; Archify still has more diagram types |
 | [Graphiti / Zep](https://github.com/getzep/graphiti) | Temporal knowledge graph | Inspired Commons' conflict and supersede model |
 | [Cognee](https://github.com/topoteretes/cognee) | Rich document graphs | Commons is a lighter single-file hub |
 | [basic-memory](https://github.com/basicmachines-co/basic-memory) | Human-readable Markdown memory | Commons has Obsidian/Markdown export |
@@ -211,6 +218,8 @@ caveats before comparing them with others' claims.
 - Publish to PyPI so `uvx commons-memory` / `pipx install commons-memory` work without git.
 - Planner, summarizer and preference-extractor presets out of the box.
 - Graphiti adapter, plus tree-sitter for more languages and live LSP lookups.
+- Sequence, workflow and architecture-delta diagrams derived from the code index and job history.
+- Message Batches support for half-price curated imports and benchmarks.
 - Fine-grained (row-level) ACLs and signed audit export.
 - Hosted dashboard auth via OIDC.
 

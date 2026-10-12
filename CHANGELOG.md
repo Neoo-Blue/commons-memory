@@ -2,6 +2,50 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.9.0: lean, fast, instant, and proven on your own data
+- **Lean tool surface.** Clients list a 21-tool core profile (2,970 tokens of schema, was 148 tools = 33,057
+  tokens in every session). `tools(query)` searches the rest and `call(tool, args)` runs any of them. Profiles per
+  connection (`?tools=` on the MCP URL), per agent (`commons agent tools NAME core|all|core,name`) or globally
+  (`COMMONS_TOOLS`). Schemas are compacted and header-authenticated clients don't see `agent`/`api_key`.
+- **Better ranking.** Score fusion replaces reciprocal-rank fusion by default (RRF flattened scores so the recency
+  and entity boosts overrode relevance). LoCoMo turn any@1 31.2 -> 39.4, any@10 71.1 -> 76.5, session any@10
+  95.8 -> 97.4, with no weight tuning. `search(as_of=)` now hides items written after that time; listings report
+  true totals; `rerank=false` really turns reranking off.
+- **20x faster search at scale.** Vector search is one numpy matrix multiply over a cached, self-invalidating
+  matrix, and keyword search ranks inside FTS before filtering. 30k items: p50 1,383 ms -> 68 ms; 60k items: 114 ms.
+  `commons bench scale` measures latency, throughput, DB size and memory by store size.
+- **The hub no longer freezes.** Sync tools ran on the event loop, so one slow call (an import batch, a 25 s
+  `msg_recv` long-poll) blocked every agent (`whoami` took 130 s under load; now 0.3 s). They run in worker threads.
+- **Instant wake.** Assignments and delegations land in the agent's mailbox, so a `commons agent daemon` starts
+  the agent CLI within a second and chat agents see them in `msg_recv`. New `summon(agents, reason)` tool wakes
+  agents and reports who is ready, with a fix for each unreachable one. The daemon works from the CLI again (`--cmd`
+  silently disabled the command since v0.7), gains `--preset claude|codex|gemini|cursor`, `--api-key-file`,
+  `--parallel`, and `--install` (login service); its launchd unit used to start a second server.
+- **Import everything, optionally curated by an AI manager.** `commons import claude-mem|mem0|claude-memory|sesame
+  [--curate] [--url HUB]` is idempotent and keeps timestamps and projects; Claude Code `feedback` memories become
+  shared preferences; sesame contributes service metadata and env-var names only. With `--curate` a model (the
+  `curator` role, any provider) keeps/drops/merges each item, rewrites a self-contained title and summary, pulls out
+  preferences, and holds uncertain items in the review queue, under a hard `--budget` with a dry-run estimate.
+- **Is it doing its job?** `commons bench self` samples your own memories, has a model write paraphrased questions,
+  and measures hit@1/5/10 and MRR on your real store. `commons bench qa-locomo|qa-longmemeval` measures end-to-end
+  answer accuracy (reader + judge), the metric mem0 and Zep publish.
+- **Graph Explorer v2.** Louvain communities, PageRank, Barnes-Hut force / radial / layered layouts, readable labels,
+  search, focus, shortest path, upstream/downstream reach, minimap, saved views, PNG/SVG/JSON export, keyboard and
+  mobile. Big graphs open as a cluster map (labelled by source file) and a cluster opens in place.
+- **Dashboard.** Memory is a workspace: live filter and chips, inline edit, delete with undo, multi-select bulk
+  tag/move/delete, keyboard j/k/e/x. Never-seen agents say so (no more "idle 20738d ago"), activity hides plumbing
+  events, and several crashes and escaping bugs are fixed.
+- **Security.** ACLs on every read path (graph, expand on any id, KB, memory_stream, facts, timeline_around,
+  get_task, why); `export_graph(path=)` and `index_code` need the local owner or `COMMONS_ADMIN_AGENTS`; a
+  tokenless dashboard refuses unknown Host names (DNS rebinding, `COMMONS_DASHBOARD_HOSTS`); orchestrator lease
+  races (heartbeat, reaper, complete) and inbox/message claim races fixed; host-mount symlink escapes, email
+  wake-channel SSRF and A2A task hijacking closed.
+- **Fixes.** `handoff` works without `session_start`; reads never create projects; re-indexing keeps memory->code
+  links and is atomic; edits keep the keyword index and vectors in sync; `commons status` sees the HTTP bind (also
+  the Docker healthcheck); the Docker model cache is readable by the runtime user; Claude 4.6+/5.x get
+  `output_config.effort` instead of thinking budgets (400s); structured outputs in the provider layer; HTTPS works
+  on python.org macOS builds; Cloudflare-fronted providers get a User-Agent.
+
 ## v0.8.1: Connect an agent
 - **Dashboard → Connect** (Capabilities group, also in the ⌘K palette). Pick Claude Code, Codex CLI, Cursor, Gemini
   CLI, ChatGPT/other HTTP MCP clients, any AI, or Docker/self-host, and copy: the exact install command or

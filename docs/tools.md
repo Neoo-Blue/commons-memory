@@ -2,6 +2,20 @@
 
 Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `msg_ack`, `msg_history`, `presence`, `wake_channels`), routing, Drive and breakdown tools; v0.8 adds capture, three-step search, temporal facts, spaces and diagrams (CLI: `commons fact`, `commons sweep`, `commons space`, `commons audit`, `commons diagram`); `commons serve` lists them all via MCP `tools/list`.
 
+## What a client sees (v0.9)
+Clients list the **core profile** (21 tools, about 3k tokens): `pickup`, `msg_recv`, `msg_send`, `summon`, `resume`,
+`context_load`, `search`, `expand`, `why`, `remember`, `record_decision`, `observe_preference`, `claim_subtask`,
+`heartbeat`, `complete_subtask`, `handoff`, `add_leftover`, `report_usage`, `whoami`, plus the two meta-tools:
+
+- `tools(query)`: search the full catalog below; returns name, arguments and a one-line summary.
+- `call(tool, args)`: run any tool by name, including unlisted ones.
+
+Change what a client lists with `?tools=core|all|core,name,...` on the MCP URL, per agent with
+`commons agent tools NAME PROFILE`, or globally with `COMMONS_TOOLS`. Hidden tools stay callable directly.
+
+v0.9 also adds `summon(agents, reason, wait)` (wake agents now and report who is ready) and `import_items(items,
+check)` (bulk, idempotent import; driven by `commons import <source> [--curate] --url ...`).
+
 ## Tools
 
 | Area | Tools |
@@ -18,6 +32,7 @@ Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `m
 | Continuity | `pickup`, `add_leftover`, `resolve_leftover`, `list_leftovers`, `schedule_recurring`, `run_recurring`, `list_recurring` |
 | Preferences | `observe_preference`, `extract_preferences`, `get_preferences`, `confirm_preference`, `forget_preference` |
 | Usage | `report_usage`, `usage_summary` |
+| Meta and import (v0.9) | `tools`, `call`, `summon`, `import_items`, `whoami` |
 | Capture (v0.8) | `observe`, `capture_settings`, `memory_stream` (`<private>…</private>` text is stripped before storage) |
 | Connection (v0.8.1) | `whoami` (returns the agent for this key, server version and the marker `commons-ok`; used by the Connect page verify line) |
 | 3-step search (v0.8) | `search_index` → `timeline_around` → `get_items` (compact index first, full content only on request) |

@@ -1,4 +1,4 @@
-# Flaws and gaps (v0.6)
+# Flaws and gaps (v0.9)
 
 This is the list of risks and gaps we know about. v0.5.0 worked through every open item from the v0.4 list and the
 stubbed or unfinished items from the v0.1–v0.4 reports. v0.6.0 adds retro learning and remote access, and their risks
@@ -84,6 +84,36 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 - Verified only against the documentation: the Codex, Gemini and Cursor hook formats. The installers write the
   documented schemas, but those CLIs are not installed on the build box. Claude Code's format matches its
   documented schema.
+
+## New in v0.9.0: found and fixed by two independent defect reviews and live use
+
+| Area | Was | Now | Tested by |
+|---|---|---|---|
+| Tool overload | 148 tool schemas (33k tokens) in every client session | Core profile of 21 tools (2,970 tokens) plus `tools`/`call`; profiles per URL, agent or env | `test_core_tool_profile` |
+| Hub freezes | Sync tools ran on the event loop: one slow call or a 25 s long-poll blocked every agent (`whoami` 130 s) | Sync tools run in worker threads | `test_slow_sync_tool_does_not_block_others`, live NAS measurement (0.3 s) |
+| Search at scale | Pure-python cosine over every vector (30k items: 1.4 s per search) | Cached numpy matrix + FTS rank-then-filter (68 ms) | `commons bench scale`, LoCoMo unchanged |
+| Ranking | RRF flattened scores, so recency/entity boosts overrode relevance; `as_of` leaked future items | Score fusion; `as_of` cutoff; true totals | LoCoMo/LongMemEval, `test_update_delete_keep_indexes_in_sync` |
+| ACL bypasses | KB, memory_stream, facts, graph reads, expand on non-item ids, timeline_around, get_task, why ignored project ACLs | One batched `hidden_ids` filter on every read path | `test_every_read_path_honours_project_acls` |
+| Host filesystem | Any authenticated agent could `export_graph(path=...)` anywhere or `index_code` any directory | Local owner or `COMMONS_ADMIN_AGENTS` only; host mounts can't escape via symlinks | `test_remote_agents_cannot_touch_host_filesystem` |
+| DNS rebinding | Tokenless private dashboards answered any Host header | Only IPs, localhost, this machine's names, `*.ts.net` and `COMMONS_DASHBOARD_HOSTS` | `test_tokenless_dashboard_refuses_rebinding_hosts` |
+| Races | Heartbeat/reaper/complete could overwrite each other; two agents could both "win" an inbox task or a message | Conditional updates with rowcount checks | `test_inbox_claim_race_has_one_winner`, `test_concurrent_recv_...` |
+| SSRF / hijack | Email wake channels reached any host; anyone with an A2A task id could cancel it or redirect its push | SSRF check on SMTP hosts; owner-only A2A task methods | same test |
+| Wake | Assignments never reached `commons agent daemon` (it read only chat messages), and `--cmd` disabled the command | Mailbox delivery, `summon`, working daemon with presets and `--install` | `test_instant_wake_...` |
+| Re-index | Re-indexing deleted memory->code links and was not atomic | Non-code edges re-attached; wipe inside the transaction | `test_reindex_keeps_memory_links_and_is_atomic` |
+| Stale keyword index | Tag edits (librarian, research) left FTS rows stale | `sync_fts` on every edit, `update_item`/`delete_item` | same test |
+
+### Still open after v0.9
+| Risk / gap | Why |
+|---|---|
+| End-to-end QA vs published numbers | LoCoMo QA (69.5%) used Claude Haiku 4.5 as reader and judge because the OpenRouter key hit its cap; mem0's paper used gpt-4o-mini. LongMemEval QA has not been run yet. Not a strict head-to-head. |
+| Multi-hop and open-domain QA | 53% and 40% on LoCoMo categories 1 and 3: one retrieval pass with k=20 misses list-style and inference questions. Query decomposition is not built. |
+| Archify parity | Graphs are real and analysed, but there are no sequence, workflow or lifecycle diagram types, no commit-pinned source badges and no architecture diff between snapshots yet. |
+| Instant wake for chat-only AIs | A browser chat can't run while idle. Commons wakes daemon-backed agents instantly; chat agents see work on their next `msg_recv`. |
+| Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). |
+| Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |
+| Unlisted tools | Some clients only call listed tools; they reach the others through `call`. |
+| Postgres tsquery with operator-like words | Reported by review, not reproduced (no Postgres in this run). |
+| `add_item` is not one transaction | A crash between statements can leave a memory without its graph links. |
 
 ## Part 2: Still open, and why
 
