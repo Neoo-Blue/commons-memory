@@ -53,6 +53,23 @@ def set_agent_profile(store, name: str, profile: str) -> dict:
     return {"agent": a["name"], "tools": profile or None}
 
 
+def _compact(schema: dict) -> dict:
+    """Smaller JSON Schema for tools/list: no auto-generated titles, `X | None` shown as X, empty defaults dropped.
+    Every tool schema is paid for in every client's context on every session."""
+    sch = {k: v for k, v in schema.items() if k != "title"}
+    alts = sch.get("anyOf")
+    if isinstance(alts, list):
+        real = [a for a in alts if a.get("type") != "null"]
+        if len(real) == 1:
+            sch.pop("anyOf")
+            sch = {**{k: v for k, v in real[0].items() if k != "title"}, **sch}
+    if sch.get("default") in ("", None) and "default" in sch:
+        sch.pop("default")
+    if isinstance(sch.get("items"), dict):
+        sch["items"] = _compact(sch["items"])
+    return sch
+
+
 def principal() -> str | None:
     from .auth import ANON, PRINCIPAL
     p = PRINCIPAL.get()
@@ -120,18 +137,21 @@ def install(mcp, store) -> None:
 
     def listed():
         allowed = resolve(store)
-        ts = [t for t in orig_list() if allowed is None or t.name in allowed]
-        if principal() is None:
-            return ts
+        hide_identity = principal() is not None
         out = []
-        for t in ts:
+        for t in orig_list():
+            if allowed is not None and t.name not in allowed:
+                continue
             props = (t.parameters or {}).get("properties", {})
-            if all(k in props for k in IDENTITY):
-                params = dict(t.parameters, properties={k: v for k, v in props.items() if k not in IDENTITY})
-                if "required" in params:
-                    params["required"] = [r for r in params["required"] if r not in IDENTITY]
-                t = t.model_copy(update={"parameters": params})
-            out.append(t)
+            drop = IDENTITY if hide_identity and all(k in props for k in IDENTITY) else ()
+            params = {k: v for k, v in (t.parameters or {}).items() if k != "title"}
+            params["properties"] = {k: _compact(v) for k, v in props.items() if k not in drop}
+            if "required" in params:
+                params["required"] = [r for r in params["required"] if r not in drop]
+            desc = (t.description or "").split("\nAliases:")[0].strip()  # aliases still work, they just aren't listed
+            t2 = t.model_copy(update={"parameters": params, "description": desc})
+            t2.__dict__["output_schema"] = None  # FastMCP's generic {"result": str} wrapper: ~40 tokens a tool, no information
+            out.append(t2)
         return out
 
     tm.all_tools = all_tools  # type: ignore[attr-defined]
