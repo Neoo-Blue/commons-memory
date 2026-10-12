@@ -170,6 +170,7 @@ class Research:
             s_["corroboration"] = corroboration(first, s_["url"], sources)
             if s_["corroboration"] <= 1:
                 self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(["research", "source", "single-source"]), s_["id"]))
+                self.s.sync_fts(s_["id"])
         summary = self._summarize(query, sources)
         note = self.s.add_item("memory", summary, title=f"Research: {query[:100]}", project=project, agent_id=agent_id,
                                tags=["research"], related_ids=[s["id"] for s in sources],

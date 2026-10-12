@@ -533,7 +533,7 @@ def code_symbols(store: Store, name: str = "", project: str | None = None, types
     if name:
         where.append("(name LIKE ? OR name LIKE ?)"); args += [f"%{name}%", f"%.{name}"]
     if project:
-        where.append("project_id=?"); args.append(store.project_id(project))
+        where.append("project_id=?"); args.append(store.find_project(project) or "__none__")
     if path:
         where.append("path LIKE ?"); args.append(f"%{path}%")
     rows = store.q(f"SELECT id,type,name,path,line,meta FROM entities WHERE {' AND '.join(where)} "

@@ -69,6 +69,7 @@ class Librarian:
         b = json.loads(e["before"] or "{}")
         if e["action"] == "tag":
             self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(b["tags"]), e["target"]))
+            self.s.sync_fts(e["target"])
         elif e["action"] == "assign_project":
             self.s.x("UPDATE items SET project_id=? WHERE id=?", (b["project_id"], e["target"]))
             self.s.x("DELETE FROM relations WHERE src=? AND dst=? AND type='in_project'",
@@ -193,6 +194,7 @@ class Librarian:
             if not new:
                 continue
             self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(new), i["id"]))
+            self.s.sync_fts(i["id"])
             self._log(run_id, "tag", i["id"], {"tags": tags}, {"tags": new})
             n += 1
         return n
@@ -381,6 +383,7 @@ class Librarian:
                 new = [t.strip().lower() for t in b.split(",") if t.strip()][:6]
                 self._log(run_id, "tag", a, {"tags": json.loads(it[0]["tags"] or "[]")}, {"tags": new})
                 self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(new), a))
+                self.s.sync_fts(a)
                 done["tag"] += 1
             elif op == "PROJECT" and it and self.s.q("SELECT 1 FROM projects WHERE name=?", (b.strip(),)):
                 pid = self.s.project_id(b.strip())

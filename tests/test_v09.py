@@ -117,3 +117,22 @@ def test_remote_agents_cannot_touch_host_filesystem(store, tmp_path, monkeypatch
     assert json.loads(target.read_text())["nodes"] is not None
     out = asyncio.run(mcp._tool_manager.call_tool("search_index", {"query": "x", "project": "nope"}))
     assert "no such project" in str(out)
+
+
+def test_update_delete_keep_indexes_in_sync(store):
+    import time
+    m = store.add_item("memory", "the deploy key lives in vault", tags=["ops"])["id"]
+    store.update_item(m, content="the deploy key lives in 1password", tags=["ops", "security"])
+    assert m in [r["id"] for r in store.search("1password", mode="keyword")["results"]]
+    assert m not in [r["id"] for r in store.search("vault", mode="keyword")["results"]]
+    assert m in [r["id"] for r in store.search("security", mode="keyword")["results"]]  # tags are indexed too
+    store.delete_item(m)
+    assert store.search("1password")["results"] == [] and not store.q("SELECT 1 FROM embeddings WHERE item_id=?", (m,))
+    old = store.add_item("memory", "Alice joined Acme", created_at=time.time() - 400 * 86400)["id"]
+    new = store.add_item("memory", "Alice left Acme for Initech")["id"]
+    ids = [r["id"] for r in store.search("Alice Acme", as_of=time.time() - 200 * 86400)["results"]]
+    assert old in ids and new not in ids  # as_of hides what didn't exist yet
+    for i in range(30):
+        store.add_item("memory", f"note {i}")
+    r = store.search("", limit=5)
+    assert r["total"] >= 32 and "more" in r["text"]

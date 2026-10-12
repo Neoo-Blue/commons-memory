@@ -90,15 +90,15 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def search(query: str = "", mode: str = "hybrid", project: str = "", agent_filter: str = "",
                tags: list[str] | None = None, kinds: list[str] | None = None, entity: str = "", since: str = "",
                until: str = "", limit: int = 20, max_tokens: int = 600, format: str = "text", as_of: str = "",
-               rerank: bool = False, explain: bool = False) -> str:
+               rerank: bool | None = None, explain: bool = False) -> str:
         """Hybrid search (mode: hybrid|keyword|semantic) with entity, time-proximity and recency signals.
         Filters: project, agent_filter, tags, kinds (memory|fact|decision|checkpoint|handoff|observation),
         entity (name or id), since/until (ISO or '7d','12h'). as_of = reference time for 'last week'-style queries;
-        rerank = second-stage cross-encoder/LLM rerank; explain = per-signal scores.
+        rerank = second-stage cross-encoder/LLM rerank (default: COMMONS_RERANK; false forces it off); explain = per-signal scores.
         Returns compact one-line summaries with ids within max_tokens; call expand(id) for detail."""
         return _fmt(store.search(query, mode=mode, project=project or None, agent=agent_filter or None, tags=tags,
                                  kinds=kinds, entity=entity or None, since=since or None, until=until or None,
-                                 limit=limit, max_tokens=max_tokens, as_of=as_of or None, rerank=rerank or None,
+                                 limit=limit, max_tokens=max_tokens, as_of=as_of or None, rerank=rerank,
                                  explain=explain), format)
 
     @mcp.tool()

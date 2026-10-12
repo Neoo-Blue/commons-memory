@@ -279,6 +279,75 @@ class Store:
                 out["conflicts_with"] = conflicts
         return out
 
+    def sync_fts(self, iid: str, reembed: bool = False) -> None:
+        """Rewrite an item's keyword-index row (and optionally its vector) from the items table. Every UPDATE of
+        title/summary/content/tags must call this, or keyword search keeps matching the old text."""
+        r = self.q("SELECT title, summary, content, tags FROM items WHERE id=?", (iid,))
+        self.x("DELETE FROM items_fts WHERE item_id=?", (iid,))
+        if not r:
+            self.x("DELETE FROM embeddings WHERE item_id=?", (iid,))
+            return
+        r = r[0]
+        self.x("INSERT INTO items_fts(item_id,title,summary,content,tags) VALUES(?,?,?,?,?)",
+               (iid, r["title"], r["summary"], r["content"], " ".join(json.loads(r["tags"] or "[]"))))
+        if reembed and self.embedder:
+            vec = self.embedder.embed([f"{r['title']}\n{r['summary']}\n{r['content']}"[:4000]])[0]
+            self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
+            if self._pgvec:
+                self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(vec), iid))
+
+    def update_item(self, iid: str, *, content: str | None = None, title: str | None = None,
+                    tags: list[str] | None = None, project: str | None = None, agent_id: str | None = None) -> dict:
+        """Edit a memory in place (dashboard inline edit, librarian). Redacted, ACL-checked on the old and the new
+        project, keyword index and vector refreshed."""
+        r = self.q("SELECT * FROM items WHERE id=?", (iid,))
+        if not r:
+            raise CommonsError(f"unknown id {iid}")
+        r = r[0]
+        self.check_project(r["project_id"], "write")
+        sets, args, found = [], [], []
+        if content is not None and title is None and (r["title"] or "") == " ".join((r["content"] or "").split())[:80]:
+            title = " ".join(content.split())[:80]  # an auto-derived title follows the edited content
+        if content is not None:
+            content, f = redact(content)
+            found += f
+            summary = " ".join(content.split())  # the summary follows the new content
+            sets += ["content=?", "summary=?"]
+            args += [content, summary[:160] + ("…" if len(summary) > 160 else "")]
+        if title is not None:
+            title, f = redact(title)
+            found += f
+            sets.append("title=?"); args.append(title)
+        if tags is not None:
+            sets.append("tags=?"); args.append(_j([t.strip().lower() for t in tags if t.strip()]))
+        if project is not None:
+            pid = self.project_id(project) if project else None
+            self.check_project(pid, "write")
+            sets.append("project_id=?"); args.append(pid)
+            self.x("DELETE FROM relations WHERE src=? AND type='in_project'", (iid,))
+            if pid:
+                self.relate(iid, pid, "in_project", agent_id=agent_id)
+        if not sets:
+            return {"id": iid, "changed": False}
+        self.x(f"UPDATE items SET {', '.join(sets)}, updated_at=? WHERE id=?", args + [now(), iid])
+        self.sync_fts(iid, reembed=content is not None or title is not None)
+        self.kb_dirty(r["project_id"])
+        self.audit(agent_id, "item.update", iid, {"fields": [x.split("=")[0] for x in sets]})
+        return {"id": iid, "changed": True} | ({"redacted": sorted(set(found))} if found else {})
+
+    def delete_item(self, iid: str, agent_id: str | None = None) -> dict:
+        """Hard-delete a memory with its keyword row, vector and graph edges (ACL: write on its project)."""
+        r = self.q("SELECT project_id, kind FROM items WHERE id=?", (iid,))
+        if not r:
+            raise CommonsError(f"unknown id {iid}")
+        self.check_project(r[0]["project_id"], "write")
+        self.x("DELETE FROM items WHERE id=?", (iid,))
+        self.sync_fts(iid)
+        self.x("DELETE FROM relations WHERE src=? OR dst=?", (iid, iid))
+        self.kb_dirty(r[0]["project_id"])
+        self.audit(agent_id, "item.delete", iid, {"kind": r[0]["kind"]})
+        return {"id": iid, "deleted": True}
+
     def kb_dirty(self, project_id: str | None) -> None:
         """Mark a knowledge-base bucket stale (rebuilt lazily / by scheduler, debounced)."""
         key = self.project_name(project_id) if project_id else "misc"
@@ -394,6 +463,8 @@ class Store:
             args += ents + ents
         if not include_superseded:
             where.append("i.superseded_by IS NULL")
+        if as_of not in (None, ""):  # time travel: nothing written after the reference time exists yet
+            where.append("i.created_at<=?"); args.append(_parse_time(str(as_of)))
         denied = self.denied_projects("read")
         if denied:
             where.append(f"(i.project_id IS NULL OR i.project_id NOT IN ({','.join('?' * len(denied))}))")
@@ -442,7 +513,8 @@ class Store:
         if not query:
             rows = self.q(f"SELECT i.id FROM items i WHERE {wsql} ORDER BY i.created_at DESC LIMIT ?", args + [limit])
             ranked = [r["id"] for r in rows]
-            return ranked, len(ranked), why
+            total = self.q(f"SELECT COUNT(*) n FROM items i WHERE {wsql}", args)[0]["n"] if len(ranked) >= limit else len(ranked)
+            return ranked, total, why
         if scores:
             ids = list(scores)
             meta = {}
@@ -544,6 +616,9 @@ class Store:
             t = estimate_tokens(line)
             if used + t > max_tokens and results:
                 break
+            if t > max_tokens:  # a single hit bigger than the whole budget: trim it rather than blow the budget
+                line = line[: max(40, max_tokens * 4)] + "…"
+                t = estimate_tokens(line)
             used += t
             lines.append(line)
             results.append({"id": r["id"], "kind": r["kind"], "summary": r["summary"], "project": r["project_name"],
@@ -633,8 +708,12 @@ class Store:
         res = self.search("", project=project, entity=entity, agent=agent, since=since, until=until, kinds=kinds,
                           limit=limit, max_tokens=max_tokens, include_superseded=True)
         # chronological order (oldest first) reads better for timelines
-        res["results"].reverse()
-        res["text"] = "\n".join(reversed(res["text"].split("\n"))) if res["results"] else res["text"]
+        if res["results"]:
+            lines = res["text"].split("\n")
+            footer = [ln for ln in lines if ln.startswith("… ")]
+            body = [ln for ln in lines if not ln.startswith("… ")]
+            res["results"].reverse()
+            res["text"] = "\n".join(list(reversed(body)) + footer)
         return res
 
     # ------------------------------------------------------------------ graph
