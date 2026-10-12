@@ -846,6 +846,11 @@ class Orchestrator:
         from .kb import KB
         digest = KB(self.s).digest(project, max_tokens=max_tokens // 4) if project else ""
         lines = []
+        from . import board as B  # first, so truncation never cuts what the user is still owed
+        bd = B.view(self.s, project, status="open", max_tokens=max_tokens // 3)
+        if bd["ids"]:
+            lines.append("BOARD (owed to the user: board_update with evidence when done; board for the full view):")
+            lines += bd["text"].splitlines()
         if subs:
             lines.append("READY SUBTASKS (claim_subtask):")
             lines += [f"- {s['id']} [{s['type']}] {s['title'][:90]}" for s in subs]
@@ -868,7 +873,7 @@ class Orchestrator:
         while estimate_tokens(text) > max_tokens and "\n" in text:
             text = text.rsplit("\n", 1)[0]
         return {"text": text, "subtasks": [s["id"] for s in subs], "inbox": [i["id"] for i in inbox],
-                "leftovers": [lo["id"] for lo in ranked[:8]], "preferences": prefs["preferences"]}
+                "leftovers": [lo["id"] for lo in ranked[:8]], "preferences": prefs["preferences"], "board": bd["ids"]}
 
 
 def _check_acyclic(dag: list[dict]) -> None:

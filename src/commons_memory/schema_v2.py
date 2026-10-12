@@ -206,6 +206,8 @@ def _v5(db):
         fact_columns(db)
     from .tiers import add_columns as tier_columns
     tier_columns(db)
+    from .board import migrate as board_migrate
+    board_migrate(db)
 
 
 _v4e_migrate = migrate

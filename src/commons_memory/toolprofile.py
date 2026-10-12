@@ -19,7 +19,7 @@ import os
 
 CORE = ["pickup", "msg_recv", "msg_send", "summon", "resume", "context_load", "search", "expand", "why", "remember",
         "record_decision", "observe_preference", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
-        "add_leftover", "report_usage", "whoami", "tools", "call"]
+        "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "tools", "call"]
 IDENTITY = ("agent", "api_key")
 
 REQUESTED: contextvars.ContextVar[str | None] = contextvars.ContextVar("commons_tools", default=None)

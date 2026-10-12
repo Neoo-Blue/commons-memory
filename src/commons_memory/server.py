@@ -27,6 +27,8 @@ INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
 1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
 2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
 3) claim_subtask → heartbeat → complete_subtask for assigned work; handoff() before you stop so another AI can resume().
+   board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence; check
+   board() before you stop: it survives context compaction, your memory of the conversation doesn't.
 4) Never write secret values; reference them as env://NAME, vault://path#key, op://vault/item/field."""
 
 

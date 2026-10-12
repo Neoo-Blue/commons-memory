@@ -49,6 +49,39 @@ def register_v8(mcp, store, who):
         return _js(cap.configure(project, **kw))
 
     @mcp.tool()
+    def board(project: str = "", path: str = "", status: str = "open", max_tokens: int = 1500) -> str:
+        """The project board: the user's asks (verbatim), targets with goal/current, expectations, actions and what was
+        delivered, layer by layer (path, e.g. "ui/dashboard"). status: open|done|dropped|all. Read it before working
+        and before you stop: everything open here is still owed to the user."""
+        from . import board as B
+        return B.view(store, project or None, path, status, max_tokens=max_tokens)["text"]
+
+    @mcp.tool()
+    def board_add(kind: str, text: str, project: str = "", path: str = "", parent: str = "", metric: str = "",
+                  goal: str = "", current: str = "", status: str = "open", evidence: str = "", agent: str = "",
+                  api_key: str = "") -> str:
+        """Record on the project board. kind: ask (the user's request, VERBATIM; record every one before you start) |
+        target (metric + goal, e.g. metric="search p50" goal="<50 ms") | expectation (acceptance criterion) | action
+        (a step you will take) | delivered (what you shipped; needs evidence). parent = the ask it serves. Re-adding an
+        open ask returns it with repeated=true: the user had to say it twice, so do it now."""
+        from . import board as B
+        aid, _ = who(agent, api_key)
+        return _js(B.add(store, kind, text, project=project or None, path=path, parent=parent or None,
+                         metric=metric or None, goal=goal or None, current=current or None, status=status,
+                         evidence=evidence or None, agent_id=aid))
+
+    @mcp.tool()
+    def board_update(id: str, status: str = "", current: str = "", evidence: str = "", goal: str = "",
+                     path: str = "", agent: str = "", api_key: str = "") -> str:
+        """Move a board item: status open|doing|blocked|done|dropped, a new measured `current` for a target. done needs
+        evidence (commit, file, benchmark, item id, URL); dropped needs the reason in evidence. Asks can't be edited,
+        and an ask can't be done while items under it are open."""
+        from . import board as B
+        aid, _ = who(agent, api_key)
+        return _js(B.update(store, id, status=status or None, current=current or None, evidence=evidence or None,
+                            goal=goal or None, path=path or None, agent_id=aid))
+
+    @mcp.tool()
     def import_items(items: list[dict] | None = None, check: list[str] | None = None, agent: str = "",
                      api_key: str = "") -> str:
         """Bulk-import memories (max 500 per call), idempotent by each item's `src` id. Item fields: content*, kind,

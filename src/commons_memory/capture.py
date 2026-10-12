@@ -288,15 +288,31 @@ class Capture:
     def recall(self, prompt: str, project: str | None, max_tokens: int = 300) -> str:
         if len((prompt or "").split()) < 3:
             return ""
+        rep = self._repeated_ask(prompt, project)
         ids, _, why = self.s.rank(prompt, project=project, limit=5)
         if ids is None:  # project not created yet
-            return ""
+            return rep
         good = [i for i in ids if why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_HOOK_RECALL_SIM", "0.6"))
                 or (why.get(i, {}).get("bm25_rank", 99) <= 2 and why.get(i, {}).get("vec_rank", 99) <= 3)]
         if not good:
-            return ""
+            return rep
         r = self.s._budgeted(good[:3], max_tokens, total=len(good))
-        return "Possibly relevant Commons memory:\n" + r["text"]
+        return rep + "Possibly relevant Commons memory:\n" + r["text"]
+
+    def _repeated_ask(self, prompt: str, project: str | None) -> str:
+        """The user is asking for something already on the board and still open: say so before the agent answers."""
+        from .board import _words
+        w = _words(prompt)
+        pid = self.s.project_id(project) if project else None
+        hits = []
+        for r in self.s.q("SELECT id, text, repeats FROM board WHERE kind='ask' AND status IN ('open','doing','blocked') "
+                          "AND (project_id IS ? OR ? IS NULL)", (pid, pid)):
+            o = _words(r["text"])
+            if w and o and len(w & o) / len(w | o) >= 0.5:
+                self.s.x("UPDATE board SET repeats=repeats+1, updated_at=? WHERE id=?", (now(), r["id"]))
+                hits.append(f"- {r['id']} (now asked {r['repeats'] + 2}x): {r['text'][:200]}")
+        return ("ALREADY ASKED AND STILL OPEN on the Commons board; deliver it this time, then board_update with evidence:\n"
+                + "\n".join(hits[:3]) + "\n\n") if hits else ""
 
     def stream(self, project: str | None = None, since: float = 0, limit: int = 100) -> list[dict]:
         args: list = [since]
