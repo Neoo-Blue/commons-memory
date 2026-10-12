@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shlex
@@ -109,6 +110,8 @@ class McpClient:
         self.url, self.key = url, api_key
 
     def _call(self, tool, args):
+        # tools outside the agent's profile (import_items, ...) are callable but unlisted; the SDK warns on every call
+        logging.getLogger("client").setLevel(logging.ERROR)
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
 
