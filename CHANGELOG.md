@@ -27,6 +27,10 @@ All notable changes, newest first. The README describes the current release only
   - Interactive HTML diagrams of the code graph and job plans, inspired by Archify.
 
   See [docs/knowledge.md](docs/knowledge.md).
+- **Fixes.** Drive blob writes use a unique temp file per writer (concurrent identical uploads could race on one
+  `.tmp` path). The v0.8 MCP tools and CLI commands are listed in [docs/tools.md](docs/tools.md).
+- **Benchmark caveats.** Retrieval recall only (no end-to-end QA), CPU only, untuned weights, isolated per-question
+  stores; the ranking signals cost about 3.6 points of LoCoMo turn R@1. Details in benchmarks/README.md.
 
 ## v0.7.1 — README consolidation, one-line installers, universal prompt
 - README rewritten around a 2-minute quickstart. Version history moved here, and deep docs moved to `docs/`.
