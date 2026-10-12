@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -73,7 +74,7 @@ def test_create_key_and_status(tmp_path):
     r = C.create_key(s, "bot1", "read", "p1", "cursor")
     assert r["api_key"].startswith("cmk_") and s.authenticate(r["api_key"])["name"] == "bot1"
     assert C.status(s, "bot1")["last_seen"] is None
-    s.x("UPDATE agents SET last_seen=strftime('%s','now') WHERE name='bot1'")
+    s.x("UPDATE agents SET last_seen=? WHERE name='bot1'", (time.time(),))
     assert C.status(s, "bot1")["connected"]
     with pytest.raises(CommonsError):
         C.create_key(s, "bad name", "write")

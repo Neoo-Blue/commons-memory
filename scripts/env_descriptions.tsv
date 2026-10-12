@@ -109,3 +109,9 @@ COMMONS_TOOLS	Which tools MCP clients list: `core` (default, ~20 routine tools p
 COMMONS_RANK_FUSION	How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k)
 COMMONS_DASHBOARD_HOSTS	Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding
 COMMONS_KB_MAX_STALE	Seconds a dirty knowledge-base bucket may stay stale while writes keep arriving (default 600); otherwise it rebuilds after COMMONS_KB_DEBOUNCE seconds of quiet
+COMMONS_SQLITE_READERS	Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host
+TYPESAFE_API_KEY	TypeSafe key (https://typesafe.ai). When set, the librarian checks each new note against its 3 nearest notes for free-text contradictions and opens conflicts
+COMMONS_TYPESAFE_URL	TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone)
+COMMONS_TYPESAFE_MODEL	TypeSafe model (default jev-latest)
+COMMONS_CONTRADICTION_THRESHOLD	TypeSafe probability at which two notes count as contradicting (default 0.85; precision first)
+COMMONS_CONTRADICTION_MAX	New notes checked for contradictions per librarian pass (default 50)

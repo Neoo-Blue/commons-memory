@@ -518,7 +518,14 @@ class Orchestrator:
         """Finish a claimed subtask. Runs under the store lock so the reaper, a late heartbeat or a parallel
         completion of a sibling (job budget read-modify-write) can't interleave with it."""
         with self.s.lock:
-            return self._complete(subtask_id, agent_id, result, **kw)
+            prev, self.s.defer_embed = self.s.defer_embed, True  # embed after the lock: ONNX stalls every agent
+            try:
+                out = self._complete(subtask_id, agent_id, result, **kw)
+            finally:
+                self.s.defer_embed = prev
+        if not prev:
+            self.s.reindex(limit=8)  # newest first: the result memory just written
+        return out
 
     def _complete(self, subtask_id: str, agent_id: str, result: str, *, verdict: str | None = None,
                   tokens: int | None = None, cost: float | None = None, leftovers: list[str] | None = None,
@@ -528,6 +535,23 @@ class Orchestrator:
         if st["claimed_by"] != agent_id or st["status"] != "claimed":
             raise CommonsError("subtask is not claimed by you")
         result, _ = redact(result or "")
+        # Decide the race first: the conditional UPDATE is the only check another process (a second worker on its own
+        # connection, or a shared Postgres) can't slip past, so usage, budget and leftovers are written by the winner only.
+        gates = json.loads(st["gates"] or "[]")
+        is_gate = st["gate_of"] is not None or st["type"] in ("vote",)
+        v = (verdict or parse_verdict(result)) if is_gate and success else None
+        if success:
+            won = self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND "
+                                    "claimed_by=? AND status='claimed'", ("awaiting_gate" if gates else "done", result, v,
+                                                                          now(), subtask_id, agent_id)).rowcount
+        else:  # out of attempts: straight to failed (_fail below also fails the job), else back in the queue
+            won = self.s.db.execute("UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=NULL, result=?, "
+                                    "excluded_agents=?, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
+                                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", result,
+                                     _j(json.loads(st["excluded_agents"] or "[]") + [agent_id]), now(), subtask_id,
+                                     agent_id)).rowcount
+        if won != 1:
+            raise CommonsError("subtask claim expired or was reassigned before completion")
         seconds = now() - (st["started_at"] or now())
         tokens = tokens if tokens is not None else estimate_tokens(result)
         job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
@@ -552,19 +576,8 @@ class Orchestrator:
             if st["attempts"] >= st["max_attempts"]:
                 self._fail(subtask_id, result)
             else:
-                self.s.x("UPDATE subtasks SET status='pending', claimed_by=NULL, assigned_agent=NULL, result=?, "
-                         "excluded_agents=?, updated_at=? WHERE id=?",
-                         (result, _j(json.loads(st["excluded_agents"] or "[]") + [agent_id]), now(), subtask_id))
                 self.allocate(st["job_id"])
             return self.status(st["job_id"], brief=True)
-        gates = json.loads(st["gates"] or "[]")
-        is_gate = st["gate_of"] is not None or st["type"] in ("vote",)
-        v = (verdict or parse_verdict(result)) if is_gate else None
-        new_status = "awaiting_gate" if gates else "done"
-        # ponytail: conditional write guards other processes on a shared Postgres; side effects above aren't undone
-        if self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND claimed_by=? "
-                             "AND status='claimed'", (new_status, result, v, now(), subtask_id, agent_id)).rowcount != 1:
-            raise CommonsError("subtask claim expired or was reassigned before completion")
         item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
                                agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
         self.s.relate(subtask_id, item["id"], "produced")

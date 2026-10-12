@@ -13,10 +13,9 @@ def search(q, project, limit=60):
     u = B + "/api/search/observations?" + urllib.parse.urlencode({"query": q, "project": project, "limit": limit,
                                                                  "orderBy": "relevance", "format": "json"})
     d = json.loads(urllib.request.urlopen(u, timeout=120).read())
-    obs = d.get("observations") if isinstance(d, dict) else None
-    if obs is None and isinstance(d, dict):  # some versions wrap results
-        obs = (d.get("results") or {}).get("observations") or []
-    return [o["title"] for o in obs or []]
+    # 13.x answers with the MCP text payload (a markdown table, relevance order) even for format=json
+    text = "".join(c.get("text", "") for c in d.get("content", [])) if isinstance(d, dict) else ""
+    return re.findall(r"^\| #\d+ \| [^|]* \| [^|]* \| (D\d+:\d+) \|", text, re.M)
 rows, t0 = [], time.time()
 convs = json.load(open(DATA))
 for ci, conv in enumerate(convs):
@@ -28,9 +27,10 @@ for ci, conv in enumerate(convs):
             turns.append({"title": t["dia_id"], "project": proj,
                           "text": f"[{date}] {t['speaker']}: {t['text']}" + (f" [shares image: {t['blip_caption']}]" if t.get("blip_caption") else "")})
         n += 1
-    with ThreadPoolExecutor(8) as ex:
-        list(ex.map(lambda b: post("/api/memory/save", b), turns))
-    time.sleep(2)
+    if "--search-only" not in sys.argv:
+        with ThreadPoolExecutor(8) as ex:
+            list(ex.map(lambda b: post("/api/memory/save", b), turns))
+        time.sleep(2)
     def one(qa):
         lat = time.perf_counter()
         got = search(qa["question"], proj)

@@ -22,6 +22,7 @@ from .redact import redact
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS agents(
@@ -102,6 +103,10 @@ class Store:
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self.db = _sqlite_connect(self.path)
         self.lock = threading.RLock()
+        self._tl = threading.local()  # per-thread flags: one agent's bulk import must not change another's writes
+        self._reindexing = threading.Lock()
+        self._readers = self.dialect == "sqlite" and self.path != ":memory:" and \
+            os.environ.get("COMMONS_SQLITE_READERS", "0") == "1"
         self.db.executescript(SCHEMA)
         from .schema_v2 import migrate
         migrate(self.db)
@@ -128,8 +133,27 @@ class Store:
             n += 1
         return n
 
+    @property
+    def defer_embed(self) -> bool:
+        """Bulk writers (imports, sweeps) skip per-item embedding and reindex() once; per thread, so a concurrent
+        remember() from another agent still embeds immediately."""
+        return getattr(self._tl, "defer_embed", False)
+
+    @defer_embed.setter
+    def defer_embed(self, v: bool) -> None:
+        self._tl.defer_embed = v
+
     # ------------------------------------------------------------------ helpers
     def q(self, sql: str, args: Iterable = ()) -> list[sqlite3.Row]:
+        """Reads go to a per-thread connection so agents read in parallel (WAL: readers never wait for each other or
+        the writer). Inside a transaction or while this thread holds the lock, read on the writer connection so a
+        read-check-write sequence sees its own uncommitted rows."""
+        if self._readers and not self.db.in_transaction and not self.lock._is_owned():
+            c = getattr(self._tl, "rdb", None)
+            if c is None:
+                c = self._tl.rdb = _sqlite_connect(self.path)
+                c.execute("PRAGMA query_only=1")
+            return c.execute(sql, tuple(args)).fetchall()
         with self.lock:
             return self.db.execute(sql, tuple(args)).fetchall()
 
@@ -245,7 +269,7 @@ class Store:
                 subject, predicate, value, int(authenticated), ts, ts))
         self.x("INSERT INTO items_fts(item_id,title,summary,content,tags) VALUES(?,?,?,?,?)",
                (iid, title, summary, content, " ".join(tags)))
-        if self.embedder and not getattr(self, "defer_embed", False):  # defer_embed: bulk import, reindex() batches
+        if self.embedder and not self.defer_embed:  # bulk import: reindex() batches
             vec = self.embedder.embed([f"{title}\n{summary}\n{content}"[:4000]])[0]
             self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
             if self._pgvec:
@@ -650,6 +674,14 @@ class Store:
         """(Re)compute vectors for items that have none for the active embedder (after switching models)."""
         if not self.embedder:
             return {"embedder": "none", "done": 0, "remaining": 0}
+        if not self._reindexing.acquire(blocking=False):  # another thread is embedding these same rows right now
+            return {"embedder": self.embedder.name, "done": 0, "remaining": None, "busy": True}
+        try:
+            return self._reindex(limit, batch, force)
+        finally:
+            self._reindexing.release()
+
+    def _reindex(self, limit: int | None, batch: int, force: bool) -> dict:
         name = self.embedder.name
         cond = "" if force else "WHERE e.item_id IS NULL OR e.model<>?"
         args = () if force else (name,)
@@ -670,22 +702,20 @@ class Store:
         return {"embedder": name, "done": done, "remaining": max(0, total - done)}
 
     def _budgeted(self, ids: list[str], max_tokens: int, total: int) -> dict:
-        lines, results, used = [], [], 0
+        from .trust import Trust
+        lines, results, used, trust = [], [], 0, Trust(self)
         hidden = self.hidden_ids(ids)
-        for iid in ids:
-            if iid in hidden:
+        want = [i for i in ids if i not in hidden][:500]  # one query instead of one per hit
+        rows = {r["id"]: r for r in self.q(
+            "SELECT i.*, a.name AS agent_name, p.name AS project_name FROM items i LEFT JOIN agents a ON a.id=i.agent_id "
+            f"LEFT JOIN projects p ON p.id=i.project_id WHERE i.id IN ({','.join('?' * len(want))})", want)} if want else {}
+        for iid in want:
+            r = rows.get(iid)
+            if r is None:
                 continue
-            r = self.q("SELECT i.*, a.name AS agent_name, p.name AS project_name FROM items i "
-                       "LEFT JOIN agents a ON a.id=i.agent_id LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?",
-                       (iid,))
-            if not r:
-                continue
-            r = r[0]
             flag = " ⚠conflict" if r["conflict"] else ""
-            if r["agent_id"]:
-                from .trust import Trust
-                if Trust(self).score(r["agent_id"]) < 0.3:
-                    flag += " ⚠low-trust"
+            if r["agent_id"] and trust.score(r["agent_id"]) < 0.3:
+                flag += " ⚠low-trust"
             line = (f"{r['id']} [{r['kind']}] {iso(r['created_at'])[:10]} "
                     f"{r['project_name'] or '-'}/{r['agent_name'] or '-'}{flag}: {r['summary']}")
             t = estimate_tokens(line)
@@ -1014,6 +1044,7 @@ class Store:
                                context_ids=[res["id"], sid] + (relevant_ids or []), project=s["project_id"])
             res["task_id"] = t["task_id"]
         res["packet"] = self.get_item(res["id"])["meta"]["packet"]
+        res["session_id"] = sid  # what the next agent passes to resume()
         return res
 
     def resume(self, sid: str | None = None, project: str | None = None, agent_id: str | None = None,

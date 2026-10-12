@@ -195,6 +195,9 @@ class PgDB:
             s += " RETURNING id"
             ret_table = m.group(1)
         s = re.sub(r"\bBEGIN\s+(IMMEDIATE|EXCLUSIVE|DEFERRED)\b", "BEGIN", s, flags=re.I)
+        # SQLite's scalar MAX(a,b)/MIN(a,b) are GREATEST/LEAST in Postgres (aggregate MAX(x) has no comma)
+        s = re.sub(r"\b(MAX|MIN)\(([^()]*,[^()]*)\)",
+                   lambda m: ("GREATEST(" if m.group(1).upper() == "MAX" else "LEAST(") + m.group(2) + ")", s, flags=re.I)
         out = (_placeholders(s), ret_table)
         self._cache[sql] = out
         return out

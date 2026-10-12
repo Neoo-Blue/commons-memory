@@ -257,10 +257,13 @@ def selfcheck(s, sample: int = 100, model: str | None = None, seed: int = 7, kin
 
 
 # ---------------------------------------------------------------------------------------------- scale / latency
-def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto", log=lambda m: None) -> dict:
+def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto", log=lambda m: None,
+          db: str | None = None) -> dict:
     """Search latency, write throughput, DB size and process memory as the store grows. Items are synthetic
     sentences with real keyword structure; vectors are random unit vectors of the embedder's dimension (scan cost
-    doesn't depend on content), while each query is embedded for real, so latency includes the query embedding."""
+    doesn't depend on content), while each query is embedded for real, so latency includes the query embedding.
+    `db`: an empty postgresql:// DSN to measure the Postgres + pgvector backend instead of a temp SQLite file.
+    conc_qps: searches/s with 8 searching threads while 2 threads keep writing (agents hitting one hub at once)."""
     import random
     import resource
     import statistics as st
@@ -275,7 +278,7 @@ def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto",
     out = {"embedder": e.name if e else "none", "dim": e.dim if e else 0, "sizes": []}
     d, path = tempfile.mkdtemp(prefix="cscale-"), None
     try:
-        path = os.path.join(d, "s.db")
+        path = db or os.path.join(d, "s.db")
         s = Store(path, embedder=e)
         s.defer_embed = True
         n = 0
@@ -294,6 +297,7 @@ def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto",
                     n += 1
                 s.db.execute("COMMIT")
             write_s = time.time() - t0
+            s.sync_vectors()  # postgres: fill the pgvector column (no-op on SQLite)
             lat = []
             for q in range(queries):
                 qtext = " ".join(rng.choice(words) for _ in range(rng.randint(2, 6)))
@@ -301,9 +305,27 @@ def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto",
                 s.search(qtext, limit=10, max_tokens=600)
                 lat.append((time.perf_counter() - t1) * 1000)
             lat.sort()
+            from concurrent.futures import ThreadPoolExecutor
+            stop, t2 = [], time.perf_counter()
+
+            def writer(w):
+                while not stop:
+                    s.add_item("memory", f"live {w} {rng.random()}: " + " ".join(rng.sample(words, 10)), project="p0")
+
+            def searcher(_):
+                for _q in range(20):
+                    s.search(" ".join(rng.sample(words, 3)), limit=10, max_tokens=600)
+            with ThreadPoolExecutor(10) as ex:
+                ws = [ex.submit(writer, w) for w in range(2)]
+                list(ex.map(searcher, range(8)))
+                conc = 160 / (time.perf_counter() - t2)
+                stop.append(1)
+                [w.result() for w in ws]
             row = {"items": n, "search_p50_ms": round(st.median(lat), 1), "search_p95_ms": round(lat[int(len(lat) * 0.95) - 1], 1),
                    "insert_per_s": round((target - (out["sizes"][-1]["items"] if out["sizes"] else 0)) / max(write_s, 1e-6)),
-                   "db_mb": round(os.path.getsize(path) / 1e6, 1),
+                   "conc_qps": round(conc, 1),
+                   "db_mb": round((s.q("SELECT pg_database_size(current_database()) b")[0]["b"] if s.dialect == "postgres"
+                                   else os.path.getsize(path)) / 1e6, 1),
                    "rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == "darwin" else 1e3), 1)}
             out["sizes"].append(row)
             log(json.dumps(row))

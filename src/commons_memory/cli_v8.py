@@ -55,6 +55,7 @@ def add_parsers(sub) -> None:
                    help="self = known-item retrieval on YOUR store: a model writes questions from sampled memories")
     x.add_argument("--data", help="dataset json (longmemeval_s_cleaned.json / locomo10.json)")
     x.add_argument("--sample", type=int, default=100, help="self: memories to sample")
+    x.add_argument("--target", help="scale: an empty postgresql:// DSN to benchmark Postgres instead of temp SQLite")
     x.add_argument("--sizes", help="scale: comma list of store sizes (default 1000,10000,50000)")
     x.add_argument("--judge", help="qa-*: judge model (default: same as --model)")
     x.add_argument("--k", type=int, default=20, help="qa-*: memories retrieved per question (mem0's eval: 10 per speaker)")
@@ -201,7 +202,8 @@ def handle_nostore(args) -> int:
             return 0
         if args.suite == "scale":
             s = bench.scale(sizes=tuple(int(x) for x in (args.sizes or "1000,10000,50000").split(",")),
-                            embedder=args.embedder, log=lambda m: print(m, file=sys.stderr, flush=True))
+                            embedder=args.embedder, log=lambda m: print(m, file=sys.stderr, flush=True),
+                            db=args.target)
             print(json.dumps(s, indent=2))
             return 0
         if args.suite == "self":

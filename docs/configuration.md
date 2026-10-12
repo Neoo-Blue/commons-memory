@@ -23,6 +23,8 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_CF_ACCESS_AUD` | — | Cloudflare Access application audience tag to verify | expose.py |
 | `COMMONS_CF_ACCESS_CERTS` | — | Cloudflare Access certs URL override | expose.py |
 | `COMMONS_CF_ACCESS_TEAM` | — | Cloudflare Access team name (`<team>.cloudflareaccess.com`) | expose.py |
+| `COMMONS_CONTRADICTION_MAX` | `50` | New notes checked for contradictions per librarian pass (default 50) | librarian.py |
+| `COMMONS_CONTRADICTION_THRESHOLD` | `0.85` | TypeSafe probability at which two notes count as contradicting (default 0.85; precision first) | librarian.py |
 | `COMMONS_DAILY_COST_CAP` | — | USD/day cap across all orchestrated work; jobs pause when hit | usage.py |
 | `COMMONS_DASHBOARD_HOSTS` | — | Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding | dashboard.py |
 | `COMMONS_DASHBOARD_REQUIRE_TOKEN` | — | Require the dashboard token even on localhost/LAN/tailnet binds (`1`) | dashboard.py |
@@ -103,12 +105,15 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ROUTING_VALIDATE_N` | `5` | A/B samples before a routing proposal is validated | providers.py |
 | `COMMONS_SKILL_AUTO_APPROVE` | — | Activate clean skill versions without a second agent (single-user setups only) | server_v4.py, skillpool.py |
 | `COMMONS_SKILL_DISCOVERY` | `1` | Background skill discovery from public catalogs (`0` off) | background.py |
+| `COMMONS_SQLITE_READERS` | `0` | Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host | store.py |
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |
 | `COMMONS_TOOLS` | — | Which tools MCP clients list: `core` (default, ~20 routine tools plus `tools`/`call` to reach the rest), `all`, or `core,name,...`. Per-agent: `commons agent tools NAME PROFILE`; per-connection: `?tools=` on the MCP URL | cli_v7.py, toolprofile.py |
 | `COMMONS_TREE_SITTER` | `1` | Use tree-sitter for JS/TS code indexing (`0` = regex fallback) | codeindex.py |
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
+| `COMMONS_TYPESAFE_MODEL` | `jev-latest` | TypeSafe model (default jev-latest) | typesafe.py |
+| `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
 | `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |

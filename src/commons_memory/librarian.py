@@ -137,6 +137,7 @@ class Librarian:
         report["assigned"] = self._assign(run_id, items)
         from .graphlinks import rebuild
         report["links_added"] = rebuild(self.s)["added"]
+        report["contradictions"] = self._contradictions(run_id, items)
         report["flags"] = self._flags(run_id)
         report["skills_tidied"] = self._skills(run_id)
         from .kb import KB
@@ -159,18 +160,29 @@ class Librarian:
         pool = [dict(r) for r in self.s.q("SELECT id, kind, project_id, title, content, created_at FROM items WHERE "
                                           "superseded_by IS NULL AND kind IN ('memory','fact','source') AND COALESCE(tags,'') "
                                           "NOT LIKE '%\"subtask\"%' ORDER BY created_at")]  # task outputs are per-run records
-        vec = {p["id"]: self._emb.embed([f"{p['title']} {p['content']}"[:2000]])[0] for p in pool}
         new_ids = {i["id"] for i in items}
+        pos = {p["id"]: n for n, p in enumerate(pool)}
+        terms, vecs = {}, {}
+
+        def t(p):  # computed on demand: a run touches new items x pool, not every pair (4M pairs at 3k items)
+            if p["id"] not in terms:
+                terms[p["id"]] = set(_terms(p["content"]))
+            return terms[p["id"]]
+
+        def v(p):
+            if p["id"] not in vecs:
+                vecs[p["id"]] = self._emb.embed([f"{p['title']} {p['content']}"[:2000]])[0]
+            return vecs[p["id"]]
         seen = set()
-        for i, a in enumerate(pool):
-            for b in pool[i + 1:]:
-                if b["id"] not in new_ids and a["id"] not in new_ids:
-                    continue
-                if a["kind"] != b["kind"] or a["project_id"] != b["project_id"] or b["id"] in seen:
-                    continue
-                ta, tb = set(_terms(a["content"])), set(_terms(b["content"]))
+        pairs = sorted({(min(pos[n["id"]], pos[x["id"]]), max(pos[n["id"]], pos[x["id"]]))
+                        for n in pool if n["id"] in new_ids for x in pool
+                        if x["id"] != n["id"] and x["kind"] == n["kind"] and x["project_id"] == n["project_id"]})
+        for i, j in pairs:  # a is the older item and is kept; b, the newer, is the duplicate
+            a, b = pool[i], pool[j]
+            if b["id"] not in seen:
+                ta, tb = t(a), t(b)
                 jac = len(ta & tb) / max(1, len(ta | tb))
-                if jac >= 0.8 and cosine(vec[a["id"]], vec[b["id"]]) >= DUP_THRESHOLD:
+                if jac >= 0.8 and cosine(v(a), v(b)) >= DUP_THRESHOLD:
                     seen.add(b["id"])
                     if self.auto_approve():
                         self._merge(run_id, a["id"], b["id"])
@@ -234,6 +246,49 @@ class Librarian:
             if p:
                 out.append(p)
         return out
+
+    def _contradictions(self, run_id, items) -> list[str]:
+        """Free-text contradictions (structured facts are caught on write by subject/predicate): each new note vs its 3
+        nearest notes in the same project, one TypeSafe yes/no per pair. Hits become open conflicts (pickup and
+        conflicts() show them; _flags proposes a review)."""
+        from . import typesafe
+        if not typesafe.enabled():
+            return []
+        from concurrent.futures import ThreadPoolExecutor
+        thr = float(os.environ.get("COMMONS_CONTRADICTION_THRESHOLD", "0.85"))
+        kinds = ("memory", "fact", "decision")
+        new = [i for i in items if i["kind"] in kinds and '"subtask"' not in (i.get("tags") or "")]
+        q = ("Do note A and note B contradict each other, so that both cannot be true at the same time about the "
+             "same thing?")
+        found = []
+        for it in new[:int(os.environ.get("COMMONS_CONTRADICTION_MAX", "50"))]:
+            ids, _, _ = self.s.rank(f"{it.get('title') or ''} {it['content']}"[:500], kinds=list(kinds), limit=6,
+                                    project=self.s.project_name(it["project_id"]) if it["project_id"] else None)
+            ids = [i for i in ids if i != it["id"]][:3]
+            if not ids:
+                continue
+            rows = {r["id"]: r for r in self.s.q(f"SELECT id, content, created_at FROM items WHERE id IN ({','.join('?' * len(ids))}) "
+                                                 "AND superseded_by IS NULL", ids)}
+            near = [rows[i] for i in ids if i in rows and not self.s.q(
+                "SELECT 1 FROM relations WHERE type='contradicts' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
+                (it["id"], i, i, it["id"]))]
+
+            def ask(r, it=it):
+                try:
+                    return typesafe.noul(f"Note A: {r['content'][:2000]}\nNote B: {it['content'][:2000]}", {"c": q}).get("c", 0)
+                except Exception:  # noqa: BLE001 - a TypeSafe outage only skips this pass
+                    return 0.0
+            with ThreadPoolExecutor(3) as ex:
+                for r, p in zip(near, ex.map(ask, near)):
+                    if p >= thr:  # as for facts: a = the older note, b = the newer one that contradicts it
+                        old, new_ = (r, it) if r["created_at"] <= it["created_at"] else (it, r)
+                        self.s.x("INSERT INTO conflicts VALUES(?,?,?,?,?,?,?)",
+                                 (new_id("cfl"), old["id"], new_["id"], "text", "contradicts", "open", now()))
+                        self.s.x("UPDATE items SET conflict=1 WHERE id IN (?,?)", (old["id"], new_["id"]))
+                        self.s.relate(new_["id"], old["id"], "contradicts", agent_id=self.agent_id)
+                        self._log(run_id, "contradiction", new_["id"], None, {"with": old["id"], "p": round(p, 3)}, False)
+                        found.append(new_["id"])
+        return found
 
     def _skills(self, run_id) -> int:
         n = 0
