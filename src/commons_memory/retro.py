@@ -905,6 +905,12 @@ class RetroLearner:
         provenance = {"retro": True, "source": src, "confidence": r["confidence"], "method": r["method"], "queue_id": r["id"]}
         tags = ["retro", f"src:{r['source_kind']}"]
         k = r["kind"]
+        if k == "memory":  # an import held for review by the curator: import it as decided
+            from .importers import import_items
+            it = dict(p["item"], status="keep")
+            import_items(self.s, [it], agent_id=agent_id)
+            got = self.s.q("SELECT value FROM meta WHERE key=?", (f"import:{it.get('src')}",))
+            return got[0]["value"] if got else ""
         if k == "preference":
             from .prefs import Preferences
             o = Preferences(self.s).observe(r["text"], project=r["project"], confidence=min(0.8, r["confidence"]),

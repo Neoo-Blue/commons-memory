@@ -160,33 +160,59 @@ def collect(source: str, **kw) -> list[dict]:
 
 
 # ------------------------------------------------------------------ writer
-def import_items(s: Store, items: list[dict], agent_id: str | None = None, sources: dict | None = None) -> dict:
-    """Write items idempotently (skip any whose meta.src is already stored). Embeds once at the end, in batches."""
-    from .prefs import Preferences
-    srcs = [i.get("src") for i in items if i.get("src")]
-    have: set[str] = set()
+def known(s: Store, srcs: list[str]) -> set[str]:
+    """srcs already handled (imported, dropped, merged, duplicate). Queued-for-review items don't count: approving
+    them must still import them."""
+    out: set[str] = set()
     for i in range(0, len(srcs), 400):
-        ch = srcs[i:i + 400]
-        have |= {r["src"] for r in s.q(f"SELECT value AS src FROM meta WHERE key IN ({','.join('?' * len(ch))})",
-                                       [f"import:{x}" for x in ch]) if r["src"]}
-    added, skipped, prefs, errors = 0, 0, 0, []
+        ch = [x for x in srcs[i:i + 400] if x]
+        if ch:
+            out |= {r["key"][7:] for r in s.q(f"SELECT key, value FROM meta WHERE key IN ({','.join('?' * len(ch))})",
+                                              [f"import:{x}" for x in ch]) if r["value"] != "queued"}
+    return out
+
+
+def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> dict:
+    """Write items idempotently (skip any whose src is already handled). Per-item `status`: keep (default) imports;
+    review queues it for a human (retro review queue); drop / merge / duplicate only records the decision so later
+    runs skip it. Embeds once at the end, in batches."""
+    from .prefs import Preferences
+    have = known(s, [i.get("src") for i in items])
+    added, skipped, prefs, queued, ledger, errors = 0, 0, 0, 0, 0, []
     s.defer_embed = True
     try:
         for it in items:
-            src = it.get("src")
+            src, status = it.get("src"), it.get("status") or "keep"
             if src and src in have:
                 skipped += 1
                 continue
+            if status in ("drop", "merge", "duplicate"):
+                if src:
+                    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", status))
+                ledger += 1
+                continue
+            if status == "review":
+                from .retro import RetroLearner, fingerprint
+                RetroLearner(s)._enqueue("import-review", {
+                    "kind": "memory", "text": it.get("title") or (it.get("content") or "")[:200],
+                    "payload": {"item": {k: v for k, v in it.items() if k != "status"}},
+                    "source": {"kind": (src or "import").split(":")[0], "id": src}, "project": it.get("project"),
+                    "confidence": float(it.get("confidence") or 0.5), "fingerprint": fingerprint("memory", src or it.get("content", "")),
+                    "method": it.get("method") or "curator"})
+                if src:
+                    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", "queued"))
+                queued += 1
+                continue
             try:
                 r = s.add_item(it.get("kind") or "memory", it.get("content") or "", title=it.get("title") or "",
-                               project=it.get("project"), agent_id=agent_id, tags=it.get("tags"),
-                               meta={"src": src, "imported": True}, created_at=_epoch(it.get("created_at")),
-                               check_conflicts=False)
+                               summary=it.get("summary") or "", project=it.get("project"), agent_id=agent_id,
+                               tags=it.get("tags"), meta={"src": src, "imported": True},
+                               created_at=_epoch(it.get("created_at")), check_conflicts=False)
             except CommonsError as e:
                 errors.append(f"{src}: {e}")
                 continue
             if src:
-                s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", src))
+                s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", r["id"]))
                 have.add(src)
             if it.get("preference"):
                 Preferences(s).observe(it["preference"], project=None, source=f"import:{src}", confidence=0.9,
@@ -196,8 +222,8 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None, sourc
     finally:
         s.defer_embed = False
     emb = s.reindex() if added else {"done": 0}
-    return {"added": added, "skipped": skipped, "preferences": prefs, "embedded": emb.get("done", 0),
-            "errors": errors[:20], "error_count": len(errors)}
+    return {"added": added, "skipped": skipped, "queued": queued, "decided": ledger, "preferences": prefs,
+            "embedded": emb.get("done", 0), "errors": errors[:20], "error_count": len(errors)}
 
 
 def _epoch(v) -> float | None:

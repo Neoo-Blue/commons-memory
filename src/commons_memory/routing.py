@@ -62,7 +62,13 @@ def provider_params(kind: str, model: str, eff: dict) -> dict:
     """Map an effort spec to the provider's native request fields."""
     lvl, m = eff.get("level", "medium"), (model or "").lower()
     if kind == "anthropic":
-        if eff.get("thinking_budget", 0) >= 1024 and re.search(r"claude-(opus|sonnet|haiku)-4|claude-3-7|claude-(opus|sonnet)", m):
+        v = re.search(r"claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?!\d)", m)
+        if v and (int(v.group(1)), int(v.group(2) or 0)) >= (4, 6):
+            # Claude 4.6+ / 5.x: effort is the knob; thinking budgets and sampling params return 400 on 5.x.
+            # minimal on Haiku also switches thinking off (Haiku accepts it; Opus/Sonnet 5.5 reject "disabled")
+            out = {"output_config": {"effort": {"minimal": "low"}.get(lvl, lvl)}}
+            return out | ({"thinking": {"type": "disabled"}} if lvl == "minimal" and "haiku" in m else {})
+        if eff.get("thinking_budget", 0) >= 1024 and re.search(r"claude-(opus|sonnet|haiku)-4|claude-3-7", m):
             return {"thinking": {"type": "enabled", "budget_tokens": int(eff["thinking_budget"])}}  # temperature must stay 1
         return {"temperature": eff.get("temperature", 0.3)}
     if kind == "openai":

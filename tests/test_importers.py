@@ -61,3 +61,35 @@ def test_claude_mem_memory_files_and_sesame_import(store, tmp_path):
     assert "env://MEM0_KEY" in txt and "SHOULD-NEVER-LEAK" not in txt and "http://10.0.0.5:8888" in txt
     assert "recipe list" in txt and "User-Agent" in txt
     assert I.import_items(store, items)["added"] == 1
+
+
+def test_curated_import_with_ai_manager(store):
+    """--curate: the curator role (mock provider here) drops noise, merges repeats, queues uncertain items for review,
+    extracts preferences, and a re-run reviews nothing twice."""
+    from commons_memory.curate import curate
+    from commons_memory.providers import ProviderLayer
+    from commons_memory.retro import RetroLearner
+    pl = ProviderLayer(store)
+    pl.add_provider("mock", "mock")
+    pl.set_role("curator", "mock/curator-1")
+    items = [{"src": "t:1", "title": "Build status: CI green", "content": "ci passed", "project": "web"},
+             {"src": "t:2", "title": "Payments use Stripe webhooks", "content": "We decided on Stripe webhooks; retries are idempotent.", "project": "web"},
+             {"src": "t:3", "title": "Payments use Stripe webhooks", "content": "Webhook secret rotates monthly.", "project": "web"},
+             {"src": "t:4", "title": "Maybe switch to Postgres 18", "content": "Unclear if needed.", "project": "web"},
+             {"src": "t:5", "title": "No em dashes", "content": "Never use em dashes in copy.", "project": None},
+             {"src": "t:6", "title": "No em dashes", "content": "Never use em dashes in copy.", "project": None}]
+    est = curate(store, items, dry_run=True)
+    assert est["duplicates_removed"] == 1 and est["items"] == 5 and est["tokens_in"] > 0
+    r = curate(store, items, workers=2)
+    assert (r["kept"], r["queued"], r["dropped"], r["merged"], r["duplicates_removed"]) == (2, 1, 1, 1, 1)
+    hit = store.search("Stripe webhooks retries", project="web")["results"]
+    assert hit and hit[0]["kind"] == "decision"
+    assert "rotates monthly" in store.expand(hit[0]["id"])["content"]  # the merged item's text was folded in
+    from commons_memory.prefs import Preferences
+    assert "em dashes" in Preferences(store).get(max_tokens=400)["text"]
+    q = RetroLearner(store).queue()
+    assert len(q) == 1 and "Postgres" in q[0]["text"]
+    RetroLearner(store).decide([q[0]["id"]], True)
+    assert store.search("Postgres 18")["results"]  # approving the queued item imports it
+    again = curate(store, items, workers=2)
+    assert again["batches"] == 0 and again["kept"] == 0  # nothing reviewed (or paid for) twice

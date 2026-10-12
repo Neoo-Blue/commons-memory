@@ -49,14 +49,21 @@ def register_v8(mcp, store, who):
         return _js(cap.configure(project, **kw))
 
     @mcp.tool()
-    def import_items(items: list[dict], agent: str = "", api_key: str = "") -> str:
+    def import_items(items: list[dict] | None = None, check: list[str] | None = None, agent: str = "",
+                     api_key: str = "") -> str:
         """Bulk-import memories (max 500 per call), idempotent by each item's `src` id. Item fields: content*, kind,
-        title, project, tags, created_at (epoch or ISO), src, preference (text -> also a shared user preference).
-        `commons import claude-mem|mem0|claude-memory|sesame --url ...` drives this from a laptop."""
+        title, summary, project, tags, created_at (epoch or ISO), src, preference (-> also a shared user preference),
+        status (keep | review = hold in the review queue | drop/merge/duplicate = record only). check=[src...]
+        returns which srcs are already handled. `commons import <source> [--curate] --url ...` drives this."""
         from .importers import import_items as _imp
+        from .importers import known
+        aid = me(agent, api_key)
+        if check:
+            return _js({"known": sorted(known(store, check))})
+        items = items or []
         if len(items) > 500:
             raise CommonsError("import_items takes at most 500 items per call")
-        return _js(_imp(store, items, agent_id=me(agent, api_key)))
+        return _js(_imp(store, items, agent_id=aid))
 
     @mcp.tool()
     def memory_stream(project: str = "", limit: int = 30) -> str:

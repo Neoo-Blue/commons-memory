@@ -11,6 +11,11 @@ from .store import CommonsError, Store
 # USD per 1M tokens (input, output). Override/extend with COMMONS_PRICES=/path/prices.json or ~/.commons/prices.json
 DEFAULT_PRICES = {
     "claude-opus": (15.0, 75.0), "claude-sonnet": (3.0, 15.0), "claude-haiku": (0.8, 4.0),
+    # current generation (platform.claude.com pricing, 2026-09); the bare family names above stay for old ids
+    "claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0), "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0), "claude-haiku-4-5": (1.0, 5.0), "claude-fable-5": (10.0, 50.0),
+    "claude-haiku-5": (1.0, 5.0),  # ponytail: Haiku 5.5 price not published to us yet; assumed = Haiku 4.5, override in prices.json
     "gpt-5": (1.25, 10.0), "gpt-4o": (2.5, 10.0), "gpt-4o-mini": (0.15, 0.6), "o3": (2.0, 8.0),
     "grok-4": (3.0, 15.0), "grok-3-mini": (0.3, 0.5), "gemini-2.5-pro": (1.25, 10.0), "gemini-2.5-flash": (0.3, 2.5),
     "default": (1.0, 4.0), "local": (0.0, 0.0), "mock": (0.0, 0.0),

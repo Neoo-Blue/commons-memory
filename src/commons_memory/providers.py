@@ -29,7 +29,8 @@ KINDS = {
     "ollama": "http://127.0.0.1:11434",
     "mock": "mock://",
 }
-ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro", "difficulty"]
+ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro", "difficulty",
+         "curator"]
 TASK_TYPES = ["research", "plan", "code", "review", "red_team", "test", "summarize", "debate", "judge", "general"]
 
 # Small, cheap, automatically checkable probes per task type.
@@ -216,7 +217,7 @@ class ProviderLayer:
     # ------------------------------------------------------------------ chat
     def chat(self, model_id: str, prompt: str, system: str = "", max_tokens: int = 1024, role: str = "",
              agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "",
-             effort: dict | str | None = None) -> dict:
+             effort: dict | str | None = None, schema: dict | None = None) -> dict:
         """effort: a level ("minimal|low|medium|high|max") or a dict from routing.effort_spec(); mapped to the
         provider's native knob (Anthropic thinking budget, OpenAI/xAI reasoning_effort, Gemini thinkingBudget,
         OpenRouter reasoning.effort, Ollama think)."""
@@ -225,7 +226,7 @@ class ProviderLayer:
             from .routing import effort_spec
             effort = effort_spec(effort)
         with span("llm.chat", model=model_id, role=role or "chat", job=job_id) as sp:
-            self._effort = effort
+            self._effort, self._schema = effort, schema
             out = self._chat(model_id, prompt, system, max_tokens, role, agent_id, job_id, cache_prefix)
             if effort and isinstance(out, dict):
                 out["effort"] = effort.get("level")
@@ -249,6 +250,13 @@ class ProviderLayer:
         xp = provider_params(kind, model, eff) if eff else {}
         if eff and eff.get("max_tokens"):
             max_tokens = max(max_tokens, int(eff["max_tokens"]))
+        schema = getattr(self, "_schema", None)  # structured output: the provider guarantees JSON matching it
+        if schema and kind == "anthropic":
+            xp = xp | {"output_config": dict(xp.get("output_config") or {}, format={"type": "json_schema", "schema": schema})}
+        elif schema and kind in ("openai", "openrouter", "xai"):
+            xp = xp | {"response_format": {"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": True}}}
+        elif schema and kind == "ollama":
+            xp = xp | {"format": schema}
         self.last_request_params = xp
         if kind == "mock":
             text = _mock_chat(json.loads(p["config"] or "{}"), model, system, cache_prefix + prompt)
@@ -264,7 +272,7 @@ class ProviderLayer:
                 ([{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}] if cache_prefix else [])
             body = {"model": model, "max_tokens": max_tokens, "system": sysblocks or None,
                     "messages": [{"role": "user", "content": prompt}]}
-            if xp.get("thinking"):  # budget must fit inside max_tokens
+            if (xp.get("thinking") or {}).get("budget_tokens"):  # budget must fit inside max_tokens
                 body["max_tokens"] = max_tokens + xp["thinking"]["budget_tokens"]
             r = _http("POST", f"{base}/v1/messages", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}, body | xp)
             text = "".join(c.get("text", "") for c in r.get("content", []))
@@ -541,6 +549,22 @@ def _mock_chat(config: dict, model: str, system: str, prompt: str) -> str:
         cands = json.loads(prompt.split("CANDIDATES_JSON:", 1)[1])
         return json.dumps({tt: {"agent": rows[0]["agent"], "model": rows[0]["model"], "reason": f"[{model}] top pick"}
                            for tt, rows in cands.items() if rows})
+    if role == "curator":  # drop status pings, merge repeated titles, keep the rest; "always/never" -> preference
+        items = json.loads(prompt[prompt.index('[{"i": 0'):])
+        out, first = [], {}
+        for it in items:
+            t = (it.get("title") or "").lower()
+            if re.search(r"(?i)\b(status|monitoring|in progress|launched)\b", t):
+                out.append({"i": it["i"], "a": "drop"})
+            elif t in first:
+                out.append({"i": it["i"], "a": "merge", "into": first[t]})
+            else:
+                first[t] = it["i"]
+                pref = it["content"] if re.search(r"(?i)\b(always|never)\b", it.get("content") or "") else None
+                out.append({"i": it["i"], "a": "keep", "k": "decision" if "decid" in (it.get("content") or "") else "memory",
+                            "t": (it.get("title") or "")[:80] or "untitled", "s": (it.get("content") or "")[:80],
+                            "p": it.get("project"), "g": ["curated"], "c": 0.5 if "maybe" in t else 0.9, "pref": pref})
+        return json.dumps({"items": out})
     if role == "pref_extractor":
         return "\n".join(f"- {s.strip()}" for s in re.split(r"[.!\n]", prompt) if re.search(r"(?i)\b(prefer|always|never|use)\b", s))
     if role == "retro":

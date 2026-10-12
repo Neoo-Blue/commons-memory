@@ -20,7 +20,15 @@ def add_parsers(sub) -> None:
     x.add_argument("--url", help="remote Commons MCP url (http://host:8770/mcp); default: the local database")
     x.add_argument("--api-key-file", help="key for --url (default ~/.commons/agents/<COMMONS_AGENT>.key or $COMMONS_API_KEY)")
     x.add_argument("--batch", type=int, default=300)
-    x.add_argument("--dry-run", action="store_true", help="count and show a sample, write nothing")
+    x.add_argument("--dry-run", action="store_true", help="count and show a sample (with --curate: estimated cost), write nothing")
+    x.add_argument("--curate", action="store_true", help="an AI manager reviews every item first: keep/drop/merge, "
+                                                         "rewritten title+summary, project, tags, preferences")
+    x.add_argument("--model", help="curator model as provider/model (default: the `curator` role)")
+    x.add_argument("--budget", type=float, help="USD cap for the curator; stops cleanly, a re-run continues")
+    x.add_argument("--auto-approve", type=float, default=0.6, help="import keeps at or above this confidence; "
+                                                                     "the rest wait in the review queue")
+    x.add_argument("--workers", type=int, default=4, help="parallel curator calls")
+    x.add_argument("--limit", type=int, help="only the most recent N items of each source (try a sample first)")
     x = sub.add_parser("hook", help="(called by agent harness hooks) handle one lifecycle event from stdin; never blocks")
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "generic"])
     x.add_argument("event")
@@ -87,10 +95,9 @@ def _import(args) -> int:
         except Exception as e:  # noqa: BLE001 - one missing source must not stop `all`
             print(f"{src}: skipped ({e})", file=sys.stderr)
             continue
-        if args.dry_run:
-            print(f"{src}: {len(items)} items, e.g. {json.dumps(items[0], default=str)[:300] if items else '-'}")
-            continue
-        res = {"added": 0, "skipped": 0, "preferences": 0, "embedded": 0, "error_count": 0}
+        if args.limit:
+            items = sorted(items, key=lambda i: float(I._epoch(i.get("created_at")) or 0))[-args.limit:]
+        cli = None
         if args.url:
             from .worker import McpClient
             key = os.environ.get("COMMONS_API_KEY") or ""
@@ -98,14 +105,44 @@ def _import(args) -> int:
             if kf and os.path.exists(os.path.expanduser(kf)):
                 key = open(os.path.expanduser(kf)).read().strip()
             cli = McpClient(args.url, key)
-            for i in range(0, len(items), args.batch):
-                r = json.loads(cli._call("import_items", {"items": items[i:i + args.batch]}))
-                for k in res:
-                    res[k] += r.get(k, 0)
-                print(f"{src}: {min(i + args.batch, len(items))}/{len(items)} sent", file=sys.stderr, flush=True)
+
+        def sink(xs, cli=cli):
+            if cli is None:
+                return I.import_items(local, xs)
+            out: dict = {}
+            for i in range(0, len(xs), args.batch):
+                r = json.loads(cli._call("import_items", {"items": xs[i:i + args.batch]}))
+                for k, v in r.items():
+                    if isinstance(v, int):
+                        out[k] = out.get(k, 0) + v
+            return out
+
+        def known_fn(srcs, cli=cli):
+            if cli is None:
+                return I.known(local, srcs)
+            got: set = set()
+            for i in range(0, len(srcs), 2000):
+                got |= set(json.loads(cli._call("import_items", {"items": [], "check": srcs[i:i + 2000]}))["known"])
+            return got
+
+        from .store import Store
+        local = Store(args.db)
+        if args.curate:
+            from .curate import curate
+            res = curate(local, items, model=args.model, budget=args.budget, auto_approve=args.auto_approve,
+                         workers=args.workers, dry_run=args.dry_run, sink=sink, known_fn=known_fn,
+                         log=lambda m: print(f"{src}: {m}", file=sys.stderr, flush=True))
+        elif args.dry_run:
+            print(f"{src}: {len(items)} items, e.g. {json.dumps(items[0], default=str)[:300] if items else '-'}")
+            continue
         else:
-            from .store import Store
-            res = I.import_items(Store(args.db), items)
+            res = {}
+            for i in range(0, len(items), args.batch):
+                for k, v in sink(items[i:i + args.batch]).items():
+                    if isinstance(v, int):
+                        res[k] = res.get(k, 0) + v
+                if cli is not None:
+                    print(f"{src}: {min(i + args.batch, len(items))}/{len(items)} sent", file=sys.stderr, flush=True)
         total[src] = res
         print(f"{src}: {json.dumps(res)}", flush=True)
     return 0
