@@ -59,6 +59,52 @@ def scan(project_dir: str = ".", extra: list[str] | None = None) -> list[dict]:
     return found
 
 
+def push(url: str, key: str, paths: list[str], dry_run: bool = False) -> dict:
+    """Publish local skills (SKILL.md + bundled files) into a remote hub's shared pool; existing ones get a new
+    version. Each still goes through the hub's secret / injection scan and needs another agent's review."""
+    import json as _json
+    from .worker import McpClient
+    found = []
+    for p in paths:
+        loc = Path(p).expanduser()
+        for f in sorted(loc.rglob("SKILL.md")) if loc.is_dir() else []:
+            if f.stat().st_size > MAX_FILE:
+                continue
+            files = {}
+            for g in sorted(f.parent.rglob("*")):
+                if g.is_file() and g != f and g.stat().st_size < MAX_FILE and len(files) < 20 and "__pycache__" not in g.parts:
+                    try:
+                        files[str(g.relative_to(f.parent))] = g.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        pass
+            name = _slug(f.parent.name)
+            found.append({"name": name, "content": _as_skill(f.read_text(encoding="utf-8", errors="replace"), name,
+                                                             {"description": f"Imported skill {name}", "path": str(f)}),
+                          "files": files})
+    if dry_run:
+        return {"would_publish": [x["name"] for x in found]}
+    cli, out = McpClient(url, key), {"published": [], "updated": [], "unchanged": [], "errors": {}}
+    for sk in found:
+        try:
+            r = _json.loads(cli._call("call", {"tool": "skill_publish", "args": {
+                "name": sk["name"], "content": sk["content"], "files": sk["files"], "tags": ["imported", "local", "skill"]}}))
+            out["published"].append(sk["name"]) if r else None
+        except Exception as e:  # noqa: BLE001
+            if "exists" not in str(e):
+                out["errors"][sk["name"]] = str(e)[:200]
+                continue
+            try:
+                cli._call("call", {"tool": "skill_update", "args": {"name": sk["name"], "content": sk["content"],
+                                                                     "files": sk["files"], "changelog": "re-imported from local"}})
+                out["updated"].append(sk["name"])
+            except Exception as e2:  # noqa: BLE001
+                if "unchanged" in str(e2) or "identical" in str(e2):
+                    out["unchanged"].append(sk["name"])
+                else:
+                    out["errors"][sk["name"]] = str(e2)[:200]
+    return out
+
+
 def run(store: Store, project_dir: str = ".", extra: list[str] | None = None, dry_run: bool = False,
         replace_local: bool = False, agent_id: str | None = None) -> dict:
     from .skillpool import SkillPool

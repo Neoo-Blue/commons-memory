@@ -219,6 +219,9 @@ def _main(argv: list[str] | None = None) -> int:
     sd.add_argument("--replace-local", action="store_true", help="replace imported local skills with the bootstrap pointer")
     sd.add_argument("--max-repos", type=int, default=60)
     sd.add_argument("--agent", default=os.environ.get("COMMONS_AGENT", "cli"))
+    sd.add_argument("--url", help="import: publish into a remote hub (http://host:8770/mcp) instead of the local database; "
+                                  "scans ~/.claude/skills (and any --path) only, not plugin caches")
+    sd.add_argument("--api-key-file", help="key for --url (default $COMMONS_API_KEY)")
     cxp = sub.add_parser("context", help="shared context packs: list | load PACK | diff PACK [OTHER] | fit PACK MODEL | savings")
     cxp.add_argument("action", choices=["list", "load", "diff", "fit", "savings"])
     cxp.add_argument("pack", nargs="?")
@@ -871,7 +874,11 @@ def _main(argv: list[str] | None = None) -> int:
             for r in d.list(a, args.query, args.kind, 40):
                 print(f"{r['score']:>8} ★{r['stars']:<6} +{r['delta_7d']:<4} {r['kind']:9} {r['license']:12} {r['id']}")
             return 0
-        if a == "import":
+        if a == "import" and args.url:
+            from .skillimport import push
+            key = open(os.path.expanduser(args.api_key_file)).read().strip() if args.api_key_file else os.environ.get("COMMONS_API_KEY", "")
+            r = push(args.url, key, args.path or [os.path.expanduser("~/.claude/skills")], dry_run=args.dry_run)
+        elif a == "import":
             from .skillimport import run as imp
             r = imp(store, args.dir, args.path, args.dry_run, args.replace_local, aid)
         elif a in ("restore", "backups"):

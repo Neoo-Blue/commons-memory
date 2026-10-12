@@ -362,11 +362,22 @@ class Orchestrator:
             used[best[1]["id"]] = used.get(best[1]["id"], 0) + 1
             self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (best[1]["id"], st["id"]))
             self.s.relate(st["id"], best[1]["id"], "assigned_to")
-            # a mailbox task, not just a wake event: `commons agent daemon` long-polls the mailbox and fires within a
-            # second, and chat agents see the assignment on their next msg_recv
-            from .messaging import Messaging
-            kind = "review" if st["gate_of"] or st["type"] == "review" else "task"
-            Messaging(self.s).send(None, best[1]["id"], f"{kind} assigned: {st['title']} (job {job_id}). "
+        self._wake_ready(job_id)
+
+    def _wake_ready(self, job_id: str) -> None:
+        """Mail each assigned subtask to its agent once it can actually be claimed (dependencies done). A
+        `commons agent daemon` long-polls the mailbox and fires within a second; chat agents see it on their next
+        msg_recv. Waking at assignment time instead started agents on reviews of work that didn't exist yet."""
+        from .messaging import Messaging
+        for st in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND assigned_agent IS NOT NULL "
+                           "AND type<>'tally'", (job_id,)):
+            st = dict(st)
+            key = f"woke:{st['id']}:{st['attempts']}"  # once per attempt (a rework is a new attempt)
+            if not self._deps_ok(st) or self.s.q("SELECT 1 FROM meta WHERE key=?", (key,)):
+                continue
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, st["assigned_agent"]))
+            kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
+            Messaging(self.s).send(None, st["assigned_agent"], f"{kind} ready: {st['title']} (job {job_id}). "
                                    f"Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
                                    subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"]})
 
@@ -572,6 +583,7 @@ class Orchestrator:
             self.profiles.record_outcome(agent_id, st["type"], True, subtask_id=subtask_id, tokens=tokens, seconds=seconds)
             self._evaluate_gates(st["gate_of"])
         self._auto(st["job_id"])
+        self._wake_ready(st["job_id"])  # whoever was waiting on this subtask can start now
         from .graphlinks import link_job
         link_job(self.s, st["job_id"])
         self.s.kb_dirty(job["project_id"])
