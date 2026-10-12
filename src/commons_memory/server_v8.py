@@ -61,6 +61,8 @@ def register_v8(mcp, store, who):
         as_of: reference time for 'last week'/'in May' style queries (default now)."""
         ids, total, why = store.rank(query, project=project or None, kinds=kinds, since=since or None,
                                      until=until or None, limit=max(limit, 30) if rerank else limit, as_of=as_of or None)
+        if ids is None:  # unknown project / entity
+            return why["text"]
         if rerank:
             from .rerank import rerank_ids
             ids = rerank_ids(store, query, ids, how="cross-encoder")[:limit]
@@ -81,7 +83,12 @@ def register_v8(mcp, store, who):
         if not a:
             raise CommonsError(f"no item {anchor}")
         a = a[0]
+        store.check_ids(anchor)
         cond, args = ("AND project_id IS ?" if a["project_id"] is None else "AND project_id=?", [a["project_id"]]) if same_project else ("", [])
+        denied = store.denied_projects()
+        if denied and not same_project:
+            cond += f" AND (project_id IS NULL OR project_id NOT IN ({','.join('?' * len(denied))}))"
+            args += denied
         prev = store.q(f"SELECT id, kind, summary, created_at FROM items WHERE created_at<? {cond} AND superseded_by IS NULL "
                        f"ORDER BY created_at DESC LIMIT ?", [a["created_at"]] + args + [before])
         nxt = store.q(f"SELECT id, kind, summary, created_at FROM items WHERE created_at>? {cond} AND superseded_by IS NULL "
@@ -123,20 +130,23 @@ def register_v8(mcp, store, who):
                              agent_id=me(agent, api_key)))
 
     @mcp.tool()
-    def fact_invalidate(subject: str, predicate: str, at: str = "", agent: str = "", api_key: str = "") -> str:
-        """End the current value of subject.predicate at `at` (default now) without replacing it."""
+    def fact_invalidate(subject: str, predicate: str, at: str = "", project: str = "", agent: str = "",
+                        api_key: str = "") -> str:
+        """End the current value of subject.predicate (in `project`; empty = unscoped facts) at `at` (default now)
+        without replacing it."""
         me(agent, api_key)
-        return _js(facts.invalidate(subject, predicate, at=at or None))
+        return _js(facts.invalidate(subject, predicate, at=at or None, project=project or None))
 
     @mcp.tool()
-    def fact_get(subject: str, predicate: str = "", as_of: str = "") -> str:
-        """Facts about subject valid at as_of (default now). Omit predicate for all of them."""
-        return _js(facts.get(subject, predicate or None, as_of=as_of or None))
+    def fact_get(subject: str, predicate: str = "", as_of: str = "", project: str = "") -> str:
+        """Facts about subject valid at as_of (default now). Omit predicate for all of them; project narrows to one
+        project's timeline."""
+        return _js(facts.get(subject, predicate or None, as_of=as_of or None, project=project or None))
 
     @mcp.tool()
-    def fact_history(subject: str, predicate: str = "") -> str:
+    def fact_history(subject: str, predicate: str = "", project: str = "") -> str:
         """Full validity timeline of a subject's facts (valid_from -> valid_to)."""
-        return _js(facts.history(subject, predicate or None))
+        return _js(facts.history(subject, predicate or None, project=project or None))
 
     # ---- scoped spaces
     from .spaces import Spaces, audit

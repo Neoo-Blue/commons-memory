@@ -289,6 +289,8 @@ class Capture:
         if len((prompt or "").split()) < 3:
             return ""
         ids, _, why = self.s.rank(prompt, project=project, limit=5)
+        if ids is None:  # project not created yet
+            return ""
         good = [i for i in ids if why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_HOOK_RECALL_SIM", "0.6"))
                 or (why.get(i, {}).get("bm25_rank", 99) <= 2 and why.get(i, {}).get("vec_rank", 99) <= 3)]
         if not good:
@@ -303,6 +305,10 @@ class Capture:
             pid = self.s.q("SELECT id FROM projects WHERE name=? OR id=?", (project, project))
             sql += " AND o.project_id=?"
             args.append(pid[0]["id"] if pid else "__none__")
+        denied = self.s.denied_projects()
+        if denied:
+            sql += f" AND (o.project_id IS NULL OR o.project_id NOT IN ({','.join('?' * len(denied))}))"
+            args += denied
         rows = self.s.q(sql + " ORDER BY o.ts DESC LIMIT ?", args + [limit])
         return [{"id": r["id"], "agent": r["agent"], "kind": r["kind"], "event": r["event"], "harness": r["harness"],
                  "text": r["text"][:300], "ts": r["ts"], "item_id": r["item_id"]} for r in rows]

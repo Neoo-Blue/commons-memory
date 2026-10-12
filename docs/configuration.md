@@ -81,6 +81,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_PREF_HALF_LIFE_DAYS` | `120` | Half-life for preference confidence decay | prefs.py |
 | `COMMONS_PRICES` | — | Path to a JSON price table (USD per 1M tokens) for cost estimates | usage.py |
 | `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | connect.py, server.py |
+| `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |
 | `COMMONS_REINDEX_BATCH` | `512` | Items re-embedded per background tick after an embedder change | background.py |

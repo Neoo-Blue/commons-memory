@@ -405,6 +405,7 @@ class Store:
         wk, wv = R.w("keyword", 1.0), R.w("semantic", 1.0 if (self.embedder and self.embedder.name != "hash") else 0.7)
         lex: dict[str, float] = {}  # id -> lexical score (higher is better)
         sem: dict[str, float] = {}  # id -> cosine similarity
+        floor = 0.0
         if query and mode in ("hybrid", "keyword"):
             fts = R.fts_query(query)
             if fts and self.dialect == "postgres":
@@ -437,7 +438,7 @@ class Store:
                     break
                 sem[iid] = sim
                 why.setdefault(iid, {}).update(vec_rank=rank + 1, sim=round(sim, 4))
-        scores = R.fuse(lex, sem, wk, wv)
+        scores = R.fuse(lex, sem, wk, wv, sem_floor=floor if sem else 0.0)
         if not query:
             rows = self.q(f"SELECT i.id FROM items i WHERE {wsql} ORDER BY i.created_at DESC LIMIT ?", args + [limit])
             ranked = [r["id"] for r in rows]
@@ -523,7 +524,10 @@ class Store:
 
     def _budgeted(self, ids: list[str], max_tokens: int, total: int) -> dict:
         lines, results, used = [], [], 0
+        hidden = self.hidden_ids(ids)
         for iid in ids:
+            if iid in hidden:
+                continue
             r = self.q("SELECT i.*, a.name AS agent_name, p.name AS project_name FROM items i "
                        "LEFT JOIN agents a ON a.id=i.agent_id LEFT JOIN projects p ON p.id=i.project_id WHERE i.id=?",
                        (iid,))
@@ -560,10 +564,42 @@ class Store:
         from .auth import ACL, PRINCIPAL
         ACL(self).check(PRINCIPAL.get(), project_id, need)
 
+    def find_project(self, name: str | None) -> str | None:
+        """Project id by name or id, or None. Reads use this: project_id() creates missing projects."""
+        if not name:
+            return None
+        r = self.q("SELECT id FROM projects WHERE name=? OR id=?", (name.strip(), name.strip()))
+        return r[0]["id"] if r else None
+
+    _PROJ_TABLES = ("items", "entities", "sessions", "inbox", "jobs", "leftovers", "recurring", "preferences",
+                    "context_packs")
+
+    def hidden_ids(self, ids, need: str = "read") -> set[str]:
+        """The given ids that belong to a project the caller may not read: the one ACL filter for graph reads,
+        expand and budgeted listings (batched, so it is cheap on big graph exports)."""
+        denied = self.denied_projects(need)
+        ids = [i for i in ids if isinstance(i, str)]
+        if not denied or not ids:
+            return set()
+        out = {i for i in ids if i in set(denied)}
+        dph = ",".join("?" * len(denied))
+        for i in range(0, len(ids), 400):
+            ch = ids[i:i + 400]
+            ph = ",".join("?" * len(ch))
+            for t in self._PROJ_TABLES:
+                out |= {r["id"] for r in self.q(f"SELECT id FROM {t} WHERE id IN ({ph}) AND project_id IN ({dph})",
+                                                ch + denied)}
+            out |= {r["id"] for r in self.q(f"SELECT s.id FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.id IN "
+                                            f"({ph}) AND j.project_id IN ({dph})", ch + denied)}
+        return out
+
+    def check_ids(self, *ids: str) -> None:
+        if self.hidden_ids(list(ids)):
+            raise CommonsError("access denied: that record belongs to a project you can't read")
+
     def expand(self, any_id: str, depth: int = 0, max_tokens: int = 2000) -> dict:
+        self.check_ids(any_id)
         d = self.get_item(any_id)
-        if d is not None:
-            self.check_project(self.q("SELECT project_id FROM items WHERE id=?", (any_id,))[0]["project_id"])
         if d is None:
             r = self.q("SELECT * FROM entities WHERE id=?", (any_id,))
             if r:
@@ -679,7 +715,11 @@ class Store:
             frontier = nxt
             if len(edges) >= limit:
                 break
-        nodes = {n: dict(zip(("type", "name"), self.label(n))) for n in seen}
+        hidden = self.hidden_ids(list(seen))
+        if any_id in hidden:
+            raise CommonsError("access denied: that record belongs to a project you can't read")
+        edges = [e for e in edges if e["src"] not in hidden and e["dst"] not in hidden]
+        nodes = {n: dict(zip(("type", "name"), self.label(n))) for n in seen - hidden}
         text = "\n".join(f"{nodes[e['src']]['name']} -{e['type']}-> {nodes[e['dst']]['name']}  ({e['src']}→{e['dst']})"
                          for e in edges[:limit])
         return {"root": any_id, "nodes": nodes, "edges": edges[:limit], "text": text or "(no neighbors)"}
@@ -693,10 +733,13 @@ class Store:
         if type_:
             where.append("type=?"); args.append(type_)
         if project:
-            pid = self.project_id(project)
-            where.append("project_id=?"); args.append(pid)
+            pid = self.find_project(project)
+            self.check_project(pid)
+            where.append("project_id=?"); args.append(pid or "__none__")
         roots = self.q(f"SELECT id,type,name,path,line FROM entities WHERE {' AND '.join(where)} LIMIT ?",
                        args + [min(limit, 50)])
+        hidden = self.hidden_ids([r["id"] for r in roots])
+        roots = [r for r in roots if r["id"] not in hidden]
         nodes, edges = {}, []
         for r in roots:
             nodes[r["id"]] = {"type": r["type"], "name": r["name"]}
@@ -708,19 +751,25 @@ class Store:
 
     def export_graph(self, project: str | None = None, include_items: bool = True, limit: int = 5000) -> dict:
         if project:
-            pid = self.project_id(project)
-            ents = self.q("SELECT id FROM entities WHERE project_id=? LIMIT ?", (pid, limit))
-            ids = {r["id"] for r in ents}
+            pid = self.find_project(project)
+            if not pid:
+                return {"nodes": {}, "edges": []}
+            self.check_project(pid)
+            ids = {r["id"] for r in self.q("SELECT id FROM entities WHERE project_id=? LIMIT ?", (pid, limit))}
             if include_items:
                 ids |= {r["id"] for r in self.q("SELECT id FROM items WHERE project_id=? LIMIT ?", (pid, limit))}
-            rels = [dict(r) for r in self.q("SELECT src,dst,type FROM relations") if r["src"] in ids and r["dst"] in ids]
+            rels, idl = [], list(ids)
+            for i in range(0, len(idl), 400):
+                ch = idl[i:i + 400]
+                rels += [dict(r) for r in self.q(f"SELECT src,dst,type FROM relations WHERE src IN ({','.join('?' * len(ch))})", ch)
+                         if r["dst"] in ids]
         else:
             rels = [dict(r) for r in self.q("SELECT src,dst,type FROM relations LIMIT ?", (limit,))]
             ids = {r["src"] for r in rels} | {r["dst"] for r in rels}
             if not include_items:
-                items = {r["id"] for r in self.q("SELECT id FROM items")}
-                ids -= items
-                rels = [r for r in rels if r["src"] in ids and r["dst"] in ids]
+                ids -= {r["id"] for r in self.q("SELECT id FROM items")}
+        ids -= self.hidden_ids(list(ids))
+        rels = [r for r in rels if r["src"] in ids and r["dst"] in ids]
         nodes = {i: dict(zip(("type", "name"), self.label(i))) for i in ids}
         return {"nodes": nodes, "edges": rels}
 
@@ -882,9 +931,12 @@ class Store:
             d = dict(r) | {"context_ids": json.loads(r["context_ids"] or "[]"), "created_at": iso(r["created_at"]),
                            "updated_at": iso(r["updated_at"]), "from": self.label(r["from_agent"])[1] if r["from_agent"] else None}
             if claim and r["status"] == "open":
-                self.x("UPDATE inbox SET status='claimed', claimed_by=?, updated_at=? WHERE id=? AND status='open'",
-                       (agent_id, now(), r["id"]))
-                d["status"] = "claimed"
+                with self.lock:  # only report a claim this caller actually won (two agents may race for a '*' task)
+                    won = self.db.execute("UPDATE inbox SET status='claimed', claimed_by=?, updated_at=? WHERE id=? "
+                                          "AND status='open'", (agent_id, now(), r["id"])).rowcount == 1
+                if not won:
+                    continue
+                d["status"], d["claimed_by"] = "claimed", agent_id
             out.append(d)
         return out
 
@@ -896,10 +948,15 @@ class Store:
                (status, result, agent_id, now(), task_id))
         return {"task_id": task_id, "status": status} | ({"redacted": found} if found else {})
 
-    def get_task(self, task_id: str) -> dict:
+    def get_task(self, task_id: str, agent_id: str | None = None) -> dict:
         r = self.q("SELECT * FROM inbox WHERE id=?", (task_id,))
         if not r:
             raise CommonsError(f"unknown task {task_id}")
+        from .auth import PRINCIPAL
+        if PRINCIPAL.get() is not None and agent_id not in (r[0]["from_agent"], r[0]["to_agent"], r[0]["claimed_by"]) \
+                and r[0]["to_agent"] != "*":
+            raise CommonsError(f"task {task_id} is between other agents")
+        self.check_ids(task_id)
         return dict(r[0]) | {"context_ids": json.loads(r[0]["context_ids"] or "[]"),
                              "created_at": iso(r[0]["created_at"]), "updated_at": iso(r[0]["updated_at"])}
 

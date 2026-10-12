@@ -140,6 +140,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         """Export graph as mermaid|graphml|json|html. If path is given, write to that file and return the path."""
         out = _export(store.export_graph(project or None, include_items), format)
         if path:
+            from .auth import require_host
+            require_host(store, "export_graph(path=...)")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(out)
             return json.dumps({"written": path, "bytes": len(out)})
@@ -150,6 +152,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def index_code(path: str, project: str = "", agent: str = "", api_key: str = "") -> str:
         """Index a local repo (Python + JS/TS): files, symbols, imports, calls → graph. Re-indexing is idempotent."""
         aid, _ = who(agent, api_key)
+        from .auth import require_host
+        require_host(store, "index_code")
         return _fmt(index_repo(store, path, project or None, aid), "json")
 
     @mcp.tool()
@@ -273,9 +277,10 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         return _fmt(store.respond_task(task_id, result, status, aid), "json")
 
     @mcp.tool()
-    def get_task(task_id: str) -> str:
-        """Check status/result of a task you posted."""
-        return _fmt(store.get_task(task_id), "json")
+    def get_task(task_id: str, agent: str = "", api_key: str = "") -> str:
+        """Check status/result of a task you posted or were assigned."""
+        aid, _ = who(agent, api_key, write=False)
+        return _fmt(store.get_task(task_id, aid), "json")
 
     @mcp.tool()
     def a2a_send(url: str, message: str) -> str:

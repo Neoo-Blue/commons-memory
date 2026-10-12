@@ -99,14 +99,16 @@ def recency(ts: float, ref: float, half_life_days: float) -> float:
     return 0.5 ** (age / max(0.1, half_life_days))
 
 
-def fuse(lex: dict[str, float], sem: dict[str, float], wk: float, wv: float) -> dict[str, float]:
+def fuse(lex: dict[str, float], sem: dict[str, float], wk: float, wv: float, sem_floor: float = 0.0) -> dict[str, float]:
     """Fuse lexical and semantic candidates into one relevance score per id.
 
-    ``COMMONS_RANK_FUSION=rrf`` is reciprocal-rank fusion (k = ``COMMONS_RANK_RRF_K``). ``score`` is a convex
-    combination of min-max normalised scores, which keeps how *much* better a match is (RRF only keeps the order),
-    so the multiplicative signals applied afterwards can't override a clearly stronger match.
+    ``COMMONS_RANK_FUSION=score`` (default) is a weighted sum of normalised scores (min-max over the candidate pool;
+    with fewer than 20 candidates BM25 is divided by the best and cosine is measured from the similarity floor, so a
+    tiny gap between two candidates isn't stretched into 0 vs 1). Unlike reciprocal-rank fusion it keeps how *much*
+    better a match is, so the multiplicative signals applied afterwards can't override a clearly stronger match.
+    ``rrf`` is reciprocal-rank fusion (k = ``COMMONS_RANK_RRF_K``).
     """
-    how = os.environ.get("COMMONS_RANK_FUSION", "rrf")
+    how = os.environ.get("COMMONS_RANK_FUSION", "score")
     out: dict[str, float] = {}
     if how == "rrf":
         k = w("rrf_k", 60)
@@ -114,12 +116,14 @@ def fuse(lex: dict[str, float], sem: dict[str, float], wk: float, wv: float) -> 
             for rank, iid in enumerate(sorted(src, key=lambda i: -src[i])):
                 out[iid] = out.get(iid, 0.0) + wt / (k + rank)
         return out
-    for src, wt in ((lex, wk), (sem, wv)):
+    for src, wt, anchor in ((lex, wk, 0.0), (sem, wv, sem_floor)):
         if not src:
             continue
-        lo, hi = min(src.values()), max(src.values())
-        span = (hi - lo) or 1.0
+        hi = max(src.values())
+        # ponytail: min-max needs a sample to estimate the spread; below 20 candidates use the fixed anchor
+        lo = min(src.values()) if len(src) >= 20 else anchor
+        span = hi - lo
         for iid, v in src.items():
-            out[iid] = out.get(iid, 0.0) + wt * ((v - lo) / span if hi > lo else 1.0)
+            out[iid] = out.get(iid, 0.0) + wt * (max(0.0, v - lo) / span if span > 0 else 1.0)
     tot = (wk if lex else 0) + (wv if sem else 0)
     return {i: v / tot for i, v in out.items()} if tot else out

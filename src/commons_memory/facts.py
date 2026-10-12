@@ -44,18 +44,28 @@ class Facts:
     def __init__(self, s: Store):
         self.s = s
 
-    def _rows(self, subject, predicate=None):
+    def _rows(self, subject, predicate=None, pid: str | None = None, scoped: bool = False, need: str = "read"):
+        """Facts about subject (one project's timeline when scoped; pid None = unscoped facts), minus those in
+        projects the caller can't `need`."""
         sql = "SELECT * FROM items WHERE kind='fact' AND subject=?"
         args = [subject]
         if predicate:
             sql += " AND predicate=?"
             args.append(predicate)
-        return [dict(r) for r in self.s.q(sql + " ORDER BY COALESCE(valid_from, created_at)", args)]
+        if scoped:
+            sql += " AND project_id IS ?" if pid is None else " AND project_id=?"
+            args.append(pid)
+        rows = [dict(r) for r in self.s.q(sql + " ORDER BY COALESCE(valid_from, created_at)", args)]
+        hidden = self.s.hidden_ids([r["id"] for r in rows], need)
+        return [r for r in rows if r["id"] not in hidden]
 
     def set(self, subject: str, predicate: str, value: str, valid_from=None, project: str | None = None,
             agent_id: str | None = None) -> dict:
         vf = _t(valid_from) or now()
-        rows = [r for r in self._rows(subject, predicate) if r["superseded_by"] != "invalidated" or r["valid_to"]]
+        pid = self.s.project_id(project) if project else None
+        self.s.check_project(pid, "write")
+        rows = [r for r in self._rows(subject, predicate, pid, scoped=True, need="write")
+                if r["superseded_by"] != "invalidated" or r["valid_to"]]
         later = [r for r in rows if (r["valid_from"] or r["created_at"]) > vf]
         vt = min((r["valid_from"] or r["created_at"]) for r in later) if later else None
         r = self.s.add_item("fact", f"{subject} {predicate} {value}", project=project, agent_id=agent_id,
@@ -72,17 +82,21 @@ class Facts:
                  (vf, vt, later[0]["id"] if later else None, new))
         return {"id": new, "valid_from": iso(vf), "valid_to": iso(vt) if vt else None, "closed": closed}
 
-    def invalidate(self, subject: str, predicate: str, at=None) -> dict:
+    def invalidate(self, subject: str, predicate: str, at=None, project: str | None = None) -> dict:
         t = _t(at) or now()
-        cur = [r for r in self._rows(subject, predicate) if r["superseded_by"] is None]
+        pid = self.s.find_project(project) if project else None
+        if project and not pid:
+            raise CommonsError(f"no such project {project!r}")
+        self.s.check_project(pid, "write")
+        cur = [r for r in self._rows(subject, predicate, pid, scoped=True, need="write") if r["superseded_by"] is None]
         if not cur:
             raise CommonsError(f"no current fact {subject}.{predicate}")
         for r in cur:
             self.s.x("UPDATE items SET valid_to=?, superseded_by='invalidated' WHERE id=?", (t, r["id"]))
         return {"invalidated": [r["id"] for r in cur], "at": iso(t)}
 
-    def get(self, subject: str, predicate: str | None = None, as_of=None) -> list[dict]:
-        rows = self._rows(subject, predicate)
+    def get(self, subject: str, predicate: str | None = None, as_of=None, project: str | None = None) -> list[dict]:
+        rows = self._rows(subject, predicate, self.s.find_project(project), scoped=bool(project))
         if as_of in (None, ""):
             rows = [r for r in rows if r["superseded_by"] is None and (r["valid_to"] is None or r["valid_to"] > now())]
         else:
@@ -90,8 +104,8 @@ class Facts:
             rows = [r for r in rows if (r["valid_from"] or r["created_at"]) <= t and (r["valid_to"] is None or r["valid_to"] > t)]
         return [self._fmt(r) for r in rows]
 
-    def history(self, subject: str, predicate: str | None = None) -> list[dict]:
-        return [self._fmt(r) for r in self._rows(subject, predicate)]
+    def history(self, subject: str, predicate: str | None = None, project: str | None = None) -> list[dict]:
+        return [self._fmt(r) for r in self._rows(subject, predicate, self.s.find_project(project), scoped=bool(project))]
 
     def _fmt(self, r):
         return {"id": r["id"], "subject": r["subject"], "predicate": r["predicate"], "value": r["value"],

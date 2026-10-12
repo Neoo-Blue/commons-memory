@@ -241,10 +241,17 @@ class KB:
         return bool(st and st[0]["dirty"])
 
     # ---------------------------------------------------------------- read API
+    def _readable(self, bucket: str, denied: list[str] | None = None) -> bool:
+        """misc and misc/<topic> pages are public; a project page follows the project's ACL."""
+        if bucket == "misc" or bucket.startswith("misc/"):
+            return True
+        denied = self.s.denied_projects() if denied is None else denied
+        return not denied or self.s.find_project(bucket) not in denied
+
     def get(self, bucket: str = "misc", section: str = "", max_tokens: int = 800) -> dict:
         bucket = bucket or "misc"
-        if bucket != "misc":
-            self.s.check_project(bucket if bucket.startswith("prj_") else self.s.project_id(bucket))
+        if not (bucket == "misc" or bucket.startswith("misc/")):
+            self.s.check_project(self.s.find_project(bucket))
         stale = self._ensure(bucket)
         secs = [section] if section else SECTIONS
         parts, cites, used = [], [], 0
@@ -269,7 +276,10 @@ class KB:
 
     def list(self) -> list[dict]:
         out = []
+        denied = self.s.denied_projects()
         for b in self.buckets():
+            if not self._readable(b, denied):
+                continue
             st = self.s.q("SELECT * FROM kb_state WHERE bucket=?", (b,))
             pages = self.s.q("SELECT section, length(content) n, citations FROM kb_pages WHERE bucket=?", (b,))
             out.append({"bucket": b, "built_at": iso(st[0]["built_at"]) if st and st[0]["built_at"] else None,
@@ -281,6 +291,8 @@ class KB:
         terms = set(_terms(query)) or set(query.lower().split())
         hits = []
         rows = self.s.q("SELECT * FROM kb_pages" + (" WHERE bucket=?" if bucket else ""), ([bucket] if bucket else []))
+        denied = self.s.denied_projects()
+        rows = [r for r in rows if self._readable(r["bucket"], denied)]
         for r in rows:
             for line in r["content"].splitlines():
                 lt = set(_terms(line))

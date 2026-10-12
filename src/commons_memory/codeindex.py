@@ -12,6 +12,7 @@ Relations: contains, defines, imports, calls, inherits.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 from pathlib import Path
@@ -30,15 +31,6 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
     project = project or rootp.name
     pid = store.project_id(project, str(rootp))
     stats = {"project": project, "project_id": pid, "files": 0, "symbols": 0, "imports": 0, "calls": 0, "skipped": 0}
-    # wipe previous code graph for this project (idempotent re-index)
-    old = [r["id"] for r in store.q("SELECT id FROM entities WHERE project_id=? AND type IN "
-                                    "('file','function','class','method','module')", (pid,))]
-    for i in range(0, len(old), 500):
-        chunk = old[i:i + 500]
-        ph = ",".join("?" * len(chunk))
-        store.x(f"DELETE FROM relations WHERE src IN ({ph}) OR dst IN ({ph})", chunk + chunk)
-        store.x(f"DELETE FROM entities WHERE id IN ({ph})", chunk)
-
     symtab: dict[str, list[str]] = {}       # short name -> entity ids
     pending_calls: list[tuple] = []  # (caller id, callee name, receiver|None, file id, enclosing class|None)
     ctx = {"defs": {}, "bindings": {}, "parser": None}  # per-file top-level defs and import bindings
@@ -47,6 +39,7 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
     with store.lock:
         store.db.execute("BEGIN")
         try:
+            kept = _wipe_code_graph(store, pid)  # inside the transaction: a failed re-index keeps the old graph
             for dirpath, dirnames, filenames in os.walk(rootp):
                 dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
                 for fn in sorted(filenames):
@@ -98,12 +91,51 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
                         store.relate(caller, callee, "calls", meta={"resolved": how})
                         stats["calls"] += 1
                         stats["calls_ambiguous" if how == "ambiguous" else "calls_resolved"] += 1
+            stats["relinked"] = _relink(store, pid, kept)
             store.db.execute("COMMIT")
         except Exception:
             store.db.execute("ROLLBACK")
             raise
     store.audit(agent_id, "code.index", pid, stats)
     return stats
+
+
+CODE_RELS = ("contains", "defines", "imports", "calls", "inherits")
+
+
+def _wipe_code_graph(store: Store, pid: str) -> list[tuple]:
+    """Delete the project's code entities and edges for a clean re-index, returning the other edges that touched
+    them (a memory that `mentions` a function, a decision `about` a file) keyed by (type, name, path) so _relink
+    can re-attach them to the re-created entities."""
+    old = {r["id"]: (r["type"], r["name"], r["path"]) for r in store.q(
+        "SELECT id, type, name, path FROM entities WHERE project_id=? AND type IN ('file','function','class','method','module')",
+        (pid,))}
+    ids, kept = list(old), []
+    ph_types = ",".join("?" * len(CODE_RELS))
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        for r in store.q(f"SELECT src, dst, type, meta FROM relations WHERE (src IN ({ph}) OR dst IN ({ph})) "
+                         f"AND type NOT IN ({ph_types})", chunk + chunk + list(CODE_RELS)):
+            kept.append((old.get(r["src"], r["src"]), old.get(r["dst"], r["dst"]), r["type"], r["meta"]))
+        store.x(f"DELETE FROM relations WHERE src IN ({ph}) OR dst IN ({ph})", chunk + chunk)
+        store.x(f"DELETE FROM entities WHERE id IN ({ph})", chunk)
+    return kept
+
+
+def _relink(store: Store, pid: str, kept: list[tuple]) -> int:
+    n = 0
+    for src, dst, typ, meta in kept:
+        ends = []
+        for e in (src, dst):
+            if isinstance(e, tuple):
+                r = store.q("SELECT id FROM entities WHERE project_id=? AND type=? AND name=? AND path IS ?", (pid, *e))
+                e = r[0]["id"] if r else None
+            ends.append(e)
+        if all(ends):
+            store.relate(ends[0], ends[1], typ, json.loads(meta) if meta else None)
+            n += 1
+    return n
 
 
 def _target_file(store, fid, target, modules):

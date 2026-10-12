@@ -78,6 +78,19 @@ class ACL:
             raise CommonsError(f"access denied: {need} on project {self.s.project_name(project_id) or project_id}")
 
 
+def require_host(store, what: str) -> None:
+    """Tools that read or write the server's own filesystem: only the local owner (stdio/CLI) or an agent listed in
+    COMMONS_ADMIN_AGENTS. A remote key must not be able to write ~/.ssh/authorized_keys or index /etc."""
+    p = PRINCIPAL.get()
+    if p is None:
+        return
+    names = {x.strip() for x in os.environ.get("COMMONS_ADMIN_AGENTS", "").split(",") if x.strip()}
+    a = store.get_agent(p) if p != ANON else None
+    if not (a and a["name"] in names):
+        raise CommonsError(f"{what} touches the Commons host's filesystem: only the local owner or an agent in "
+                           "COMMONS_ADMIN_AGENTS may do that (remote agents: save output with fs_write instead)")
+
+
 # ---------------------------------------------------------------------------- rate limiting
 class RateLimiter:
     def __init__(self, per_min: int | None = None):
