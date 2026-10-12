@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import secrets as pysecrets
 import sqlite3
@@ -67,6 +68,9 @@ CREATE TABLE IF NOT EXISTS leases(
 CREATE TABLE IF NOT EXISTS audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, agent_id TEXT, action TEXT, target TEXT, detail TEXT);
 """
+
+
+PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}")
 
 
 class CommonsError(Exception):
@@ -186,9 +190,13 @@ class Store:
     def project_id(self, name: str | None, root: str | None = None) -> str | None:
         if not name:
             return None
+        name = name.strip()
         r = self.q("SELECT id FROM projects WHERE name=? OR id=?", (name, name))
         if r:
             return r[0]["id"]
+        if not PROJECT_NAME.fullmatch(name):
+            raise CommonsError(f"invalid project name {name!r}: use 1-64 letters, digits, '.', '_', '-' or spaces, "
+                               "starting with a letter or digit (e.g. 'commons-live')")
         pid = new_id("prj")
         self.x("INSERT INTO projects VALUES(?,?,?,?)", (pid, name, root, now()))
         self.x("INSERT OR IGNORE INTO entities(id,type,name,project_id,path,line,meta,created_at) VALUES(?,?,?,?,?,?,?,?)",

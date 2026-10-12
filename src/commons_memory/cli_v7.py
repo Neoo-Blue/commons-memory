@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-CMDS = {"msg", "presence", "wake", "agent", "bus", "route", "drive", "sched", "mission", "breakdown"}
+CMDS = {"project-rename", "msg", "presence", "wake", "agent", "bus", "route", "drive", "sched", "mission", "breakdown"}
 
 
 def add_parsers(sub) -> None:
@@ -38,6 +38,9 @@ def add_parsers(sub) -> None:
     x.add_argument("--thread", type=int)
     x.add_argument("--limit", type=int, default=50)
 
+    x = sub.add_parser("project-rename", help="rename a project (e.g. fix an invalid name like 'commons-live?')")
+    x.add_argument("old")
+    x.add_argument("new")
     sub.add_parser("presence", help="presence board: online/idle/sleeping/offline per agent")
 
     w = sub.add_parser("wake", help="wake channels per agent")
@@ -261,6 +264,20 @@ def bus_import(store, url, token, agent="", limit=1000) -> dict:
 
 def handle(args, store) -> int:  # noqa: C901
     c = args.cmd
+    if c == "project-rename":
+        from .store import PROJECT_NAME, CommonsError
+        new = args.new.strip()
+        if not PROJECT_NAME.fullmatch(new):
+            raise CommonsError(f"invalid project name {new!r}")
+        r = store.q("SELECT id FROM projects WHERE name=? OR id=?", (args.old, args.old))
+        if not r:
+            raise CommonsError(f"no project {args.old!r}")
+        if store.q("SELECT 1 FROM projects WHERE name=?", (new,)):
+            raise CommonsError(f"{new!r} exists; merge by re-filing items instead")
+        store.x("UPDATE projects SET name=? WHERE id=?", (new, r[0]["id"]))
+        store.x("UPDATE entities SET name=? WHERE id=?", (new, r[0]["id"]))
+        print(f"renamed {args.old!r} -> {new!r} (KB bucket follows on next rebuild)")
+        return 0
     if c == "msg":
         from .messaging import Messaging
         m = Messaging(store)

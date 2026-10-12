@@ -417,10 +417,10 @@ def presence(s: Store, agent_id: str) -> dict:
     r = dict(r[0])
     live = HUB.live(agent_id) + len(MCP_SESSIONS.get(agent_id, []))
     age = now() - (r.get("last_heartbeat") or 0)
-    if live or age < ONLINE_S:
-        state = "online"
-    elif r.get("sleeping"):
+    if r.get("sleeping") and not live:  # an agent that said "going to sleep" is asleep until it acts again
         state = "sleeping"
+    elif live or age < ONLINE_S:
+        state = "online"
     elif age < IDLE_S:
         state = "idle"
     else:

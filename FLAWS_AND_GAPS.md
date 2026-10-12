@@ -51,6 +51,17 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | **Retro learning** | `commons learn`, the MCP `retro_learn` / `retro_queue` / `retro_decide` tools and a dashboard page. It parses Claude Code, Codex, Cursor (state DBs), ChatGPT and Claude.ai exports, Gemini CLI, generic transcripts, git and PRs (via gh), and memory files (CLAUDE.md, AGENTS.md, .cursor/rules, mem0, basic-memory). Then it redacts, chunks and extracts with an LLM under a budget or with heuristics, dedupes, and sends everything to a review queue. Checkpoints keep re-runs incremental. Dry runs estimate tokens and cost. | `tests/test_retro.py`: a fixture history for every format, dry run, queue/apply/idempotency/append, auto-approve floor, LLM path plus budget fallback, dashboard API |
 | **Remote access** | `commons expose` covers Tailscale serve/funnel/bind, Cloudflare quick and named tunnels plus Access JWT validation, ngrok CLI/SDK with OAuth/CIDR passthrough, SSH tunnels (localhost.run), bore, ZeroTier/WireGuard bind, and Caddy/nginx configs. Health and URL appear in `commons status` and the dashboard. Public exposure is refused unless a live probe gets 401. Client snippets are regenerated with the reachable URL. There is also a Dockerfile, docker-compose, and systemd/launchd/Windows units. | `tests/test_expose.py`: mock CLIs for every provider, the auth guard, Access JWT (RS256 + JWKS), snippets, units, status |
 
+## New in v0.7: messaging, wake, routing, Drive, multitasking
+
+| Area | What v0.7 does | Tested by |
+|---|---|---|
+| **External bus dependency** | Native messaging plus a `/bus/*` shim, SSE/WS streams, wake channels (signed webhooks with backoff and dead-letter, ntfy, Pushover, Slack, Discord, Telegram, email, command), presence and wake-on-demand, `agent daemon`, `bus import` | `tests/test_v07_messaging.py`: mock webhook receiver, replay guard, dead-letter/redrive, SSRF, bus shim + spoofing, WS, SSE, bus import, daemon |
+| **A2A push notifications (deferred in v0.5)** | Enabled behind the outbound URL allowlist | `tests/test_v05.py` A2A tests |
+| **Agent-only routing** | Agent + model + effort targets, a policy table, difficulty estimation, escalation and de-escalation, provider and CLI effort mapping, recorded rationale, `route_why` | `test_routing_records_target_effort_and_escalates` |
+| **No shared file store** | Commons Drive with versions, locks, optimistic concurrency, secret scanning, indexing, quotas, ACLs, artifact links, host mounts, git/rclone sync | `tests/test_v07_drive_sched.py`: local, mock S3, mock WebDAV, fake FTP, host mounts, concurrent writers, ACL, git |
+| **Single-job-at-a-time feel** | Fair-share multi-project scheduler with priorities, limits, budgets, agent capacity, preemption and cross-project dependencies, plus Mission control | Stress test: 5 projects × 3 jobs, 6 concurrent agents, no duplicate claims |
+| **Inconsistent tool arguments** (Muse critique) | Shared alias layer + friendly errors on every tool; project-name validation (rejects names like `commons-live?`) | `test_friendly_tool_args_and_project_names` |
+
 ## Part 2: Still open, and why
 
 | Risk / gap | Status in v0.5 | Why it is still open |
@@ -67,6 +78,10 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | **Trust gaming / collusion** | Trust comes from observed behaviour, with admin pins | One person running every agent on the same model is still one opinion. Trust is heuristic. A patient attacker can build up trust before abusing it. |
 | **Cost accuracy** | Exact token counts where an API or library exists. Provider-reported usage is preferred | Prices come from provider APIs when they publish them. Otherwise they come from a table that must be kept current. Self-reported usage from external agents can't be verified. |
 | **Semantic clustering quality** | Works with any embedder | With the default hash embedder, "semantic" is still lexical. Install `[embed]` (fastembed) for real semantic clusters. |
+| **Drive backends without a live server** | S3 (mock), WebDAV (mock), FTP (fake ftplib) are tested. SFTP (paramiko) and SMB (smbprotocol) are implemented but not run | No SFTP server, SMB share or cloud bucket in the build environment. Google Drive/OneDrive/Dropbox go through rclone, which is not verified without accounts. |
+| **Wake for humans (email/Pushover/Telegram/Slack/Discord)** | Implemented against documented APIs. Webhook paths tested with mocks | No accounts in the build environment. Command hooks run on the Commons host, so only the local owner can add them. |
+| **Existing invalid project names** | New names are validated | Projects created before v0.7 with odd names (e.g. `commons-live?`) are not renamed automatically. Fix them with `commons project-rename 'commons-live?' commons-live`. |
+| **Multi-process wake dispatch** | Deliveries are claimed atomically, so two processes never send the same delivery twice | The live SSE/WS hub is per process. Behind several replicas, a stream only sees wakes emitted by its own process (webhooks and other channels are unaffected). |
 | **Pattern-based scanners** (skills, redaction, risk tags) | Broader patterns plus entropy detection | Heuristic by nature. Novel formats or obfuscation can slip through, and very random non-secrets can be redacted. |
 | **Skill scripts not sandboxed** | Review gates, scanning, pinning, license checks | Sandboxing needs OS-level isolation (containers, seccomp), which is outside a Python library's reach. |
 | **Research truth** | Corroboration across independent domains | Agreement isn't truth. Several sites can repeat the same false claim. |

@@ -372,3 +372,42 @@ def test_stress_5_projects_concurrent_agents(tmp_path):
     st = {r["status"] for r in s0.q("SELECT status FROM jobs")}
     assert st == {"done"}, st
     assert len(claims) == 45 and all(len(v) == 1 for v in claims.values())  # no duplicate claims
+
+
+def test_dashboard_v7_endpoints(store, tmp_path, monkeypatch):
+    import urllib.request
+
+    from commons_memory.dashboard import make_server
+    monkeypatch.setenv("COMMONS_DRIVE_DIR", str(tmp_path / "dblobs"))
+    o = Orchestrator(store)
+    a = store.ensure_agent("w")
+    o.profiles.set(a, expertise={"code": 0.9, "summarize": 0.9}, max_concurrent=5)
+    jid = o.submit("dash job", dag=_dag("d"), project="dp")["job_id"]
+    srv = make_server(store, "127.0.0.1", 0, "tok", None, None)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def get(p):
+        sep = "&" if "?" in p else "?"
+        with urllib.request.urlopen(f"{base}{p}{sep}token=tok") as r:
+            return r.read(), r.headers
+
+    def post(p, b):
+        req = urllib.request.Request(f"{base}/api/{p}?token=tok", data=json.dumps(b).encode(), method="POST",
+                                     headers={"X-Commons": "1", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+    assert b"Mission control" in get("/")[0]
+    assert json.loads(get("/api/mission")[0])["totals"]["running_jobs"] == 1
+    assert len(json.loads(get(f"/api/breakdown_view?job={jid}")[0])["nodes"]) == 3
+    assert "policy" in json.loads(get("/api/routing_view")[0])
+    assert "board" in json.loads(get("/api/presence_view")[0])
+    post("drive/upload", {"project": "dp", "path": "/notes/a.md", "text": "hello dash"})
+    assert json.loads(get("/api/drive_file?project=dp&path=/notes/a.md")[0])["text"] == "hello dash"
+    body, h = get("/drive/raw?project=dp&path=/notes/a.md")
+    assert body == b"hello dash"
+    post("drive/upload", {"project": "dp", "path": "/x.svg", "text": "<svg onload=alert(1)>"})
+    assert get("/drive/raw?project=dp&path=/x.svg")[1]["Content-Type"] == "application/octet-stream"
+    post("sched/project", {"project": "dp", "paused": True})
+    assert json.loads(get("/api/mission")[0])["projects"][0]["paused"]
+    srv.shutdown()

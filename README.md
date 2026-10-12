@@ -34,6 +34,27 @@ See [FLAWS_AND_GAPS.md](FLAWS_AND_GAPS.md) for known risks.
 v0.1 features remain: shared memory with hybrid search and token-budgeted results, one graph across memory/code/sessions,
 code indexing, handoffs, reasoning log, agent inbox, secret references, conflict detection.
 
+## v0.7: native messaging + wake, routing to model/effort, Commons Drive, true multitasking
+
+**No external bus needed.** Direct and broadcast messages (typed, threaded, at-least-once, long-poll), stored and graphed.
+A `/bus/*` shim keeps existing agent-bus clients working. Per-agent wake channels: signed webhooks with retries and a
+dead-letter queue, SSE/WebSocket streams, MCP notifications, ntfy, Pushover, Slack, Discord, Telegram, email, and local
+command hooks. Presence (online/idle/sleeping/offline) with wake-on-demand before work is allocated, and
+`commons agent daemon` for always-on CLI agents. SSRF-safe outbound allowlist; A2A push notifications. `commons bus import`
+migrates history. See [docs/messaging.md](docs/messaging.md).
+
+**Right model, right effort.** Every subtask gets an execution target (agent + model + effort), chosen from a
+policy table that's editable and learns from outcomes, with escalation on failure. Each choice is explainable with
+`route_why`. **Mission control**, **Task breakdown** and **Routing** dashboards. Concurrent multi-project scheduling with
+priorities, fair share, limits, budgets, preemption and cross-project dependencies. See [docs/multitasking.md](docs/multitasking.md).
+
+**Commons Drive.** A shared, versioned file store (history/diff/restore, locks, secret scanning, search, quotas,
+ACLs, artifacts linked to tasks). Backends: local, S3/R2/MinIO/B2, WebDAV/Nextcloud, host folders/NFS/SMB mounts, SFTP, SMB,
+FTP(S). Sync: git and rclone. See [docs/drive.md](docs/drive.md).
+
+**Friendlier tools.** Every MCP tool accepts common aliases (`text`→`content`, `decision`→`what`, camelCase keys...).
+Missing or unknown arguments produce one readable error that lists what the tool accepts. Project names are validated.
+
 ## v0.6: retro learning and remote access
 
 **Learn from what you've already done.** `commons learn --dry-run` finds your Claude Code, Codex, Cursor, Gemini CLI, ChatGPT and Claude.ai history, your git and PR history, and your CLAUDE.md/AGENTS.md/.cursor/rules files. It then shows what Commons would learn and estimates the cost. `commons learn` extracts preferences, decisions with rationale, project facts, unfinished work (leftovers), model-by-task performance (which feeds routing) and procedures (skill drafts). Results go into a review queue that you approve in bulk on the dashboard's **Retro learning** page or with `commons learn approve`. Re-runs only read new history. See [docs/retro-learning.md](docs/retro-learning.md).
