@@ -17,8 +17,8 @@ from .codeindex import code_impact as _impact
 from .codeindex import code_symbols as _symbols
 from .codeindex import index_repo
 from .graphexport import export as _export
-from .secrets import Broker
 from .ids import now
+from .secrets import Broker
 from .store import CommonsError, Store
 
 INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
@@ -89,13 +89,17 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     @mcp.tool()
     def search(query: str = "", mode: str = "hybrid", project: str = "", agent_filter: str = "",
                tags: list[str] | None = None, kinds: list[str] | None = None, entity: str = "", since: str = "",
-               until: str = "", limit: int = 20, max_tokens: int = 600, format: str = "text") -> str:
-        """Hybrid search (mode: hybrid|keyword|semantic). Filters: project, agent_filter, tags, kinds
-        (memory|fact|decision|checkpoint|handoff), entity (name or id), since/until (ISO or '7d','12h').
+               until: str = "", limit: int = 20, max_tokens: int = 600, format: str = "text", as_of: str = "",
+               rerank: bool = False, explain: bool = False) -> str:
+        """Hybrid search (mode: hybrid|keyword|semantic) with entity, time-proximity and recency signals.
+        Filters: project, agent_filter, tags, kinds (memory|fact|decision|checkpoint|handoff|observation),
+        entity (name or id), since/until (ISO or '7d','12h'). as_of = reference time for 'last week'-style queries;
+        rerank = second-stage cross-encoder/LLM rerank; explain = per-signal scores.
         Returns compact one-line summaries with ids within max_tokens; call expand(id) for detail."""
         return _fmt(store.search(query, mode=mode, project=project or None, agent=agent_filter or None, tags=tags,
                                  kinds=kinds, entity=entity or None, since=since or None, until=until or None,
-                                 limit=limit, max_tokens=max_tokens), format)
+                                 limit=limit, max_tokens=max_tokens, as_of=as_of or None, rerank=rerank or None,
+                                 explain=explain), format)
 
     @mcp.tool()
     def expand(id: str, depth: int = 0, max_tokens: int = 2000) -> str:
@@ -319,6 +323,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v5(mcp, store, who)
     from .server_v7 import register_v7
     register_v7(mcp, store, who)
+    from .server_v8 import register_v8
+    register_v8(mcp, store, who)
     from .toolargs import install as friendly_args
     friendly_args(mcp)
     from .telemetry import instrument_mcp

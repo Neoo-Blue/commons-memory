@@ -20,6 +20,8 @@ RUN python -m venv /opt/commons \
  && python -m pip install build && python -m build --wheel --outdir /wheels \
  && /opt/commons/bin/pip install "$(ls /wheels/*.whl)[${EXTRAS}]" \
  && /opt/commons/bin/pip uninstall -y build pip setuptools wheel || true
+# bake the default embedding model into the image (no download on first start; works offline)
+RUN FASTEMBED_CACHE_PATH=/opt/models /opt/commons/bin/python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
 # ---------- runtime
 FROM python:${PYTHON}-slim
@@ -35,6 +37,7 @@ RUN sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.l
  && useradd --create-home --uid 10001 --shell /usr/sbin/nologin commons \
  && mkdir -p /data/drive /data/backups /run/secrets && chown -R commons:commons /data
 COPY --from=build /opt/commons /opt/commons
+COPY --from=build /opt/models /opt/models
 COPY docker/entrypoint.sh /usr/local/bin/commons-entrypoint
 RUN chmod 0755 /usr/local/bin/commons-entrypoint
 ENV PATH=/opt/commons/bin:$PATH \
@@ -48,7 +51,7 @@ ENV PATH=/opt/commons/bin:$PATH \
     COMMONS_HOST=0.0.0.0 \
     COMMONS_PORT=8765 \
     COMMONS_DASHBOARD_PORT=8766 \
-    FASTEMBED_CACHE_PATH=/data/.cache/fastembed
+    FASTEMBED_CACHE_PATH=/opt/models
 USER commons
 WORKDIR /data
 VOLUME ["/data"]

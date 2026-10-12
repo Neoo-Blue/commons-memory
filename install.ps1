@@ -1,9 +1,9 @@
 # Commons one-line installer (Windows PowerShell 5+/7):
 #   irm https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.ps1 | iex
-# Options (env): $env:COMMONS_VERSION='v0.7.1'  $env:COMMONS_EXTRAS='http'  $env:COMMONS_NO_INIT='1'  $env:COMMONS_INSTALLER='uv|pipx|pip'
+# Options (env): $env:COMMONS_VERSION='v0.7.1'  $env:COMMONS_EXTRAS='http,embed'  $env:COMMONS_NO_INIT='1'  $env:COMMONS_INSTALLER='uv|pipx|pip'
 $ErrorActionPreference = 'Stop'
 $Repo = 'Neoo-Blue/commons-memory'
-$Extras = if ($env:COMMONS_EXTRAS) { $env:COMMONS_EXTRAS } else { 'http' }
+$Extras = if ($env:COMMONS_EXTRAS) { $env:COMMONS_EXTRAS } else { 'http,embed' }
 function Say($m) { Write-Host "commons: $m" -ForegroundColor Magenta }
 function Have($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 

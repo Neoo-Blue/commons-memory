@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__
 
+
 def run_masked(cmd: list[str], env: dict, secret: str, mask: str = "***") -> int:
     """Run cmd, streaming stdout/stderr with every occurrence of `secret` replaced by `mask`.
 
@@ -356,9 +357,19 @@ def _main(argv: list[str] | None = None) -> int:
     cn.add_argument("--wake", action="append", default=[],
                     help="wake channel KIND:key=value,key=value (repeatable), e.g. webhook:url=https://host/hook, "
                          "ntfy:topic=my-agent, command:claude -p")
-    from .cli_v7 import CMDS as V7, add_parsers as v7_parsers, handle as v7_handle
+    from .cli_v7 import CMDS as V7
+    from .cli_v7 import add_parsers as v7_parsers
+    from .cli_v7 import handle as v7_handle
     v7_parsers(sub)
+    from .cli_v8 import CMDS as V8
+    from .cli_v8 import NOSTORE as V8_NOSTORE
+    from .cli_v8 import add_parsers as v8_parsers
+    from .cli_v8 import handle as v8_handle
+    from .cli_v8 import handle_nostore
+    v8_parsers(sub)
     args = p.parse_args(argv)
+    if args.cmd in V8_NOSTORE:
+        return handle_nostore(args)
 
     if args.cmd == "serve":
         from .server import run
@@ -403,6 +414,8 @@ def _main(argv: list[str] | None = None) -> int:
 
     from .store import Store
     store = Store(args.db)
+    if args.cmd in V8:
+        return v8_handle(args, store)
     if args.cmd in V7:
         return v7_handle(args, store)
     if args.cmd == "init":
@@ -618,6 +631,7 @@ def _main(argv: list[str] | None = None) -> int:
                 print(f"[{args.platform}] {line}")
     elif args.cmd == "scheduler":
         import time
+
         from .background import tick
         if args.librarian_every is not None:
             os.environ.setdefault("COMMONS_EVERY_LIBRARIAN", str(args.librarian_every))
@@ -681,7 +695,7 @@ def _main(argv: list[str] | None = None) -> int:
         from .orchestrator import Orchestrator
         print(json.dumps(Orchestrator(store).set_paused(False)))
     elif args.cmd == "backup":
-        from .retention import backup, decrypt_file, _key
+        from .retention import _key, backup, decrypt_file
         if args.decrypt:
             if not _key():
                 p.error("set COMMONS_BACKUP_KEY")

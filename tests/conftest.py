@@ -5,6 +5,7 @@ import pytest
 
 from commons_memory.store import Store
 
+os.environ.setdefault("COMMONS_EMBEDDER", "hash")  # deterministic tests; fastembed is exercised explicitly
 PG = os.environ.get("COMMONS_TEST_PG")  # e.g. postgresql://commons@127.0.0.1:54329/commons -> whole suite on Postgres
 
 

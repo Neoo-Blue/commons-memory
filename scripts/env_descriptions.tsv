@@ -25,7 +25,7 @@ COMMONS_DRIVE_DIR	Local Drive directory (default `~/.commons/drive`)
 COMMONS_DRIVE_MAX_FILE_MB	Largest single Drive file in MB
 COMMONS_DRIVE_QUOTA_MB	Total Drive quota in MB
 COMMONS_DUP_SIM	Similarity above which a new leftover is merged into an existing one
-COMMONS_EMBEDDER	Embeddings: `hash` (no deps), `fastembed`, or a provider model
+COMMONS_EMBEDDER	Embeddings: `auto` (fastembed if installed, else openai if COMMONS_EMBED_URL, else hash), `fastembed[:model]`, `openai[:model]`, `hash`, `none`
 COMMONS_ENTROPY_MIN	Shannon-entropy threshold for redacting unknown secret-looking strings
 COMMONS_ENTROPY_REDACT	Redact high-entropy strings on write (`0` off)
 COMMONS_ENV_SECRETS	Allow-list of env var names that `env://` secret refs may resolve
@@ -88,3 +88,18 @@ COMMONS_WAKE_PUSH_WHEN_LIVE	Also push wakes to agents already connected live (`1
 COMMONS_WAKE_SYNC	Deliver wakes synchronously (tests/debugging)
 COMMONS_WEBHOOK_ALLOWLIST	Hosts allowed for webhooks/A2A push even if private or non-https (`*.example.com` ok)
 COMMONS_DASHBOARD_REQUIRE_TOKEN	Require the dashboard token even on localhost/LAN/tailnet binds (`1`)
+COMMONS_EMBED_MODEL	Embedding model (fastembed default BAAI/bge-small-en-v1.5; openai default text-embedding-3-small)
+COMMONS_EMBED_URL	OpenAI-compatible embeddings base URL (OpenAI, Ollama, LM Studio, vLLM)
+COMMONS_EMBED_KEY_REF	Secret reference for the embeddings endpoint key
+COMMONS_REINDEX_BATCH	Items re-embedded per background tick after an embedder change
+COMMONS_RANK_SIM_FLOOR	Minimum cosine similarity for a vector hit (non-hash embedders)
+COMMONS_EMBED_THREADS	ONNX threads for the fastembed embedder (default: all cores)
+COMMONS_CAPTURE	Global switch for hook auto-capture (0 disables everywhere)
+COMMONS_HOOK_CONTEXT_TOKENS	Token budget of the SessionStart context pack injected by hooks
+COMMONS_HOOK_RECALL_SIM	Min similarity for prompt-time recall snippets injected by hooks
+COMMONS_HOOK_TIMEOUT	Seconds a hook waits for the server before queueing offline
+COMMONS_RERANK	Second-stage rerank: off, cross-encoder (local fastembed) or llm (role reranker)
+COMMONS_RERANK_MAX_TOKENS	Token budget for the LLM reranker prompt
+COMMONS_RERANK_MODEL	Cross-encoder model (default Xenova/ms-marco-MiniLM-L-6-v2)
+COMMONS_RERANK_TOP	How many top hits the reranker reorders
+COMMONS_URL	Commons server base URL for hooks/clients (empty = local DB)

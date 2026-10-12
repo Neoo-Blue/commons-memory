@@ -1,9 +1,15 @@
 """Pluggable embedding providers.
 
-- ``hash`` (default): dependency-free feature-hashing embedder (words + char trigrams).
-  Fast, deterministic, fully local; gives fuzzy lexical/semantic-ish matching.
-- ``fastembed``: small local ONNX model (BAAI/bge-small-en-v1.5) if ``pip install commons-memory[embed]``.
+- ``auto`` (default): ``fastembed`` when installed (``pip install commons-memory[embed]``), else ``openai`` when
+  ``COMMONS_EMBED_URL`` is set, else ``hash``.
+- ``fastembed``: local ONNX model, ``COMMONS_EMBED_MODEL`` (default BAAI/bge-small-en-v1.5; e.g.
+  google/embeddinggemma-300m or intfloat/multilingual-e5-large for multilingual).
+- ``openai``: any OpenAI-compatible ``/v1/embeddings`` endpoint (OpenAI, Ollama, LM Studio, vLLM, llama.cpp):
+  ``COMMONS_EMBED_URL`` (base URL), ``COMMONS_EMBED_MODEL``, key via ``COMMONS_EMBED_KEY_REF`` (secret reference).
+- ``hash``: dependency-free feature-hashing embedder (words + char trigrams); lexical-ish fallback.
 - ``none``: disable vectors, keyword (FTS5) only.
+Vectors are stored per embedder name (which includes the model), so switching models never mixes vector spaces;
+``commons reindex`` (or the background job) fills vectors for the active embedder.
 """
 from __future__ import annotations
 
@@ -22,6 +28,9 @@ class Embedder:
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover - interface
         raise NotImplementedError
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
 
 
 class HashEmbedder(Embedder):
@@ -56,26 +65,105 @@ class HashEmbedder(Embedder):
         return out
 
 
-class FastEmbedEmbedder(Embedder):
-    name = "fastembed"
+DEFAULT_FASTEMBED = "BAAI/bge-small-en-v1.5"
+_CACHE: dict[str, Embedder] = {}
 
-    def __init__(self, model: str = "BAAI/bge-small-en-v1.5"):
+
+class FastEmbedEmbedder(Embedder):
+    def __init__(self, model: str | None = None):
         from fastembed import TextEmbedding  # optional dependency
 
-        self._m = TextEmbedding(model)
+        self.model = model or os.environ.get("COMMONS_EMBED_MODEL") or DEFAULT_FASTEMBED
+        th = os.environ.get("COMMONS_EMBED_THREADS")
+        self._m = TextEmbedding(self.model, **({"threads": int(th)} if th else {}))
         self.dim = len(next(iter(self._m.embed(["probe"]))))
+        # legacy name for the original default so existing vectors stay valid
+        self.name = "fastembed" if self.model == DEFAULT_FASTEMBED else f"fastembed:{self.model}"
 
     def embed(self, texts):
-        return [list(map(float, v)) for v in self._m.embed(texts)]
+        return [list(map(float, v)) for v in self._m.embed(list(texts), batch_size=16)]
+
+    def embed_query(self, text):
+        qe = getattr(self._m, "query_embed", None)  # model-specific query instruction (bge, e5, ...)
+        v = next(iter(qe([text]))) if qe else next(iter(self._m.embed([text])))
+        return list(map(float, v))
+
+
+class OpenAICompatEmbedder(Embedder):
+    def __init__(self, url: str | None = None, model: str | None = None, key: str | None = None):
+        self.url = (url or os.environ.get("COMMONS_EMBED_URL", "")).rstrip("/")
+        if not self.url:
+            raise ValueError("COMMONS_EMBED_URL is required for the openai embedder")
+        if not self.url.endswith("/embeddings"):
+            self.url += "/embeddings" if self.url.endswith("/v1") else "/v1/embeddings"
+        self.model = model or os.environ.get("COMMONS_EMBED_MODEL", "text-embedding-3-small")
+        self.key = key if key is not None else _resolve_ref(os.environ.get("COMMONS_EMBED_KEY_REF", ""))
+        self.name = f"openai:{self.model}"
+        self.dim = len(self.embed(["probe"])[0])
+
+    def embed(self, texts):
+        import json
+        import urllib.request
+        out: list[list[float]] = []
+        texts = list(texts)
+        for i in range(0, len(texts), 128):
+            body = json.dumps({"model": self.model, "input": texts[i:i + 128]}).encode()
+            h = {"Content-Type": "application/json"} | ({"Authorization": f"Bearer {self.key}"} if self.key else {})
+            req = urllib.request.Request(self.url, data=body, headers=h, method="POST")
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = sorted(json.loads(r.read())["data"], key=lambda d: d["index"])
+            for d in data:
+                v = d["embedding"]
+                n = math.sqrt(sum(x * x for x in v)) or 1.0
+                out.append([x / n for x in v])
+        return out
+
+
+def _resolve_ref(ref: str) -> str:
+    if not ref:
+        return ""
+    if ref.startswith("env://"):
+        return os.environ.get(ref[6:], "")
+    try:
+        from .secrets import _VAULT, EnvBackend, InfisicalBackend, OnePasswordBackend
+        b = {x.scheme: x for x in (EnvBackend(), _VAULT, OnePasswordBackend(), InfisicalBackend())}[ref.split("://", 1)[0]]
+        return b.resolve(ref)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def fastembed_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("fastembed") is not None
 
 
 def get_embedder(name: str | None = None) -> Embedder | None:
-    name = (name or os.environ.get("COMMONS_EMBEDDER", "hash")).lower()
+    name = (name or os.environ.get("COMMONS_EMBEDDER", "auto")).lower()
     if name in ("none", "off", ""):
         return None
-    if name == "fastembed":
-        return FastEmbedEmbedder()
-    return HashEmbedder()
+    if name == "auto":
+        if fastembed_available():
+            name = "fastembed"
+        elif os.environ.get("COMMONS_EMBED_URL"):
+            name = "openai"
+        else:
+            name = "hash"
+    key = f"{name}|{os.environ.get('COMMONS_EMBED_MODEL', '')}|{os.environ.get('COMMONS_EMBED_URL', '')}"
+    if key in _CACHE:
+        return _CACHE[key]
+    try:
+        if name.startswith("fastembed"):
+            e: Embedder = FastEmbedEmbedder(name.split(":", 1)[1] if ":" in name else None)
+        elif name.startswith("openai"):
+            e = OpenAICompatEmbedder(model=name.split(":", 1)[1] if ":" in name else None)
+        else:
+            e = HashEmbedder()
+    except Exception as ex:  # noqa: BLE001 - model download/endpoint failure: degrade, don't crash
+        import sys
+        print(f"commons: embedder {name} unavailable ({ex}); falling back to hash", file=sys.stderr)
+        e = HashEmbedder()
+    _CACHE[key] = e
+    return e
 
 
 def pack(v: list[float]) -> bytes:

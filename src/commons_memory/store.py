@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import os
+import re
 import secrets as pysecrets
 import sqlite3
 import threading
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .embed import Embedder, cosine, get_embedder, pack, unpack
 from .ids import estimate_tokens, iso, new_id, now
@@ -220,7 +221,8 @@ class Store:
                  agent_id: str | None = None, session_id: str | None = None, tags: list[str] | None = None,
                  meta: dict | None = None, entities: list[str] | None = None, related_ids: list[str] | None = None,
                  subject: str | None = None, predicate: str | None = None, value: str | None = None,
-                 authenticated: bool = False) -> dict:
+                 authenticated: bool = False, created_at: float | None = None,
+                 check_conflicts: bool = True) -> dict:
         content, f1 = redact(content or "")
         title, f2 = redact(title or "")
         summary, f3 = redact(summary or "")
@@ -235,7 +237,7 @@ class Store:
         pid = self.project_id(project)
         self.check_project(pid, "write")
         iid = new_id({"decision": "dec", "handoff": "hof", "checkpoint": "chk", "fact": "fct"}.get(kind, "mem"))
-        ts = now()
+        ts = float(created_at) if created_at is not None else now()  # explicit timestamp for imports/backfills
         tags = [t.strip().lower() for t in (tags or []) if t.strip()]
         self.x("INSERT INTO items(id,kind,project_id,agent_id,session_id,title,summary,content,tags,meta,subject,"
                "predicate,value,authenticated,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -243,7 +245,7 @@ class Store:
                 subject, predicate, value, int(authenticated), ts, ts))
         self.x("INSERT INTO items_fts(item_id,title,summary,content,tags) VALUES(?,?,?,?,?)",
                (iid, title, summary, content, " ".join(tags)))
-        if self.embedder:
+        if self.embedder and not getattr(self, "defer_embed", False):  # defer_embed: bulk import, reindex() batches
             vec = self.embedder.embed([f"{title}\n{summary}\n{content}"[:4000]])[0]
             self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
             if self._pgvec:
@@ -256,7 +258,9 @@ class Store:
         if session_id:
             self.relate(iid, session_id, "in_session", agent_id=agent_id)
         for e in entities or []:
-            eid = e if self._exists(e) else self.upsert_entity("concept", e, project_id=pid)
+            typ, _, nm = e.partition(":") if e.split(":", 1)[0] in ("person", "org", "place", "tool", "concept") else ("", "", e)
+            eid = e if self._exists(e) else self.upsert_entity(typ or "concept", nm.strip() or e,
+                                                                project_id=None if typ == "person" else pid)
             self.relate(iid, eid, "mentions", agent_id=agent_id)
         for rid in related_ids or []:
             if self._exists(rid):
@@ -269,7 +273,7 @@ class Store:
         if found:
             out["redacted"] = found
             self.audit(agent_id, "redact", iid, found)
-        if subject and predicate:
+        if subject and predicate and check_conflicts:
             conflicts = self._check_conflict(iid, subject, predicate, value)
             if conflicts:
                 out["conflicts_with"] = conflicts
@@ -338,12 +342,36 @@ class Store:
     def search(self, query: str = "", *, mode: str = "hybrid", project: str | None = None, agent: str | None = None,
                tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,
                until: str | None = None, entity: str | None = None, limit: int = 20,
-               max_tokens: int = 800, include_superseded: bool = False) -> dict:
+               max_tokens: int = 800, include_superseded: bool = False, as_of: str | float | None = None,
+               explain: bool = False, rerank: bool | str | None = None) -> dict:
+        ranked, total, why = self.rank(query, mode=mode, project=project, agent=agent, tags=tags, kinds=kinds,
+                                       since=since, until=until, entity=entity,
+                                       limit=max(limit, int(os.environ.get("COMMONS_RERANK_TOP", "30"))) if rerank else limit,
+                                       include_superseded=include_superseded, as_of=as_of)
+        if ranked is None:
+            return why
+        from .rerank import mode as rr_mode
+        from .rerank import rerank_ids
+        how = rr_mode() if rerank in (None, False, "") else ("cross-encoder" if rerank is True else str(rerank))
+        if query and rerank is not False and how not in ("off", "none"):
+            ranked = rerank_ids(self, query, ranked, top=int(os.environ.get("COMMONS_RERANK_TOP", "30")), how=how)
+        ranked = ranked[:limit]
+        out = self._budgeted(ranked, max_tokens, total=total)
+        if explain:
+            out["explain"] = {k: why[k] for k in ranked if k in why}
+        return out
+
+    def rank(self, query: str = "", *, mode: str = "hybrid", project: str | None = None, agent: str | None = None,
+             tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,
+             until: str | None = None, entity: str | None = None, limit: int = 20,
+             include_superseded: bool = False, as_of: str | float | None = None):
+        """Ranked item ids (no token budget) -> (ids, total_candidates, per-id signal breakdown)."""
+        from . import ranking as R
         where, args = ["1=1"], []
         if project:
             pid = self.q("SELECT id FROM projects WHERE name=? OR id=?", (project, project))
             if not pid:
-                return {"results": [], "text": "(no such project)", "total": 0}
+                return None, 0, {"results": [], "text": "(no such project)", "total": 0}
             where.append("i.project_id=?"); args.append(pid[0]["id"])
         if agent:
             a = self.get_agent(agent)
@@ -360,7 +388,7 @@ class Store:
             ents = [entity] if self._exists(entity) else [r["id"] for r in self.q(
                 "SELECT id FROM entities WHERE name=? OR name LIKE ?", (entity, f"%.{entity}"))]
             if not ents:
-                return {"results": [], "text": "(no such entity)", "total": 0}
+                return None, 0, {"results": [], "text": "(no such entity)", "total": 0}
             where.append(f"i.id IN (SELECT src FROM relations WHERE dst IN ({','.join('?' * len(ents))}) "
                          f"UNION SELECT dst FROM relations WHERE src IN ({','.join('?' * len(ents))}))")
             args += ents + ents
@@ -372,23 +400,26 @@ class Store:
             args += denied
         wsql = " AND ".join(where)
         scores: dict[str, float] = {}
+        why: dict[str, dict] = {}
         query = (query or "").strip()
+        wk, wv = R.w("keyword", 1.0), R.w("semantic", 1.0 if (self.embedder and self.embedder.name != "hash") else 0.7)
         if query and mode in ("hybrid", "keyword"):
-            fts = _fts_query(query)
+            fts = R.fts_query(query)
             if fts and self.dialect == "postgres":
                 tsq = " | ".join(t.strip('"') for t in fts.split(" OR "))
                 rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
                               f"WHERE f.tsv @@ to_tsquery('english', ?) AND {wsql} "
                               f"ORDER BY ts_rank(f.tsv, to_tsquery('english', ?)) DESC LIMIT 200", [tsq] + args + [tsq])
-                for rank, r in enumerate(rows):
-                    scores[r["id"]] = scores.get(r["id"], 0) + 1.0 / (60 + rank)
             elif fts:
                 rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
                               f"WHERE items_fts MATCH ? AND {wsql} ORDER BY bm25(items_fts) LIMIT 200", [fts] + args)
-                for rank, r in enumerate(rows):
-                    scores[r["id"]] = scores.get(r["id"], 0) + 1.0 / (60 + rank)
+            else:
+                rows = []
+            for rank, r in enumerate(rows):
+                scores[r["id"]] = scores.get(r["id"], 0) + wk / (60 + rank)
+                why.setdefault(r["id"], {})["bm25_rank"] = rank + 1
         if query and mode in ("hybrid", "semantic") and self.embedder:
-            qv = self.embedder.embed([query])[0]
+            qv = self.embedder.embed_query(query)
             if self._pgvec:  # ANN in the database (HNSW)
                 rows = self.q(f"SELECT e.item_id AS id, 1-(e.v <=> ?::vector) AS sim FROM embeddings e JOIN items i "
                               f"ON i.id=e.item_id WHERE e.model=? AND e.v IS NOT NULL AND {wsql} "
@@ -398,27 +429,94 @@ class Store:
                 rows = self.q(f"SELECT e.item_id AS id, e.vec FROM embeddings e JOIN items i ON i.id=e.item_id "
                               f"WHERE e.model=? AND {wsql}", [self.embedder.name] + args)
                 sims = sorted(((cosine(qv, unpack(r["vec"])), r["id"]) for r in rows), reverse=True)[:200]
-            floor = 0.12 if self.embedder.name == "hash" else 0.3
-            for rank, (s, iid) in enumerate(sims):
-                if s < floor:
+            floor = 0.12 if self.embedder.name == "hash" else float(os.environ.get("COMMONS_RANK_SIM_FLOOR", "0.3"))
+            for rank, (sim, iid) in enumerate(sims):
+                if sim < floor:
                     break
-                scores[iid] = scores.get(iid, 0) + 1.0 / (60 + rank)
+                scores[iid] = scores.get(iid, 0) + wv / (60 + rank)
+                why.setdefault(iid, {}).update(vec_rank=rank + 1, sim=round(sim, 4))
         if not query:
             rows = self.q(f"SELECT i.id FROM items i WHERE {wsql} ORDER BY i.created_at DESC LIMIT ?", args + [limit])
             ranked = [r["id"] for r in rows]
-        else:
-            if scores and os.environ.get("COMMONS_TRUST_WEIGHTING", "1") == "1":  # provenance-weighted ranking
+            return ranked, len(ranked), why
+        if scores:
+            ids = list(scores)
+            meta = {}
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                for r in self.q(f"SELECT id, agent_id, created_at FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                    meta[r["id"]] = r
+            ref = _parse_time(str(as_of)) if as_of not in (None, "") else now()
+            win = R.time_window(query, ref)
+            ents = self._query_entity_items(query)
+            w_ent, w_time, w_rec = R.w("entity", 0.3), R.w("time", 0.6), R.w("recency", 0.1)
+            half = R.w("half_life_days", 30)
+            trust = None
+            if os.environ.get("COMMONS_TRUST_WEIGHTING", "1") == "1":  # provenance-weighted ranking
                 from .trust import Trust
-                tr = Trust(self)
-                ids = list(scores)
-                authors = {}
-                for i in range(0, len(ids), 500):
-                    chunk = ids[i:i + 500]
-                    for r in self.q(f"SELECT id, agent_id FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk):
-                        authors[r["id"]] = r["agent_id"]
-                scores = {k: v * (0.5 + tr.score(authors.get(k))) for k, v in scores.items()}
-            ranked = [k for k, _ in sorted(scores.items(), key=lambda kv: -kv[1])][:limit]
-        return self._budgeted(ranked, max_tokens, total=len(scores) if query else len(ranked))
+                trust = Trust(self)
+            for k in ids:
+                m = meta.get(k)
+                if not m:
+                    continue
+                f, d = 1.0, why.setdefault(k, {})
+                d["rrf"] = round(scores[k], 6)
+                if k in ents and w_ent:
+                    f *= 1 + w_ent; d["entity"] = 1
+                if win and w_time:
+                    t = R.time_score(m["created_at"], win)
+                    f *= 1 + w_time * t; d["time"] = round(t, 3)
+                if w_rec:
+                    r_ = R.recency(m["created_at"], ref, half)
+                    f *= 1 + w_rec * r_; d["recency"] = round(r_, 3)
+                if trust is not None:
+                    t = trust.score(m["agent_id"])
+                    f *= 0.5 + t; d["trust"] = round(t, 3)
+                scores[k] *= f
+                d["score"] = round(scores[k], 6)
+        ranked = [k for k, _ in sorted(scores.items(), key=lambda kv: -kv[1])][:limit]
+        return ranked, len(scores), why
+
+    def _query_entity_items(self, query: str) -> set[str]:
+        """Items linked to entities whose name appears in the query (graph-aware boost)."""
+        from . import ranking as R
+        toks = [t for t in R.terms(query) if len(t) >= 3]
+        cands = {t.lower() for t in toks} | {f"{a} {b}".lower() for a, b in zip(toks, toks[1:])}
+        if not cands:
+            return set()
+        ph = ",".join("?" * len(cands))
+        ents = [r["id"] for r in self.q(f"SELECT id FROM entities WHERE lower(name) IN ({ph}) LIMIT 50", list(cands))]
+        if not ents:
+            return set()
+        ph = ",".join("?" * len(ents))
+        rows = self.q(f"SELECT src AS id FROM relations WHERE dst IN ({ph}) UNION SELECT dst FROM relations WHERE src IN ({ph})",
+                      ents + ents)
+        return {r["id"] for r in rows}
+
+
+
+    def reindex(self, limit: int | None = None, batch: int = 64, force: bool = False) -> dict:
+        """(Re)compute vectors for items that have none for the active embedder (after switching models)."""
+        if not self.embedder:
+            return {"embedder": "none", "done": 0, "remaining": 0}
+        name = self.embedder.name
+        cond = "" if force else "WHERE e.item_id IS NULL OR e.model<>?"
+        args = () if force else (name,)
+        total = self.q(f"SELECT COUNT(*) n FROM items i LEFT JOIN embeddings e ON e.item_id=i.id {cond}", args)[0]["n"]
+        done = 0
+        while limit is None or done < limit:
+            n = batch if limit is None else min(batch, limit - done)
+            rows = self.q(f"SELECT i.id, i.title, i.summary, i.content FROM items i LEFT JOIN embeddings e ON e.item_id=i.id "
+                          f"{cond} ORDER BY i.created_at DESC LIMIT ? OFFSET ?", (*args, n, done if force else 0))
+            if not rows:
+                break
+            vecs = self.embedder.embed([f"{r['title'] or ''}\n{r['summary'] or ''}\n{r['content'] or ''}"[:4000] for r in rows])
+            for r, v in zip(rows, vecs):
+                self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (r["id"], name, pack(v)))
+                if self._pgvec:
+                    self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(v), r["id"]))
+            done += len(rows)
+        return {"embedder": name, "done": done, "remaining": max(0, total - done)}
 
     def _budgeted(self, ids: list[str], max_tokens: int, total: int) -> dict:
         lines, results, used = [], [], 0
@@ -517,7 +615,7 @@ class Store:
 
     def relate(self, src: str, dst: str, type_: str, meta: dict | None = None, agent_id: str | None = None) -> str:
         rid = new_id("rel")
-        self.x("INSERT OR IGNORE INTO relations VALUES(?,?,?,?,?,?,?)", (rid, src, dst, type_, _j(meta or {}), agent_id, now()))
+        self.x("INSERT OR IGNORE INTO relations(id,src,dst,type,meta,agent_id,created_at) VALUES(?,?,?,?,?,?,?)", (rid, src, dst, type_, _j(meta or {}), agent_id, now()))
         return rid
 
     def label(self, any_id: str) -> tuple[str, str]:

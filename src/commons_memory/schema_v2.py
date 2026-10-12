@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS prefs_norm ON preferences(norm);
 """
 
 
-def migrate(db):
+def migrate(db):  # noqa: F811
     db.executescript(SCHEMA_V2)
     cols = {r[1] for r in db.execute("PRAGMA table_info(agents)")}
     if "profile" not in cols:
@@ -192,9 +192,18 @@ def _v5(db):
     db.executescript(ROUTING_SCHEMA)
     from .drive import SCHEMA as DRIVE_SCHEMA
     db.executescript(DRIVE_SCHEMA)
-    from .scheduler import SCHEMA as SCHED_SCHEMA, add_columns as sched_columns
+    from .scheduler import SCHEMA as SCHED_SCHEMA
+    from .scheduler import add_columns as sched_columns
     db.executescript(SCHED_SCHEMA)
     sched_columns(db)
+    from .capture import SCHEMA as CAPTURE_SCHEMA
+    db.executescript(CAPTURE_SCHEMA)
+    try:
+        from .facts import add_columns as fact_columns
+    except ImportError:  # pragma: no cover
+        fact_columns = None
+    if fact_columns:
+        fact_columns(db)
 
 
 _v4e_migrate = migrate

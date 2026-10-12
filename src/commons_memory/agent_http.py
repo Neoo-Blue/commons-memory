@@ -192,7 +192,16 @@ def build_app(store: Store) -> Starlette:
             task.cancel()
             HUB.unsubscribe(aid, sub)
 
-    routes = []
+    @guard
+    async def hook(req: Request):
+        aid, _name = _me(store)
+        b = await body(req)
+        from .capture import Capture
+        r = await asyncio.to_thread(Capture(store).event, aid, b.get("event", ""), b.get("payload") or {},
+                                    b.get("harness", "generic"), b.get("project"))
+        return JSONResponse(r)
+
+    routes = [Route("/agent/hook", hook, methods=["POST"])]
     for prefix in ("/bus", "/agent"):
         routes += [Route(f"{prefix}/send", send, methods=["POST"]), Route(f"{prefix}/recv", recv),
                    Route(f"{prefix}/ack", ack, methods=["POST"]), Route(f"{prefix}/history", history)]

@@ -21,9 +21,9 @@ from .store import Store
 
 INTERVALS = {  # seconds (env COMMONS_EVERY_<NAME> overrides)
     "recurring": 30, "reap": 30, "escalate": 60, "kb": 5, "librarian": 600, "models": 3600, "routing_validate": 3600,
-    "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3,
+    "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3, "reindex": 60,
 }
-LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push")
+LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex")
 
 
 def _every(name: str) -> float:
@@ -99,6 +99,11 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
         from .a2a_server import push_due
         return push_due(s) or None
     run("a2a_push", a2a_push)
+
+    def reindex():  # fill vectors for the active embedder (e.g. after upgrading hash -> fastembed)
+        r = s.reindex(limit=int(os.environ.get("COMMONS_REINDEX_BATCH", "512")))
+        return r if r.get("done") else None
+    run("reindex", reindex)
 
     def esc():
         from .escalation import Escalator

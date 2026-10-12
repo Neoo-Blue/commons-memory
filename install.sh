@@ -1,12 +1,12 @@
 #!/bin/sh
 # Commons one-line installer (macOS / Linux):
 #   curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.sh | sh
-# Options (env): COMMONS_VERSION=v0.7.1  COMMONS_EXTRAS=http (comma list or "all")  COMMONS_NO_INIT=1
+# Options (env): COMMONS_VERSION=v0.7.1  COMMONS_EXTRAS=http,embed (comma list or "all")  COMMONS_NO_INIT=1
 #                COMMONS_INSTALLER=uv|pipx|pip (force a method)
 # Installs the `commons` CLI from the GitHub release (wheel), runs `commons init`, prints next steps.
 set -eu
 REPO="Neoo-Blue/commons-memory"
-EXTRAS="${COMMONS_EXTRAS:-http}"
+EXTRAS="${COMMONS_EXTRAS:-http,embed}"
 say() { printf '\033[1;35mcommons:\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mcommons: error:\033[0m %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }

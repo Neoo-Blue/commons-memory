@@ -29,6 +29,10 @@ ALIASES: dict[str, list[str]] = {
     "title": ["name", "subject"],
     "ref": ["id", "ref_id"],
     "result": ["output", "answer"],
+    "ids": ["id_list", "item_ids", "items"],
+    "anchor": ["id", "item_id", "around"],
+    "kind": ["type", "category"],
+    "as_of": ["asof", "at_time", "when"],
 }
 
 

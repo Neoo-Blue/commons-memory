@@ -8,16 +8,17 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_A2A` | `1` | Mount the A2A (agent-to-agent) server next to `/mcp` on the HTTP transport (`0` disables) | server.py |
 | `COMMONS_A2A_TOKEN` | — | Bearer token used by `commons a2a` client commands | cli.py |
 | `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | server_v5.py |
-| `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | cli.py, cli_v7.py, server.py |
+| `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
-| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | cli.py, cli_v7.py, server.py |
+| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
 | `COMMONS_BACKUP_DIR` | — | Backup directory (default `~/.commons/backups`) | retention.py |
 | `COMMONS_BACKUP_KEEP` | `7` | Number of backups to keep | retention.py |
 | `COMMONS_BACKUP_KEY` | — | Secret ref used to encrypt backups | retention.py |
 | `COMMONS_BG_POLL` | `2` | Background loop tick in seconds | background.py |
+| `COMMONS_CAPTURE` | `1` | Global switch for hook auto-capture (0 disables everywhere) | capture.py |
 | `COMMONS_CF_ACCESS_AS_AUTH` | — | Treat a valid Cloudflare Access identity as an agent principal (`1`) | auth.py |
 | `COMMONS_CF_ACCESS_AUD` | — | Cloudflare Access application audience tag to verify | expose.py |
 | `COMMONS_CF_ACCESS_CERTS` | — | Cloudflare Access certs URL override | expose.py |
@@ -32,7 +33,11 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_DRIVE_MAX_FILE_MB` | `25` | Largest single Drive file in MB | drive.py |
 | `COMMONS_DRIVE_QUOTA_MB` | `1024` | Total Drive quota in MB | drive.py |
 | `COMMONS_DUP_SIM` | `0.86` | Similarity above which a new leftover is merged into an existing one | orchestrator.py |
-| `COMMONS_EMBEDDER` | `hash` | Embeddings: `hash` (no deps), `fastembed`, or a provider model | embed.py |
+| `COMMONS_EMBEDDER` | `auto` | Embeddings: `auto` (fastembed if installed, else openai if COMMONS_EMBED_URL, else hash), `fastembed[:model]`, `openai[:model]`, `hash`, `none` | embed.py |
+| `COMMONS_EMBED_KEY_REF` | — | Secret reference for the embeddings endpoint key | embed.py |
+| `COMMONS_EMBED_MODEL` | `text-embedding-3-small` | Embedding model (fastembed default BAAI/bge-small-en-v1.5; openai default text-embedding-3-small) | embed.py |
+| `COMMONS_EMBED_THREADS` | — | ONNX threads for the fastembed embedder (default: all cores) | embed.py |
+| `COMMONS_EMBED_URL` | — | OpenAI-compatible embeddings base URL (OpenAI, Ollama, LM Studio, vLLM) | embed.py |
 | `COMMONS_ENTROPY_MIN` | `4.3` | Shannon-entropy threshold for redacting unknown secret-looking strings | redact.py |
 | `COMMONS_ENTROPY_REDACT` | `1` | Redact high-entropy strings on write (`0` off) | redact.py |
 | `COMMONS_ENV_SECRETS` | — | Allow-list of env var names that `env://` secret refs may resolve | secrets.py |
@@ -41,7 +46,10 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | — | Commons home for `commons expose` state (default `~/.commons`) | expose.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, expose.py |
+| `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
+| `COMMONS_HOOK_RECALL_SIM` | `0.6` | Min similarity for prompt-time recall snippets injected by hooks | capture.py |
+| `COMMONS_HOOK_TIMEOUT` | `2` | Seconds a hook waits for the server before queueing offline | capture.py |
 | `COMMONS_HOST` | `127.0.0.1` | Default bind address for `commons serve` | cli.py |
 | `COMMONS_HOST_ROOTS` | — | Colon/comma list of host directories the `hostfs` Drive backend may expose | drive.py |
 | `COMMONS_KB_CLUSTER` | `auto` | Misc-topic clustering for the knowledge base: `auto`, `semantic`, `tags` | kb.py |
@@ -71,8 +79,14 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_PREF_HALF_LIFE_DAYS` | `120` | Half-life for preference confidence decay | prefs.py |
 | `COMMONS_PRICES` | — | Path to a JSON price table (USD per 1M tokens) for cost estimates | usage.py |
 | `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | server.py |
+| `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |
+| `COMMONS_REINDEX_BATCH` | `512` | Items re-embedded per background tick after an embedder change | background.py |
 | `COMMONS_REQUIRE_KEYS` | `1` | HTTP: require an agent key/OAuth token on every request (`0` = local dev only) | cli.py, expose.py, server.py |
+| `COMMONS_RERANK` | `off` | Second-stage rerank: off, cross-encoder (local fastembed) or llm (role reranker) | rerank.py |
+| `COMMONS_RERANK_MAX_TOKENS` | `3000` | Token budget for the LLM reranker prompt | rerank.py |
+| `COMMONS_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model (default Xenova/ms-marco-MiniLM-L-6-v2) | rerank.py |
+| `COMMONS_RERANK_TOP` | `30` | How many top hits the reranker reorders | bench.py, store.py |
 | `COMMONS_RETAIN_*` | — | Retention days per table for `commons prune`, e.g. `COMMONS_RETAIN_USAGE=90` |  |
 | `COMMONS_RETRO_AUTO_APPROVE` | — | Import retro-learning findings without review (`1`) | retro.py |
 | `COMMONS_RETRO_AUTO_MIN_CONF` | `0` | Minimum confidence for auto-approved retro findings | retro.py |
@@ -88,7 +102,8 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |
 | `COMMONS_TREE_SITTER` | `1` | Use tree-sitter for JS/TS code indexing (`0` = regex fallback) | codeindex.py |
-| `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | store.py |
+| `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
+| `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |
 | `COMMONS_WAKE_PUSH_WHEN_LIVE` | `0` | Also push wakes to agents already connected live (`1`) | messaging.py |
