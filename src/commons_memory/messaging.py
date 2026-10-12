@@ -417,8 +417,10 @@ def heartbeat(s: Store, agent_id: str, *, status: str | None = None, sleeping: b
             args.append(client[:60])
         s.x(f"UPDATE agent_presence SET {', '.join(sets)} WHERE agent_id=?", (*args, agent_id))
     else:
+        # ON CONFLICT: two threads (daemon recv + a tool call) may both see no row and race to insert it
         s.x("INSERT INTO agent_presence(agent_id,state,status_text,last_heartbeat,sleeping,live,client,updated_at) "
-            "VALUES(?,?,?,?,?,0,?,?)", (agent_id, "online", redact(status or "")[0][:200], t, 1 if sleeping else 0, client, t))
+            "VALUES(?,?,?,?,?,0,?,?) ON CONFLICT(agent_id) DO UPDATE SET last_heartbeat=excluded.last_heartbeat, "
+            "updated_at=excluded.updated_at", (agent_id, "online", redact(status or "")[0][:200], t, 1 if sleeping else 0, client, t))
     return presence(s, agent_id)
 
 
