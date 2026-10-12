@@ -244,8 +244,44 @@ def _main(argv: list[str] | None = None) -> int:
     sb.add_argument("--n", type=int, default=3)
     sb.add_argument("--max-tokens", type=int)
     sb.add_argument("--max-cost", type=float)
-    st = sub.add_parser("status", help="job status (or recent jobs)")
+    st = sub.add_parser("status", help="server/network status + job status (or recent jobs)")
     st.add_argument("job_id", nargs="?")
+    st.add_argument("--no-probe", action="store_true", help="don't probe the exposed URL")
+    ln = sub.add_parser("learn", help="retro learning from past AI history: run | queue | approve | reject | status | reset")
+    ln.add_argument("action", nargs="?", default="run", choices=["run", "queue", "approve", "reject", "status", "reset"])
+    ln.add_argument("ids", nargs="*", help="queue ids for approve/reject (or 'all')")
+    ln.add_argument("--source", action="append", default=[],
+                    help="claude-code|codex|cursor|chatgpt|claude-ai|gemini|generic|git|memory-files|all (repeatable)")
+    ln.add_argument("--path", action="append", default=[], help="SOURCE=PATH override, or PATH for the only --source")
+    ln.add_argument("--repo", action="append", default=[], help="git repo(s) to learn from (source git)")
+    ln.add_argument("--dry-run", action="store_true", help="parse + estimate tokens/cost; write nothing")
+    ln.add_argument("--auto-approve", action="store_true")
+    ln.add_argument("--min-confidence", type=float, help="auto-approve only at/above this confidence")
+    ln.add_argument("--budget", type=float, help="USD cap for LLM extraction (default $COMMONS_RETRO_BUDGET or 1.0)")
+    ln.add_argument("--no-llm", action="store_true", help="heuristics only")
+    ln.add_argument("--project", help="attribute everything to this project")
+    ln.add_argument("--since", help="only history after this date (YYYY-MM-DD)")
+    ln.add_argument("--kind", help="queue/approve filter: preference|decision|fact|leftover|performance|skill")
+    ln.add_argument("--json", action="store_true")
+    xp = sub.add_parser("expose", help="remote access: up PROVIDER | down | status | snippets | proxy | service")
+    xp.add_argument("action", choices=["up", "down", "status", "snippets", "proxy", "service", "bind"])
+    xp.add_argument("provider", nargs="?", help="local|tailscale|cloudflare|ngrok|ssh|bore|zerotier|wireguard (up/bind); "
+                                                 "caddy|nginx (proxy); systemd|launchd|windows (service)")
+    xp.add_argument("--port", type=int, default=int(os.environ.get("COMMONS_PORT", "8765")))
+    xp.add_argument("--host", default=os.environ.get("COMMONS_HOST", "127.0.0.1"), help="where commons serve listens")
+    xp.add_argument("--public", action="store_true", help="tailscale: use Funnel (public internet)")
+    xp.add_argument("--https-port", type=int, default=443)
+    xp.add_argument("--name", help="cloudflare named tunnel")
+    xp.add_argument("--hostname", help="cloudflare named tunnel public hostname")
+    xp.add_argument("--token-file", help="cloudflare tunnel token file")
+    xp.add_argument("--ssh", dest="ssh_target", help="ssh reverse tunnel destination (default nokey@localhost.run)")
+    xp.add_argument("--oauth", help="ngrok OAuth provider (google|github|...)")
+    xp.add_argument("--oauth-allow", action="append", default=[], help="ngrok: allowed email/domain (repeatable)")
+    xp.add_argument("--cidr-allow", action="append", default=[], help="ngrok: allowed CIDR (repeatable)")
+    xp.add_argument("--domain", help="ngrok static domain / bore server / proxy domain")
+    xp.add_argument("--iface", default="wg0")
+    xp.add_argument("--allow-plain-http", action="store_true")
+    xp.add_argument("--url", help="snippets: override the URL")
     pk = sub.add_parser("pickup", help="what should an agent do next")
     pk.add_argument("--agent", required=True)
     pk.add_argument("--project")
@@ -364,10 +400,96 @@ def _main(argv: list[str] | None = None) -> int:
     store = Store(args.db)
     if args.cmd == "init":
         print(f"Commons database ready at {store.path} (embedder: {store.stats()['embedder']})\n")
+        from .expose import reachable_url
+        url = reachable_url(store)
         for name, snip in SNIPPET.items():
+            if "http clients" in name:
+                snip = f"commons serve --transport http  ->  {url}/mcp   (remote access: `commons expose up tailscale`)"
             print(f"# {name}")
             txt = json.dumps(snip, indent=2) if isinstance(snip, dict) else snip
             print(txt.replace("{db}", store.path) + "\n")
+    elif args.cmd == "learn":
+        from .retro import SOURCES, RetroLearner
+        rl = RetroLearner(store)
+        aid = store.ensure_agent(os.environ.get("COMMONS_AGENT", "cli"))
+        if args.action == "run":
+            srcs = args.source or ["all"]
+            paths: dict = {}
+            for pth in args.path:
+                k, _, v = pth.partition("=")
+                if v and k in SOURCES:
+                    paths.setdefault(k, []).append(v)
+                elif len(srcs) == 1 and srcs[0] != "all":
+                    paths.setdefault(srcs[0], []).append(pth)
+                else:
+                    p.error("--path needs SOURCE=PATH when several sources are selected")
+            if args.repo:
+                paths["git"] = args.repo
+            since = None
+            if args.since:
+                from datetime import datetime as _dt
+                since = _dt.fromisoformat(args.since).timestamp()
+            r = rl.run(srcs, paths, dry_run=args.dry_run, auto_approve=True if args.auto_approve else None,
+                       min_confidence=args.min_confidence, budget=args.budget, use_llm=False if args.no_llm else None,
+                       project=args.project, since=since, agent_id=aid)
+            if args.json:
+                print(json.dumps(r, indent=2, default=str))
+            else:
+                print(f"{'DRY RUN ' if r['dry_run'] else ''}{r['conversations']} conversations from "
+                      + ", ".join(f"{k}:{v}" for k, v in r["sources"].items() if v) + f"; {r['chunks']} chunks, "
+                      f"~{r['est_tokens']} tokens" + (f", est ${r['est_cost']} with {r['model']}" if r["model"] else ", heuristics ($0)"))
+                print(f"candidates {r['candidates']}, duplicates {r['duplicates']}, queued {r['queued']}, "
+                      f"auto-applied {r['applied']}, spent ${r['spent']}" + (" (budget exhausted)" if r["budget_exhausted"] else ""))
+                print("by kind: " + json.dumps(r["by_kind"]))
+                for x in r.get("preview", [])[:20]:
+                    print(f"  [{x['kind']:<11}] {x['confidence']:.2f} {x['text'][:110]}")
+                for e in r["errors"]:
+                    print("  ! " + e, file=sys.stderr)
+                if not r["dry_run"] and r["queued"] > r["applied"]:
+                    print("review: commons learn queue | commons learn approve ID... | dashboard -> Retro learning")
+        elif args.action == "queue":
+            rows = rl.queue("pending", args.kind)
+            if args.json:
+                print(json.dumps(rows, indent=2, default=str))
+            for r in rows if not args.json else []:
+                print(f"{r['id']}  {r['kind']:<11} {r['confidence']:.2f} [{r['source_kind']}] {r['text'][:100]}")
+        elif args.action in ("approve", "reject"):
+            ids = args.ids
+            if args.kind and (not ids or ids == ["all"]):
+                ids = [r["id"] for r in rl.queue("pending", args.kind, limit=100000)]
+            elif ids == ["all"]:
+                ids = "all"
+            print(json.dumps(rl.decide(ids, args.action == "approve", aid), indent=2))
+        elif args.action == "reset":
+            print(json.dumps({"checkpoints_cleared": rl.reset(args.source[0] if args.source else None)}))
+        else:
+            print(json.dumps(rl.status(), indent=2, default=str))
+    elif args.cmd == "expose":
+        from . import expose as X
+        a = args.action
+        if a == "up":
+            r = X.up(store, args.provider or "local", port=args.port, host=args.host, public=args.public,
+                     name=args.name, hostname=args.hostname, token_file=args.token_file, ssh_target=args.ssh_target,
+                     oauth=args.oauth, oauth_allow=args.oauth_allow, cidr_allow=args.cidr_allow, domain=args.domain,
+                     https_port=args.https_port, allow_plain_http=args.allow_plain_http, iface=args.iface)
+            for w in r.get("warnings", []):
+                print("WARNING: " + w, file=sys.stderr)
+            print(json.dumps(r, indent=2, default=str))
+        elif a == "bind":
+            print(X.bind_host(args.provider or "tailscale", args.iface))
+        elif a == "down":
+            print(json.dumps(X.down(store), indent=2))
+        elif a == "status":
+            print(json.dumps(X.health(store), indent=2, default=str))
+        elif a == "snippets":
+            d = X.write_snippets(store, args.url)
+            for name, body in X.snippets(args.url or X.reachable_url(store)).items():
+                print(f"# {name}\n{body}")
+            print(f"(written to {d})")
+        elif a == "proxy":
+            print(X.proxy_config(args.provider or "caddy", args.domain or "commons.example.com", args.port, args.host))
+        elif a == "service":
+            print(X.service_unit(args.provider or "systemd", args.port, args.host, store.path))
     elif args.cmd == "index":
         from .codeindex import index_repo
         print(json.dumps(index_repo(store, args.path, args.project, store.ensure_agent("cli")), indent=2))
@@ -500,6 +622,14 @@ def _main(argv: list[str] | None = None) -> int:
     elif args.cmd == "status":
         from .orchestrator import Orchestrator
         o = Orchestrator(store)
+        if not args.job_id:
+            from .expose import health, state
+            xs = state(store) if args.no_probe else health(store, timeout=3)
+            h = xs.get("health") or {}
+            print(f"network: {xs.get('provider', 'local')}" + (f" -> {xs['url']}" if xs.get("url") else " (localhost only)")
+                  + (" [PUBLIC]" if xs.get("public") else "")
+                  + (f"  health: {'ok, auth enforced (401)' if h.get('ok') else 'status ' + str(h.get('status')) + ' ' + str(h.get('error') or '')}" if h else ""))
+            print(f"db: {store.path} ({store.dialect})\n")
         if args.job_id:
             st_ = o.status(args.job_id)
             print(st_["text"] + ("\n\n" + st_["result"] if st_.get("result") else ""))

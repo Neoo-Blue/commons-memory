@@ -70,7 +70,6 @@ def test_acl_bootstrap_by_sole_author(store, monkeypatch):
     import pytest
     from commons_memory.auth import PRINCIPAL
     from commons_memory.server import build_server
-    from commons_memory.store import CommonsError
     monkeypatch.delenv("COMMONS_ADMIN_AGENTS", raising=False)
     ka = store.register_agent("alice")["api_key"]
     kb = store.register_agent("bob")["api_key"]

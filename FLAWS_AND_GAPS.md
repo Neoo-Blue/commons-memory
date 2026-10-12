@@ -1,11 +1,12 @@
-# Flaws and gaps (v0.5)
+# Flaws and gaps (v0.6)
 
 This is the list of risks and gaps we know about. v0.5.0 worked through every open item from the v0.4 list and the
-stubbed or unfinished items from the v0.1–v0.4 reports. Part 1 covers what is fixed and how it was tested. Part 2
-covers what is still open and why. If you run Commons anywhere other than one trusted machine, read Part 2 first.
+stubbed or unfinished items from the v0.1–v0.4 reports. v0.6.0 adds retro learning and remote access, and their risks
+are listed here too. Part 1 covers what is fixed and how it was tested. Part 2 covers what is still open and why. If
+you run Commons anywhere other than one trusted machine, read Part 2 first.
 
-Tests: `pytest` gives 89 passed and 1 skipped on SQLite. The skipped one is the Postgres-only test. With
-`COMMONS_TEST_PG=postgresql://…`, all 90 tests pass against PostgreSQL 16 + pgvector.
+Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the Postgres-only test. With
+`COMMONS_TEST_PG=postgresql://…`, all 110 tests pass against PostgreSQL 16 + pgvector.
 
 ## Part 1: Fixed in v0.5
 
@@ -43,6 +44,13 @@ Tests: `pytest` gives 89 passed and 1 skipped on SQLite. The skipped one is the 
 | **Observability** | No tracing | Optional OpenTelemetry (`[otel]`, `COMMONS_OTEL=1|console`, OTLP if `OTEL_EXPORTER_OTLP_ENDPOINT` is set) adds spans for MCP tool calls, LLM calls, hub calls, claims and background jobs. Spans carry ids and sizes only. | Test: a span is recorded for an LLM call |
 | **Planner / summariser / preferences** | Hook-only | Built in through the provider layer roles (`planner`, `kb_summarizer`, `pref_extractor`, `librarian`), finished in v0.4. The env hooks still work. | Existing tests |
 
+## New in v0.6: retro learning and remote access
+
+| Area | What v0.6 does | Tested by |
+|---|---|---|
+| **Retro learning** | `commons learn`, the MCP `retro_learn` / `retro_queue` / `retro_decide` tools and a dashboard page. It parses Claude Code, Codex, Cursor (state DBs), ChatGPT and Claude.ai exports, Gemini CLI, generic transcripts, git and PRs (via gh), and memory files (CLAUDE.md, AGENTS.md, .cursor/rules, mem0, basic-memory). Then it redacts, chunks and extracts with an LLM under a budget or with heuristics, dedupes, and sends everything to a review queue. Checkpoints keep re-runs incremental. Dry runs estimate tokens and cost. | `tests/test_retro.py`: a fixture history for every format, dry run, queue/apply/idempotency/append, auto-approve floor, LLM path plus budget fallback, dashboard API |
+| **Remote access** | `commons expose` covers Tailscale serve/funnel/bind, Cloudflare quick and named tunnels plus Access JWT validation, ngrok CLI/SDK with OAuth/CIDR passthrough, SSH tunnels (localhost.run), bore, ZeroTier/WireGuard bind, and Caddy/nginx configs. Health and URL appear in `commons status` and the dashboard. Public exposure is refused unless a live probe gets 401. Client snippets are regenerated with the reachable URL. There is also a Dockerfile, docker-compose, and systemd/launchd/Windows units. | `tests/test_expose.py`: mock CLIs for every provider, the auth guard, Access JWT (RS256 + JWKS), snippets, units, status |
+
 ## Part 2: Still open, and why
 
 | Risk / gap | Status in v0.5 | Why it is still open |
@@ -65,3 +73,9 @@ Tests: `pytest` gives 89 passed and 1 skipped on SQLite. The skipped one is the 
 | **Popularity ≠ safety** in skill discovery | Stars, deltas and review | Signals from GitHub can be gamed. |
 | **A2A push notifications** | Streaming and polling are implemented. The card advertises `pushNotifications: false` | Webhook push would need outbound callbacks to client-supplied URLs (an SSRF risk). Deferred until there's an allow-list design. |
 | **Dashboard user management** | Per-user tokens with roles | No SSO/OIDC login for the dashboard. Put it behind your IdP's proxy if you need that. |
+| **Retro learning: format drift** | Parsers follow the formats as of 2026-10 and skip anything they can't read | Claude Code, Codex, Cursor and Gemini change their history formats without notice, and none of these formats is a documented public API. Cursor's state DB is undocumented, so the parser covers the known `composerData`/`bubbleId`/`aichat` keys. Fixtures mirror real files but were not taken from live accounts. This box has no Claude, Codex, Cursor or Gemini history. |
+| **Retro learning: heuristic quality** | Review-first queue with confidence and provenance on every item | Without a model, extraction is pattern-based. It misses implicit knowledge and can pick up sentences out of context. Configure a `retro` model for better recall. Performance scores from feedback phrases are weak signals. |
+| **Retro learning: privacy** | Redaction runs before anything leaves the parser. The MCP tool is admin-only and dry-run by default | History often contains personal data that isn't a secret. Review the queue before approving, and use `--source`/`--path` to limit what is read. |
+| **Remote access: real tunnels** | All providers are implemented against the vendors' documented CLIs and tested with mock CLIs. Tailscale serve/funnel flags were checked against the installed tailscale 1.104 help | Starting Cloudflare, ngrok or localhost.run tunnels for real needs accounts or internet-facing side effects that the build box shouldn't create. Funnel needs to be enabled in the tailnet ACLs. |
+| **Docker image** | Dockerfile, compose file and publishing instructions | The build box has no Docker daemon, so the image hasn't been built or pushed in CI. Build it locally with `docker build .` |
+| **ngrok via the Python SDK** | Works while the `commons expose` process stays alive | The SDK tunnel lives inside that process. Use the ngrok CLI for a detached tunnel. |

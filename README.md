@@ -34,6 +34,12 @@ See [FLAWS_AND_GAPS.md](FLAWS_AND_GAPS.md) for known risks.
 v0.1 features remain: shared memory with hybrid search and token-budgeted results, one graph across memory/code/sessions,
 code indexing, handoffs, reasoning log, agent inbox, secret references, conflict detection.
 
+## v0.6: retro learning and remote access
+
+**Learn from what you've already done.** `commons learn --dry-run` finds your Claude Code, Codex, Cursor, Gemini CLI, ChatGPT and Claude.ai history, your git and PR history, and your CLAUDE.md/AGENTS.md/.cursor/rules files. It then shows what Commons would learn and estimates the cost. `commons learn` extracts preferences, decisions with rationale, project facts, unfinished work (leftovers), model-by-task performance (which feeds routing) and procedures (skill drafts). Results go into a review queue that you approve in bulk on the dashboard's **Retro learning** page or with `commons learn approve`. Re-runs only read new history. See [docs/retro-learning.md](docs/retro-learning.md).
+
+**Reach it from anywhere, safely.** `commons expose up tailscale | cloudflare | ngrok | ssh | bore | zerotier | wireguard`, plus `expose proxy caddy|nginx` and `expose service systemd|launchd|windows`. Public exposure is refused unless the server demonstrably requires keys. Cloudflare Access JWTs are validated. `commons status` and the dashboard show the URL and its health. Client snippets in `~/.commons/connect/` follow the reachable URL. Docker: `docker compose up -d`. See [docs/networking.md](docs/networking.md).
+
 ## v0.5: production hardening (Postgres, auth, ACLs, trust, escalation, A2A server)
 
 v0.5 closes the open items from `FLAWS_AND_GAPS.md`. That file now separates what is fixed from what is still open and says why.

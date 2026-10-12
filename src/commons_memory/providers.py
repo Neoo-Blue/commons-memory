@@ -29,7 +29,7 @@ KINDS = {
     "ollama": "http://127.0.0.1:11434",
     "mock": "mock://",
 }
-ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian"]
+ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro"]
 TASK_TYPES = ["research", "plan", "code", "review", "red_team", "test", "summarize", "debate", "judge", "general"]
 
 # Small, cheap, automatically checkable probes per task type.
@@ -522,6 +522,20 @@ def _mock_chat(config: dict, model: str, system: str, prompt: str) -> str:
                            for tt, rows in cands.items() if rows})
     if role == "pref_extractor":
         return "\n".join(f"- {s.strip()}" for s in re.split(r"[.!\n]", prompt) if re.search(r"(?i)\b(prefer|always|never|use)\b", s))
+    if role == "retro":
+        ex = prompt.split("<excerpt>", 1)[-1]
+        items = []
+        for sent in re.split(r"(?<=[.!?])\s+|\n+", ex):
+            sent = re.sub(r"^\[(user|assistant)\]\s*", "", sent.strip())
+            if re.search(r"(?i)\bi prefer\b", sent):
+                items.append({"kind": "preference", "text": sent, "confidence": 0.8})
+            elif re.search(r"(?i)\bdecided\b", sent):
+                why = re.split(r"(?i)\bbecause\b", sent)
+                items.append({"kind": "decision", "text": why[0].strip(), "rationale": why[1].strip() if len(why) > 1 else "",
+                              "confidence": 0.85})
+            elif re.search(r"\bTODO\b", sent):
+                items.append({"kind": "leftover", "text": sent.replace("TODO:", "").strip(), "task_type": "code"})
+        return json.dumps(items)
     if role == "kb_summarizer":
         first = next((ln for ln in prompt.splitlines() if ln.startswith("- ")), "")
         return f"[{model} summary] {first[2:120]}"

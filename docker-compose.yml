@@ -1,0 +1,42 @@
+# docker compose up -d                      -> Commons on SQLite, localhost only
+# docker compose --profile postgres up -d   -> Commons on Postgres + pgvector
+# docker compose --profile tunnel up -d     -> + Cloudflare named tunnel (set TUNNEL_TOKEN in .env)
+services:
+  commons:
+    build: .
+    image: ghcr.io/neoo-blue/commons-memory:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"   # MCP (streamable HTTP) + A2A
+      - "127.0.0.1:8766:8766"   # dashboard
+    environment:
+      COMMONS_REQUIRE_KEYS: "1"
+      COMMONS_DASHBOARD_TOKEN: ${COMMONS_DASHBOARD_TOKEN:?set COMMONS_DASHBOARD_TOKEN in .env}
+      COMMONS_DB: ${COMMONS_DB:-/data/commons.db}
+    volumes:
+      - commons-data:/data
+
+  postgres:
+    profiles: ["postgres"]
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: commons
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: commons
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # then set COMMONS_DB=postgresql://commons:${POSTGRES_PASSWORD}@postgres/commons for the commons service
+
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    # in the Cloudflare dashboard, route your hostname to http://commons:8765 (and protect it with Access)
+
+volumes:
+  commons-data:
+  pg-data:

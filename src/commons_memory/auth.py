@@ -187,6 +187,18 @@ class AuthMiddleware:
         tok = hdrs.get("authorization", "")
         tok = tok[7:].strip() if tok.lower().startswith("bearer ") else (hdrs.get("x-api-key") or "")
         principal = None
+        if "cf-ray" in hdrs:  # arrived through Cloudflare (cloudflared adds it; clients can't strip it)
+            from .expose import CloudflareAccess
+            cf = getattr(self, "_cf", None) or CloudflareAccess()
+            self._cf = cf
+            if cf.enabled:
+                jwt_ = hdrs.get("cf-access-jwt-assertion") or ""
+                claims = cf.verify(jwt_)
+                if not claims:
+                    self.s.audit(None, "http.cf_access_denied", path, {"client": (scope.get("client") or ["?"])[0]})
+                    return await self._send_json(send, 403, {"error": "Cloudflare Access token missing or invalid"})
+                if not tok and os.environ.get("COMMONS_CF_ACCESS_AS_AUTH") == "1":
+                    principal = self.s.ensure_agent(f"cf:{cf.identity(claims)}")
         if tok:
             a = self.s.authenticate(tok)
             if a:

@@ -1,0 +1,18 @@
+[Unit]
+Description=Commons memory hub (MCP over HTTP)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Environment=COMMONS_DB=/var/lib/commons/commons.db
+Environment=COMMONS_REQUIRE_KEYS=1
+ExecStart=/usr/local/bin/commons serve --transport http --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/commons
+
+[Install]
+WantedBy=default.target
+# install: save as ~/.config/systemd/user/commons.service ; systemctl --user enable --now commons

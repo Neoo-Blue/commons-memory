@@ -111,4 +111,40 @@ def register_v5(mcp, store, who):
             r = a2a.wait_task(url, tid, timeout=300)
         return _js(r)
 
+    @mcp.tool()
+    def retro_learn(sources: list[str] | None = None, paths: dict | None = None, dry_run: bool = True,
+                    auto_approve: bool = False, budget: float = -1, project: str = "", use_llm: bool = True,
+                    agent: str = "", api_key: str = "") -> str:
+        """Learn from past AI history on the machine running Commons (Claude Code, Codex, Cursor, ChatGPT/Claude.ai
+        exports, Gemini CLI, generic logs, git, CLAUDE.md/AGENTS.md...). Extracts preferences, decisions, facts,
+        leftovers, model performance and procedures into a review queue. dry_run (default) only estimates.
+        Admin only: it reads local history files."""
+        aid = admin(project or None, agent, api_key)
+        from .retro import RetroLearner
+        r = RetroLearner(store).run(sources or ["all"], paths or {}, dry_run=dry_run, auto_approve=auto_approve or None,
+                                    budget=None if budget < 0 else budget, use_llm=None if use_llm else False,
+                                    project=project or None, agent_id=aid)
+        return _js(r)
+
+    @mcp.tool()
+    def retro_queue(status: str = "pending", kind: str = "", limit: int = 50) -> str:
+        """Learned candidates waiting for review (kind: preference|decision|fact|leftover|performance|skill)."""
+        from .retro import RetroLearner
+        return _js([{k: r[k] for k in ("id", "kind", "text", "confidence", "source_kind", "project", "method")}
+                    for r in RetroLearner(store).queue(status or None, kind or None, limit=limit)])
+
+    @mcp.tool()
+    def retro_decide(ids: list[str], approve: bool = True, agent: str = "", api_key: str = "") -> str:
+        """Approve (apply) or reject queued retro-learning candidates; ids=["all"] for every pending one."""
+        aid = admin(None, agent, api_key)
+        from .retro import RetroLearner
+        return _js(RetroLearner(store).decide("all" if ids == ["all"] else ids, approve, aid))
+
+    @mcp.tool()
+    def network_status() -> str:
+        """How Commons is reachable (provider, URL, public?, health probe) plus ready-made connection snippets."""
+        from .expose import health, snippets
+        st = health(store)
+        return _js(st | {"snippets": snippets(st["url"]) if st.get("url") else {}})
+
     _ = ANON

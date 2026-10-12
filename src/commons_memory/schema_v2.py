@@ -184,6 +184,8 @@ def _v5(db):
     from .v5schema import SCHEMA_V5, add_columns
     db.executescript(SCHEMA_V5)
     add_columns(db)
+    from .retro import SCHEMA_V6
+    db.executescript(SCHEMA_V6)
 
 
 _v4e_migrate = migrate
