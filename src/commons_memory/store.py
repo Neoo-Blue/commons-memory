@@ -437,7 +437,8 @@ class Store:
                tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,
                until: str | None = None, entity: str | None = None, limit: int = 20,
                max_tokens: int = 800, include_superseded: bool = False, as_of: str | float | None = None,
-               explain: bool = False, rerank: bool | str | None = None, conflict: bool | None = None) -> dict:
+               explain: bool = False, rerank: bool | str | None = None, conflict: bool | None = None,
+               context: int = 0) -> dict:
         ranked, total, why = self.rank(query, mode=mode, project=project, agent=agent, tags=tags, kinds=kinds,
                                        since=since, until=until, entity=entity,
                                        limit=max(limit, int(os.environ.get("COMMONS_RERANK_TOP", "30"))) if rerank else limit,
@@ -451,9 +452,41 @@ class Store:
             ranked = rerank_ids(self, query, ranked, top=int(os.environ.get("COMMONS_RERANK_TOP", "30")), how=how)
         ranked = ranked[:limit]
         out = self._budgeted(ranked, max_tokens, total=total)
+        if context > 0 and out["results"]:
+            self._with_context(out, min(int(context), 5), max_tokens // 2)
         if explain:
             out["explain"] = {k: why[k] for k in ranked if k in why}
         return out
+
+    def _with_context(self, out: dict, n: int, budget: int) -> None:
+        """Attach the n notes before and after each hit from the same session: a hit like "yes, last week" is only
+        useful with the turn it answers (LoCoMo QA +5 points over hits alone, no model at write time)."""
+        seen = {r["id"] for r in out["results"]}
+        extra, used = [], 0
+        for r in out["results"]:
+            me = self.q("SELECT session_id, created_at, rowid AS rid FROM items WHERE id=?", (r["id"],))
+            if not me or not me[0]["session_id"]:
+                continue
+            sid, ts, rid = me[0]["session_id"], me[0]["created_at"], me[0]["rid"]
+            near = self.q("SELECT * FROM (SELECT id, summary, created_at, rowid AS rid FROM items WHERE session_id=? AND "
+                          "superseded_by IS NULL AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at "
+                          "DESC, rowid DESC LIMIT ?) UNION ALL SELECT * FROM (SELECT id, summary, created_at, rowid AS rid "
+                          "FROM items WHERE session_id=? AND superseded_by IS NULL AND (created_at > ? OR (created_at = ? AND "
+                          "rowid > ?)) ORDER BY created_at, rowid LIMIT ?)", (sid, ts, ts, rid, n, sid, ts, ts, rid, n))
+            hidden = self.hidden_ids([x["id"] for x in near])
+            ctx = [{"id": x["id"], "summary": x["summary"], "created_at": iso(x["created_at"])}
+                   for x in sorted(near, key=lambda x: (x["created_at"], x["rid"])) if x["id"] not in seen | hidden]
+            for c in ctx:
+                t = estimate_tokens(c["summary"] or "") + 4
+                if used + t > budget:
+                    break
+                used += t
+                seen.add(c["id"])
+                r.setdefault("context", []).append(c)
+                extra.append(f"  ↳ {c['id']} {c['created_at'][:10]}: {c['summary']}")
+        if extra:
+            out["text"] += "\ncontext (same session, around the hits):\n" + "\n".join(extra)
+            out["tokens"] += used
 
     def rank(self, query: str = "", *, mode: str = "hybrid", project: str | None = None, agent: str | None = None,
              tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,

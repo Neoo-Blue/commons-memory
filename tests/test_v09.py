@@ -234,3 +234,20 @@ def test_memory_tiers_hot_warm_cold(store):
     a = store.ensure_agent("checker")
     out = Orchestrator(store).pickup(a)["text"]
     assert "HOT MEMORY" in out and fresh in out
+
+
+def test_search_context_returns_same_session_neighbours(store):
+    s = store
+    aid = s.ensure_agent("talker")
+    sid = s.session_for(aid, "chat", "a conversation")
+    turns = ["Caroline: are you going camping this summer?", "Melanie: yes, we went last week to the lake",
+             "Caroline: which lake was it?", "Melanie: Lake Tahoe, the kids loved the kayaks", "Caroline: sounds great"]
+    ids = [s.add_item("memory", t, project="chat", agent_id=aid, session_id=sid)["id"] for t in turns]
+    s.add_item("memory", "Melanie also mentioned kayaks at work", project="chat")  # no session: never a neighbour
+    plain = s.search("kayaks Tahoe", project="chat", limit=1)
+    assert plain["results"][0]["id"] == ids[3] and "context" not in plain["results"][0]
+    out = s.search("kayaks Tahoe", project="chat", limit=1, context=1)
+    assert [c["id"] for c in out["results"][0]["context"]] == [ids[2], ids[4]]
+    assert "context (same session" in out["text"]
+    two = s.search("kayaks Tahoe", project="chat", limit=1, context=2)
+    assert [c["id"] for c in two["results"][0]["context"]] == [ids[1], ids[2], ids[4]]
