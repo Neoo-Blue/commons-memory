@@ -264,6 +264,33 @@ for k, v in v6.items():
     print(f"   {'PASS' if v else 'FAIL'}  {k}")
 checks.update(v6)
 
+print("\n== 7. the project board: what the user asked, the targets behind it, and what was delivered")
+from commons_memory import board as B
+a1 = B.add(store, "ask", "Checkout must feel instant on mobile; get p95 under 300 ms before the spring sale", project="shop",
+           path="checkout/perf")
+t1 = B.add(store, "target", "checkout API latency", project="shop", path="checkout/perf", parent=a1["id"],
+           metric="checkout p95", goal="< 300 ms", current="412 ms")
+B.add(store, "expectation", "No regression in the cart totals tests", project="shop", path="checkout/perf", parent=a1["id"])
+x1 = B.add(store, "action", "Cache tax tables per region instead of per request", project="shop", path="checkout/perf",
+           parent=a1["id"])
+B.update(store, x1["id"], status="done", evidence="PR #418 merged; tax lookup 38 ms -> 2 ms")
+B.update(store, t1["id"], current="268 ms", status="done", evidence="load test run 2026-10-09, 2,000 rps, p95 268 ms")
+B.add(store, "action", "Lazy-load the address autocomplete script", project="shop", path="checkout/frontend",
+      parent=a1["id"], status="doing")
+a2 = B.add(store, "ask", "Invoices should be PDFs customers can download from their order page", project="shop",
+           path="billing/invoices")
+B.add(store, "delivered", "Invoice PDF renderer behind a feature flag", project="shop", path="billing/invoices",
+      parent=a2["id"], status="done", evidence="job 'Add invoice PDFs', verify gate approved")
+B.add(store, "action", "Add the download link to the order page", project="shop", path="billing/invoices", parent=a2["id"])
+B.add(store, "ask", "Weekly summary of failed webhooks in the team channel", project="shop", path="ops/webhooks")
+again = B.add(store, "ask", "weekly summary of the failed webhooks, in the team channel please", project="shop")
+v7 = {"board keeps verbatim asks and counts repeats": again["id"] != a1["id"] and again.get("repeated") is True,
+      "pickup leads with the board": Orchestrator(store).pickup(store.ensure_agent("cursor"), "shop")["text"].startswith("BOARD")}
+print(B.view(store, "shop")["text"])
+for k, v in v7.items():
+    print(f"   {'PASS' if v else 'FAIL'}  {k}")
+checks.update(v7)
+
 print("\nusage by agent:")
 print(sh("usage", "--by", "agent"))
 print("debate synthesis excerpt:", (debate_res or "")[:200].replace("\n", " | "))
