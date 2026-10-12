@@ -197,16 +197,24 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 | Tool schema an AI pays for each session | tokens | **2,970** for the core profile (v0.8: 33,057) |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
-Read the caveats before comparing with other projects: published numbers differ in reader and judge models,
-question subsets and granularity. mem0's paper reports 66.9% LoCoMo QA (gpt-4o-mini reader and judge); its
-managed platform and Zep claim 92-95% under their own setups.
+**Head-to-head, rivals run here on the same LoCoMo data** (details in [benchmarks/README.md](benchmarks/README.md)):
+
+| vs | Same metric | Commons | Rival |
+|---|---|---|---|
+| mem0 OSS | QA accuracy, same reader/judge/prompts, 1,540 q | 69.5% | 70.3% (tie, sign test p = 0.45; mem0 wins multi-hop and temporal, Commons single-hop and open-domain) |
+| mem0 OSS | search p50 / LLM calls per write | 24-68 ms / none | 377 ms / extraction on every write |
+| MemPalace | its own recall metric, dialog / session top-10 | **0.708 / 0.945** | 0.545 / 0.889 |
+| claude-mem 13.36 | same metric, dialog / session top-10 | **0.708 / 0.945** | 0.496 / 0.811 (search p50 2.7 s) |
+
+Published numbers elsewhere use other readers, judges and subsets (mem0's paper: 66.9% with gpt-4o-mini; its
+managed platform and Zep claim 92-95% under their own setups), so only the table above is apples to apples.
 
 ## Comparison
 | Project | Great at | Commons' angle |
 |---|---|---|
 | [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Writes in milliseconds (no LLM on the write path), adds a code graph, handoffs, decisions, orchestration and secrets; `commons import mem0` brings your memories over |
 | [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture for Claude Code | Same hook-based capture for Claude Code, Codex, Gemini and Cursor, shared by every agent; `commons import claude-mem --curate` imports and cleans its history |
-| [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Comparable retrieval (see benchmarks) plus multi-agent coordination |
+| [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Higher recall on LoCoMo under MemPalace's own metric (0.708 vs 0.545 dialog-level), plus multi-agent coordination |
 | [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Graphs come from the real code index and memory, with communities, impact paths and a cluster map; Archify still has more diagram types |
 | [Graphiti / Zep](https://github.com/getzep/graphiti) | Temporal knowledge graph | Inspired Commons' conflict and supersede model |
 | [Cognee](https://github.com/topoteretes/cognee) | Rich document graphs | Commons is a lighter single-file hub |

@@ -3,6 +3,16 @@
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
 ## v0.9.0: lean, fast, instant, and proven on your own data
+- **Measured against the rivals, here.** mem0 OSS, MemPalace and claude-mem were run on the same LoCoMo data:
+  QA ties mem0 (69.5 vs 70.3, p = 0.45) with no LLM per write and 6-15x faster search; retrieval beats MemPalace
+  (0.708 vs 0.545 dialog-level, its own metric) and claude-mem (0.496). `benchmarks/live_agents.py` checks real
+  agents end to end; `bench scale --target postgresql://` compares backends (SQLite wins 4-10x).
+- **Race and load fixes** from a threaded test suite and a py-spy profile of the live hub: cross-process
+  `complete_subtask` writes side effects only for the winner; one reindex at a time; per-thread `defer_embed`;
+  no embedding under the store lock; one query to hydrate search hits; `synchronous=NORMAL`; librarian dedupe is
+  new-items x pool. `handoff` returns `session_id`.
+- **TypeSafe contradictions.** With `TYPESAFE_API_KEY` set, the librarian flags new notes that contradict their
+  nearest neighbours as open conflicts.
 - **Lean tool surface.** Clients list a 21-tool core profile (2,970 tokens of schema, was 148 tools = 33,057
   tokens in every session). `tools(query)` searches the rest and `call(tool, args)` runs any of them. Profiles per
   connection (`?tools=` on the MCP URL), per agent (`commons agent tools NAME core|all|core,name`) or globally

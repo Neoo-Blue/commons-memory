@@ -115,3 +115,4 @@ COMMONS_TYPESAFE_URL	TypeSafe System One endpoint (default https://api.typesafe.
 COMMONS_TYPESAFE_MODEL	TypeSafe model (default jev-latest)
 COMMONS_CONTRADICTION_THRESHOLD	TypeSafe probability at which two notes count as contradicting (default 0.85; precision first)
 COMMONS_CONTRADICTION_MAX	New notes checked for contradictions per librarian pass (default 50)
+COMMONS_LIBRARIAN_INDEX_EVERY	Seconds between full rebuilds of the librarian's "where to find X" index during incremental passes (default 3600; a full pass always rebuilds)

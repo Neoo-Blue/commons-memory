@@ -2,6 +2,9 @@
 import json
 import sqlite3
 
+import pytest
+from conftest import make_store
+
 from commons_memory import importers as I
 
 
@@ -93,3 +96,41 @@ def test_curated_import_with_ai_manager(store):
     assert store.search("Postgres 18")["results"]  # approving the queued item imports it
     again = curate(store, items, workers=2)
     assert again["batches"] == 0 and again["kept"] == 0  # nothing reviewed (or paid for) twice
+
+
+def test_curate_batch_resume_keeps_chunk_alignment(tmp_path, monkeypatch):
+    """Resuming a batch must apply c{n}'s answers to chunk n as it was built, not to a re-split of what's left
+    (the bug: after chunk 0 was applied, a resume re-chunked [C,D,E,F] and gave C chunk 0's decisions)."""
+    import json as _j
+    from commons_memory import curate as C
+    from commons_memory.providers import ProviderLayer
+    from commons_memory.store import CommonsError as _E
+    s = make_store(tmp_path)
+    items = [{"src": f"t:{x}", "title": x, "content": f"note {x} body", "kind": "memory"} for x in "ABCDEF"]
+    submitted = {}
+
+    def submit(self, model, reqs):
+        submitted["n"] = len(reqs)
+        return "b1"
+
+    def results(self, model, bid, role="", agent_id=None):
+        res = {f"c{n}": _j.dumps({"items": [{"i": i, "a": "keep", "t": f"dec-{n}-{i}", "c": 0.9} for i in range(2)]})
+               for n in range(submitted.get("n", 3))}
+        return {"status": "ended", "results": res, "cost": 0.0}
+    monkeypatch.setattr(ProviderLayer, "batch_submit", submit)
+    monkeypatch.setattr(ProviderLayer, "batch_results", results)
+    from commons_memory import importers as I
+    calls = {"n": 0}
+
+    def flaky_sink(xs):  # the hub goes away after the first chunk
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise _E("hub restarting")
+        return I.import_items(s, xs)
+    C.curate(s, items, model="anthropic/claude-haiku-5-5", batch=2, batch_api=True, sink=flaky_sink)
+    C.curate(s, items, model="anthropic/claude-haiku-5-5", batch=2, batch_api=True, resume_batch="b1")
+    titles = {r["key"][7:]: s.get_item(r["value"])["title"] for r in s.q("SELECT key, value FROM meta WHERE key LIKE 'import:t:%'")}
+    assert titles == {"t:A": "dec-0-0", "t:B": "dec-0-1", "t:C": "dec-1-0", "t:D": "dec-1-1", "t:E": "dec-2-0", "t:F": "dec-2-1"}
+    with pytest.raises(_E):  # no chunk map, no guessing
+        C.curate(s, items + [{"src": "t:G", "title": "G", "content": "g"}], model="anthropic/claude-haiku-5-5", batch=2,
+                 batch_api=True, resume_batch="unknown-batch")

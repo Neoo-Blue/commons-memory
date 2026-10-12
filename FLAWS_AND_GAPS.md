@@ -101,18 +101,26 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Wake | Assignments never reached `commons agent daemon` (it read only chat messages), and `--cmd` disabled the command | Mailbox delivery, `summon`, working daemon with presets and `--install` | `test_instant_wake_...` |
 | Re-index | Re-indexing deleted memory->code links and was not atomic | Non-code edges re-attached; wipe inside the transaction | `test_reindex_keeps_memory_links_and_is_atomic` |
 | Stale keyword index | Tag edits (librarian, research) left FTS rows stale | `sync_fts` on every edit, `update_item`/`delete_item` | same test |
+| Cross-process complete | Two workers on separate connections could both pass the ownership check and both write usage and budget | Conditional status UPDATE decides the winner before any side effect | `test_concurrent_complete_separate_connections_keep_job_state` |
+| NAS CPU pinned | An import's reindex and the background reindex embedded the same rows at once; a bulk import's `defer_embed` also stopped every other agent's memories from being embedded | One reindex at a time (others return busy); `defer_embed` per thread; the librarian's 165k-row "where to find" index rebuilds hourly instead of every 10-minute pass | py-spy on the live hub, import 6x faster |
+| Lock held across ONNX | `complete_subtask` embedded its result while holding the store lock, stalling every agent | Embedded after the lock | concurrency suite |
+| Handoff session | `handoff` did not return its `session_id`, so the next agent could not `resume()` it precisely | Returned | live multi-agent run |
+| Postgres | Scalar `MAX(a,b)` (scheduler preemption) failed | Translated to `GREATEST`; full suite passes on Postgres 17 + pgvector | `COMMONS_TEST_PG` run |
+| Free-text contradictions | Only structured facts (subject/predicate) were checked | Librarian asks TypeSafe about each new note vs its 3 nearest (precision 1.00 / recall 0.97 on 96 pairs) | `test_librarian_flags_free_text_contradictions_once` |
 
 ### Still open after v0.9
 | Risk / gap | Why |
 |---|---|
-| End-to-end QA vs published numbers | LoCoMo QA (69.5%) used Claude Haiku 4.5 as reader and judge because the OpenRouter key hit its cap; mem0's paper used gpt-4o-mini. LongMemEval QA has not been run yet. Not a strict head-to-head. |
-| Multi-hop and open-domain QA | 53% and 40% on LoCoMo categories 1 and 3: one retrieval pass with k=20 misses list-style and inference questions. Query decomposition is not built. |
+| QA vs mem0 | Run head-to-head here (same reader/judge/prompts): mem0 70.3%, Commons 69.5%, a statistical tie. mem0's LLM-extracted facts win multi-hop (61 vs 53) and temporal (74 vs 69); Commons pays nothing per write and searches 6-15x faster. LongMemEval QA: 62% on a 100-question sample. |
+| Multi-hop and temporal QA | One retrieval pass over raw turns misses facts spread across turns; mem0 consolidates them at write time with an LLM. Query decomposition or optional write-time distillation is not built. |
+| Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
+| Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |
 | Archify parity | Graphs are real and analysed, but there are no sequence, workflow or lifecycle diagram types, no commit-pinned source badges and no architecture diff between snapshots yet. |
 | Instant wake for chat-only AIs | A browser chat can't run while idle. Commons wakes daemon-backed agents instantly; chat agents see work on their next `msg_recv`. |
 | Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). |
 | Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |
 | Unlisted tools | Some clients only call listed tools; they reach the others through `call`. |
-| Postgres tsquery with operator-like words | Reported by review, not reproduced (no Postgres in this run). |
+| Postgres tsquery with operator-like words | Reported by review; the full suite now passes on Postgres 17, but this case has no dedicated test. |
 | `add_item` is not one transaction | A crash between statements can leave a memory without its graph links. |
 
 ## Part 2: Still open, and why

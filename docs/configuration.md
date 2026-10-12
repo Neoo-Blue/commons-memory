@@ -65,6 +65,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_LIBRARIAN_AUTO_APPROVE` | — | Apply librarian proposals without review (`1`) | librarian.py |
 | `COMMONS_LIBRARIAN_BUDGET` | `0.10` | USD budget per librarian run when it delegates to an LLM | librarian.py |
 | `COMMONS_LIBRARIAN_DUP` | `0.9` | Similarity above which the librarian proposes merging records | librarian.py |
+| `COMMONS_LIBRARIAN_INDEX_EVERY` | `3600` | Seconds between full rebuilds of the librarian's "where to find X" index during incremental passes (default 3600; a full pass always rebuilds) | librarian.py |
 | `COMMONS_LIBRARIAN_STALE_DAYS` | `90` | Age after which the librarian flags a record as stale | librarian.py |
 | `COMMONS_MCP_CACHE_TTL` | `300` | Seconds to cache read-only upstream MCP results | mcphub.py |
 | `COMMONS_MCP_CATALOG` | `computed` | Path to the MCP server catalog override | mcphub.py |

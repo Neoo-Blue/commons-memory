@@ -29,11 +29,80 @@ with paraphrase and date formats. Total cost $2.56.
 | open-domain (cat 3) | 96 | 39.6 |
 | **overall** | 1,540 | **69.5** |
 
-For orientation only: mem0's paper (gpt-4o-mini as reader and judge) reports mem0 66.9%, mem0 with graph 68.4%,
-Zep 66.0%, LangMem 58.1% and full-context 72.9%. Our reader and judge are Claude Haiku 4.5 (the OpenRouter key we
-planned to use for gpt-4o-mini had hit its monthly cap), so this is close to, not exactly, their protocol. mem0's
-managed platform and Zep publish 92-95% under their own setups. One retrieval pass at k=20 is weakest on multi-hop
-and open-domain questions.
+Published figures use other readers and judges (mem0's paper: gpt-4o-mini, mem0 66.9%, Zep 66.0%, full-context
+72.9%), so they are not comparable; the head-to-head below runs mem0 here instead. LongMemEval-S QA on a seeded
+100-question sample, same reader/judge: **62.0%** ($0.35; strongest on single-session-user 94%, weakest on
+single-session-assistant 45% and multi-session 50%).
+
+### Head-to-head: the rivals run here, same data, same metric (2026-10-12)
+Every system ingested the same LoCoMo turns on the same machine. Harnesses are in [`rivals/`](rivals/), per-question
+results in [`results/v0.9.0/rivals/`](results/v0.9.0/rivals/).
+
+**End-to-end QA vs mem0** (LoCoMo cats 1-4, 1,540 questions). mem0 OSS ingested each conversation in 6-turn chunks
+with its LLM fact extraction (Claude Haiku 4.5), fastembed bge-small and local Qdrant, and returned its top 20
+memories per question. Its memories and Commons' top 20 went through the *same* reader, judge, prompts and "Today
+is" date line (Claude Haiku 4.5, [`rivals/qa_external.py`](rivals/qa_external.py)).
+
+| System | overall | multi-hop | temporal | open-domain | single-hop | LLM calls at ingest | search p50 |
+|---|---|---|---|---|---|---|---|
+| mem0 OSS | **70.3** | **61.0** | **73.8** | 37.5 | 75.9 | ~1 per 6 turns (~10 min per conversation) | 377 ms |
+| Commons 0.9 | 69.5 | 53.2 | 68.9 | **39.6** | **78.6** | none | 24-68 ms |
+
+Paired on the same questions: Commons right and mem0 wrong 188 times, the reverse 203 times (sign test p = 0.45),
+so overall accuracy is a **statistical tie**. mem0's LLM-distilled facts win multi-hop and temporal questions;
+Commons' raw turns win single-hop and open-domain, with no ingest model, ~6-15x faster search and nothing to pay
+per write.
+
+**Retrieval vs MemPalace and claude-mem** (LoCoMo, 1,986 questions, MemPalace's own metric: per question, the
+fraction of evidence turns or sessions in the top 10, averaged; MemPalace measured by its own
+`benchmarks/locomo_bench.py`, claude-mem 13.36 through its real worker HTTP API on an isolated port).
+
+| System | dialog top-10 | session top-10 | turn any@10 | session any@10 | search time |
+|---|---|---|---|---|---|
+| **Commons 0.9** | **0.708** | **0.945** | **76.5** | **97.4** | 24.5 ms p50 (1k items) |
+| MemPalace (hybrid) | 0.545 | 0.889 | - | - | 0.71-0.91 s per question (harness) |
+| claude-mem 13.36 | 0.496 | 0.811 | 54.3 | 85.3 | 2,726 ms p50 (HTTP API) |
+
+### Storage engine: SQLite vs Postgres + pgvector (`commons bench scale --target postgresql://...`)
+Same synthetic store, same machine (an oversubscribed 8-core Mac, load ~33, so compare rows, not absolutes).
+`conc_qps` = searches per second with 8 searching threads while 2 threads keep writing.
+
+| Backend | items | search p50 | inserts/s | conc_qps |
+|---|---|---|---|---|
+| SQLite (WAL) | 10,000 | 84-230 ms | 671-995 | 10-17 |
+| Postgres 17 + pgvector HNSW | 10,000 | 633 ms | 159 | 1.5 |
+| SQLite (WAL) | 50,000 | 154 ms | 925 | 5.9 |
+| Postgres 17 + pgvector HNSW | 50,000 | 628 ms | 175 | 1.9 |
+
+Postgres as wired (one connection, SQLite dialect translated per query, many small queries per search) is 4-10x
+slower; it is there for sharing one database between hosts, not for speed. A cProfile of one search on an idle
+10k-item SQLite store: 23 ms total, of which SQL ~13 ms, exact vector matmul ~4 ms, query embedding ~4 ms. Exact
+numpy search stays cheap to a few hundred thousand memories; an ANN index only pays beyond that.
+
+### TypeSafe (jev) for cheap judgments
+- **QA judge** (300 Commons QA rows): 94.7% agreement with the Haiku judge; on the 16 disagreements Sonnet 5.5 sided
+  with Haiku 11 times, so benchmarks keep the Haiku judge. TypeSafe answered in 154 ms p50.
+- **Free-text contradictions** (96 labeled note pairs written by Sonnet 5.5: contradiction / consistent /
+  related-but-compatible): TypeSafe precision 1.00, recall 0.97 at 139 ms p50; Claude Haiku 5.5 precision 1.00,
+  recall 0.97 at 927 ms. The librarian now uses it when `TYPESAFE_API_KEY` is set
+  ([`results/v0.9.0/typesafe/`](results/v0.9.0/typesafe/), [`rivals/ts_contra.py`](rivals/ts_contra.py)).
+
+### Live multi-agent run ([`live_agents.py`](live_agents.py))
+Real agents connected to the hub, each asked through `delegate` to recover a random nonce that was planted with a
+different tool, so a correct answer proves it used the shared hub. grok-build and antigravity run
+`commons agent daemon` (instant wake); muse is a chat AI that polls on its own schedule.
+
+| Scenario | grok-build (Grok 4.6) | antigravity (Gemini 3) | muse (Muse Spark) |
+|---|---|---|---|
+| ping (delivery + wake) | ok, 36-128 s | ok, 15-53 s | ok, 183 s |
+| recall (`remember` -> `search`) | ok, 220 s | ok, 155 s | ok, 187 s |
+| why (`record_decision` -> `why`) | ok, 220 s | ok, 158 s | ok, 192 s |
+| resume (`handoff` -> `resume`) | see note | ok, 18 s | see note |
+| code + review job (`cross_review`) | wrote `is_leap`, 2 approvals, passes 8/8 cases, 201 s | (reviewer) | - |
+
+Times are wall clock including each agent's own model run. The first resume round exposed two real problems, both
+fixed: `handoff` did not return its `session_id`, and four concurrent handoffs without one shared a session. The
+user's `grok` chat bot was offline for the whole run and answered nothing.
 
 ### Latency and footprint (`commons bench scale`)
 Synthetic memories with real keyword structure; each query is embedded for real, so latency includes the embedding.

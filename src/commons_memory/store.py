@@ -367,6 +367,7 @@ class Store:
         self.check_project(r[0]["project_id"], "write")
         self.x("DELETE FROM items WHERE id=?", (iid,))
         self.sync_fts(iid)
+        self.x("DELETE FROM embeddings WHERE item_id=?", (iid,))  # else vector search keeps scoring a ghost
         self.x("DELETE FROM relations WHERE src=? OR dst=?", (iid, iid))
         self.kb_dirty(r[0]["project_id"])
         self.audit(agent_id, "item.delete", iid, {"kind": r[0]["kind"]})

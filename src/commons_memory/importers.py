@@ -178,6 +178,10 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     runs skip it. Embeds once at the end, in batches."""
     from .prefs import Preferences
     have = known(s, [i.get("src") for i in items])
+    srcs = [i.get("src") for i in items if i.get("src")]
+    queued_already = {r["key"][7:] for k in range(0, len(srcs), 400) for r in s.q(
+        f"SELECT key FROM meta WHERE value='queued' AND key IN ({','.join('?' * len(srcs[k:k + 400]))})",
+        [f"import:{x}" for x in srcs[k:k + 400]])}
     added, skipped, prefs, queued, ledger, errors = 0, 0, 0, 0, 0, []
     s.defer_embed = True
     try:
@@ -192,6 +196,9 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
                 ledger += 1
                 continue
             if status == "review":
+                if src in queued_already:  # a re-run must not queue the same item for review twice
+                    skipped += 1
+                    continue
                 from .retro import RetroLearner, fingerprint
                 RetroLearner(s)._enqueue("import-review", {
                     "kind": "memory", "text": it.get("title") or (it.get("content") or "")[:200],

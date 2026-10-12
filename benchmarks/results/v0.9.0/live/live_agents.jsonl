@@ -1,0 +1,26 @@
+{"scenario": "ping", "agent": "grok-build", "ok": true, "secs": 59.621768951416016, "answered": true, "answer": "PONG-R8GBNF", "ts": 1791840743.886497}
+{"scenario": "ping", "agent": "antigravity", "ok": true, "secs": 52.88963198661804, "answered": true, "answer": "PONG-VJIOAE", "ts": 1791840743.886694}
+{"scenario": "ping", "agent": "muse", "ok": true, "secs": 183.28824877738953, "answered": true, "answer": "PONG-QAUHOY", "ts": 1791840743.886699}
+{"scenario": "ping", "agent": "grok", "ok": false, "secs": 1200.0, "answered": false, "answer": "", "ts": 1791840743.886703}
+{"scenario": "recall", "agent": "grok-build", "ok": true, "secs": 219.93502473831177, "answered": true, "answer": "russet", "ts": 1791840743.8867059}
+{"scenario": "recall", "agent": "antigravity", "ok": true, "secs": 155.3900671005249, "answered": true, "answer": "yarrow", "ts": 1791840743.886709}
+{"scenario": "recall", "agent": "muse", "ok": true, "secs": 186.53988695144653, "answered": true, "answer": "willow", "ts": 1791840743.88672}
+{"scenario": "recall", "agent": "grok", "ok": false, "secs": 1200.0, "answered": false, "answer": "", "ts": 1791840743.886723}
+{"scenario": "why", "agent": "grok-build", "ok": true, "secs": 220.1522171497345, "answered": true, "answer": "quartz", "ts": 1791840743.8867252}
+{"scenario": "why", "agent": "antigravity", "ok": true, "secs": 158.11450386047363, "answered": true, "answer": "basalt", "ts": 1791840743.886728}
+{"scenario": "why", "agent": "muse", "ok": true, "secs": 192.13976502418518, "answered": true, "answer": "orchid", "ts": 1791840743.886731}
+{"scenario": "why", "agent": "grok", "ok": false, "secs": 1200.0, "answered": false, "answer": "", "ts": 1791840743.886733}
+{"scenario": "resume", "agent": "grok-build", "ok": false, "secs": 293.4867057800293, "answered": true, "answer": "Rotate the cobalt widget for run 7TW2N9", "session": "", "ts": 1791840743.886879}
+{"scenario": "resume", "agent": "antigravity", "ok": false, "secs": 160.54149723052979, "answered": true, "answer": "Rotate the cobalt widget for run 7TW2N9", "session": "", "ts": 1791840743.886882}
+{"scenario": "resume", "agent": "muse", "ok": false, "secs": 204.45442509651184, "answered": true, "answer": "Rotate the cobalt widget for run 7TW2N9", "session": "", "ts": 1791840743.886886}
+{"scenario": "resume", "agent": "grok", "ok": false, "secs": 1200.0, "answered": false, "answer": "", "session": "", "ts": 1791840743.886888}
+{"scenario": "code", "agent": "grok-build+antigravity+muse+grok", "ok": true, "secs": 201.20147109031677, "status": "done", "workers": ["code:grok-build", "red_team:antigravity", "review:antigravity"], "verdicts": ["approve", "approve"], "ts": 1791840743.8868911}
+{"scenario": "resume", "agent": "grok-build", "ok": false, "secs": 94.55945611000061, "answered": true, "answer": "Rotate the xenon widget for run 5I2HI1", "session": "", "ts": 1791841737.004888}
+{"scenario": "resume", "agent": "antigravity", "ok": true, "secs": 47.813673973083496, "answered": true, "answer": "Rotate the xenon widget for run 5I2HI1", "session": "", "ts": 1791841737.0049112}
+{"scenario": "resume", "agent": "muse", "ok": false, "secs": 900.0, "answered": false, "answer": "", "session": "", "ts": 1791841737.004917}
+{"scenario": "resume", "agent": "grok-build", "ok": false, "error": "<urlopen error [Errno 61] Connection refused>", "ts": 1791842341.437008}
+{"scenario": "resume", "agent": "antigravity", "ok": true, "secs": 18.122143983840942, "answered": true, "answer": "Rotate the juniper widget for run FXB6HO", "session": "ses_01a1321f98aecf73a46c60", "ts": 1791842341.437031}
+{"scenario": "resume", "agent": "muse", "ok": false, "error": "<urlopen error [Errno 61] Connection refused>", "ts": 1791842341.4370382}
+{"scenario": "ping", "agent": "grok-build", "ok": true, "secs": 36.29714822769165, "answered": true, "answer": "PONG-JEPOG3", "ts": 1791842341.4370408}
+{"scenario": "ping", "agent": "antigravity", "ok": true, "secs": 15.135040044784546, "answered": true, "answer": "PONG-ESDEIM", "ts": 1791842341.437044}
+{"scenario": "ping", "agent": "muse", "ok": false, "error": "<urlopen error [Errno 61] Connection refused>", "ts": 1791842341.437047}

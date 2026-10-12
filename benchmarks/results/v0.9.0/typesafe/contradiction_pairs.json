@@ -1,0 +1,482 @@
+[
+ {
+  "a": "The payments service deploys every Tuesday at 14:00 UTC.",
+  "b": "Payments deploys go out on Thursdays at 14:00 UTC.",
+  "label": "contradict"
+ },
+ {
+  "a": "The payments service deploys every Tuesday at 14:00 UTC.",
+  "b": "Payments releases ship weekly on Tuesdays at 2 PM UTC.",
+  "label": "consistent"
+ },
+ {
+  "a": "The payments service deploys every Tuesday at 14:00 UTC.",
+  "b": "The search service deploys every Thursday at 16:00 UTC.",
+  "label": "related"
+ },
+ {
+  "a": "Maria owns the on-call rotation for the search team.",
+  "b": "Dev is the owner of the search team's on-call rotation; Maria isn't involved in it.",
+  "label": "contradict"
+ },
+ {
+  "a": "Maria owns the on-call rotation for the search team.",
+  "b": "Maria is responsible for managing the search team's on-call schedule and updates it at the start of each month.",
+  "label": "consistent"
+ },
+ {
+  "a": "Maria owns the on-call rotation for the search team.",
+  "b": "Dev owns the on-call rotation for the data platform team.",
+  "label": "related"
+ },
+ {
+  "a": "The staging database connection pool is set to 20.",
+  "b": "We set the staging DB pool size to 50.",
+  "label": "contradict"
+ },
+ {
+  "a": "The staging database connection pool is set to 20.",
+  "b": "Connection pool size on the staging DB is 20 connections, chosen to stay under the Postgres max_connections limit.",
+  "label": "consistent"
+ },
+ {
+  "a": "The staging database connection pool is set to 20.",
+  "b": "The production database connection pool is set to 100.",
+  "label": "related"
+ },
+ {
+  "a": "We decided to adopt Postgres for the new analytics store.",
+  "b": "After the review, the team rejected Postgres and chose ClickHouse for the new analytics store.",
+  "label": "contradict"
+ },
+ {
+  "a": "We decided to adopt Postgres for the new analytics store.",
+  "b": "The analytics store will be Postgres; this was decided in last week's architecture review.",
+  "label": "consistent"
+ },
+ {
+  "a": "We decided to adopt Postgres for the new analytics store.",
+  "b": "We decided to adopt Kafka for the new event ingestion pipeline.",
+  "label": "related"
+ },
+ {
+  "a": "The nightly backup job runs on weekends too.",
+  "b": "The nightly backup job does not run on weekends.",
+  "label": "contradict"
+ },
+ {
+  "a": "The nightly backup job runs at 02:00 UTC every day.",
+  "b": "Backups run daily at 2 AM UTC, including Saturdays and Sundays.",
+  "label": "consistent"
+ },
+ {
+  "a": "The nightly backup job for the primary Postgres database runs at 02:00 UTC.",
+  "b": "The nightly backup job for the Elasticsearch cluster runs at 04:30 UTC.",
+  "label": "related"
+ },
+ {
+  "a": "Code freeze begins Dec 18 and lasts until Jan 2.",
+  "b": "Code freeze starts Dec 20 and ends Jan 2.",
+  "label": "contradict"
+ },
+ {
+  "a": "Code freeze begins Dec 18 and lasts until Jan 2.",
+  "b": "No non-emergency merges to main from December 18 through January 2.",
+  "label": "consistent"
+ },
+ {
+  "a": "This year's code freeze begins Dec 18 and lasts until Jan 2.",
+  "b": "Last year's code freeze ran from Dec 20 to Jan 5.",
+  "label": "related"
+ },
+ {
+  "a": "Sprint retros are held every other Friday.",
+  "b": "Retros happen every Wednesday, weekly.",
+  "label": "contradict"
+ },
+ {
+  "a": "Sprint retros are held every other Friday.",
+  "b": "Retrospectives take place biweekly on Fridays and are facilitated by Ana.",
+  "label": "consistent"
+ },
+ {
+  "a": "Sprint retros are held every other Friday.",
+  "b": "Sprint planning is held on the first Monday of each sprint.",
+  "label": "related"
+ },
+ {
+  "a": "Priya prefers Slack threads over email for incident updates.",
+  "b": "Priya wants incident updates sent by email, not Slack.",
+  "label": "contradict"
+ },
+ {
+  "a": "Priya prefers Slack threads over email for incident updates.",
+  "b": "For incident updates, Priya likes them posted in a Slack thread rather than emailed.",
+  "label": "consistent"
+ },
+ {
+  "a": "Priya prefers Slack threads over email for incident updates.",
+  "b": "Priya prefers to do pull request reviews in the morning, before 11.",
+  "label": "related"
+ },
+ {
+  "a": "The API rate limit for the free tier is 100 requests per minute.",
+  "b": "The free tier API is limited to 60 requests per minute.",
+  "label": "contradict"
+ },
+ {
+  "a": "The API rate limit for the free tier is 100 requests per minute.",
+  "b": "Free tier users get 100 requests per minute; paid tiers get higher limits.",
+  "label": "consistent"
+ },
+ {
+  "a": "The API rate limit for the free tier is 100 requests per minute.",
+  "b": "The API rate limit for the enterprise tier is 5000 requests per minute.",
+  "label": "related"
+ },
+ {
+  "a": "The team decided to keep the monorepo.",
+  "b": "We agreed to split the monorepo into separate per-service repositories, starting next quarter.",
+  "label": "contradict"
+ },
+ {
+  "a": "The team decided to keep the monorepo.",
+  "b": "We are staying with the monorepo; there are no plans to split it up.",
+  "label": "consistent"
+ },
+ {
+  "a": "The team decided to keep the monorepo for backend services.",
+  "b": "The mobile team decided to keep its own separate repository for the iOS and Android apps.",
+  "label": "related"
+ },
+ {
+  "a": "Production deploys require two approvals.",
+  "b": "Production deploys need just one approval from a maintainer.",
+  "label": "contradict"
+ },
+ {
+  "a": "Production deploys require two approvals.",
+  "b": "A production deploy can't proceed without approval from at least two reviewers.",
+  "label": "consistent"
+ },
+ {
+  "a": "Production deploys require two approvals.",
+  "b": "Staging deploys require no approval; any engineer can trigger them.",
+  "label": "related"
+ },
+ {
+  "a": "Tom joined the infra team in March 2022.",
+  "b": "Tom started at the company in March 2023 and then joined infra.",
+  "label": "contradict"
+ },
+ {
+  "a": "Tom joined the infra team in March 2022.",
+  "b": "Tom has been on the infra team since March 2022.",
+  "label": "consistent"
+ },
+ {
+  "a": "Tom joined the infra team in March 2022.",
+  "b": "Sana joined the infra team in March 2024.",
+  "label": "related"
+ },
+ {
+  "a": "The staging cluster runs Kubernetes 1.27.",
+  "b": "The staging cluster runs Kubernetes 1.29.",
+  "label": "contradict"
+ },
+ {
+  "a": "The staging cluster runs Kubernetes 1.27.",
+  "b": "Staging is on k8s version 1.27, with three worker nodes.",
+  "label": "consistent"
+ },
+ {
+  "a": "The staging cluster runs Kubernetes 1.27.",
+  "b": "The production cluster runs Kubernetes 1.28.",
+  "label": "related"
+ },
+ {
+  "a": "The feature flag new-checkout is enabled for 100% of users in production.",
+  "b": "The new-checkout flag is off in production for all users.",
+  "label": "contradict"
+ },
+ {
+  "a": "The feature flag new-checkout is enabled for 100% of users in production.",
+  "b": "The new-checkout flag is fully rolled out in prod.",
+  "label": "consistent"
+ },
+ {
+  "a": "The feature flag new-checkout is enabled for 100% of users in production.",
+  "b": "The feature flag new-search-ranking is enabled for 10% of users in production.",
+  "label": "related"
+ },
+ {
+  "a": "Alerts for the auth service page the platform team.",
+  "b": "Auth service alerts go to the security team's pager, not to platform.",
+  "label": "contradict"
+ },
+ {
+  "a": "Alerts for the auth service page the platform team.",
+  "b": "The platform team gets paged whenever the auth service alerts fire.",
+  "label": "consistent"
+ },
+ {
+  "a": "Alerts for the auth service page the platform team.",
+  "b": "Alerts for the billing service page the finance-systems team.",
+  "label": "related"
+ },
+ {
+  "a": "Daily standup is at 9:30 AM Pacific.",
+  "b": "Standup is at 10:00 AM Pacific every day.",
+  "label": "contradict"
+ },
+ {
+  "a": "Daily standup is at 9:30 AM Pacific.",
+  "b": "Daily standup: 9:30 AM PT, on the team's usual Zoom link.",
+  "label": "consistent"
+ },
+ {
+  "a": "Daily standup for the backend team is at 9:30 AM Pacific.",
+  "b": "Daily standup for the data team is at 10:15 AM Pacific.",
+  "label": "related"
+ },
+ {
+  "a": "The release branch is cut from main on the first Monday of each month.",
+  "b": "Release branches are cut on the last Friday of each month.",
+  "label": "contradict"
+ },
+ {
+  "a": "The release branch is cut from main on the first Monday of each month.",
+  "b": "Each month's release branch is cut from main on the first Monday.",
+  "label": "consistent"
+ },
+ {
+  "a": "The web app release branch is cut from main on the first Monday of each month.",
+  "b": "Mobile release branches are cut on the 15th of each month.",
+  "label": "related"
+ },
+ {
+  "a": "Log retention is 30 days.",
+  "b": "Logs are kept for 90 days.",
+  "label": "contradict"
+ },
+ {
+  "a": "Log retention is 30 days.",
+  "b": "Logs older than thirty days are deleted automatically.",
+  "label": "consistent"
+ },
+ {
+  "a": "Log retention in production is 30 days.",
+  "b": "Log retention in staging is 7 days.",
+  "label": "related"
+ },
+ {
+  "a": "Lena is the tech lead for the mobile app.",
+  "b": "The tech lead for the mobile app is Omar.",
+  "label": "contradict"
+ },
+ {
+  "a": "Lena is the tech lead for the mobile app.",
+  "b": "Lena leads the mobile app on the technical side.",
+  "label": "consistent"
+ },
+ {
+  "a": "Lena is the tech lead for the mobile app.",
+  "b": "Lena was the tech lead for the web dashboard until 2021.",
+  "label": "related"
+ },
+ {
+  "a": "We use Terraform for all infrastructure provisioning.",
+  "b": "Infrastructure is provisioned with Pulumi; Terraform has been fully retired.",
+  "label": "contradict"
+ },
+ {
+  "a": "We use Terraform for all infrastructure provisioning.",
+  "b": "Infra provisioning is done via Terraform modules kept in the infra repo.",
+  "label": "consistent"
+ },
+ {
+  "a": "We use Terraform for infrastructure provisioning on AWS.",
+  "b": "We use Ansible for configuring the on-prem servers.",
+  "label": "related"
+ },
+ {
+  "a": "The CI pipeline timeout is 15 minutes.",
+  "b": "CI jobs time out after 45 minutes.",
+  "label": "contradict"
+ },
+ {
+  "a": "The CI pipeline timeout is 15 minutes.",
+  "b": "CI pipelines are killed after 15 minutes.",
+  "label": "consistent"
+ },
+ {
+  "a": "The CI pipeline timeout for the backend is 15 minutes.",
+  "b": "The CI pipeline timeout for the mobile app is 40 minutes.",
+  "label": "related"
+ },
+ {
+  "a": "The weekly on-call handoff happens Monday morning.",
+  "b": "On-call handoff is on Friday afternoon.",
+  "label": "contradict"
+ },
+ {
+  "a": "The weekly on-call handoff happens Monday morning.",
+  "b": "On-call handoff occurs at 9 AM on Mondays.",
+  "label": "consistent"
+ },
+ {
+  "a": "The weekly on-call handoff for the backend team happens Monday morning.",
+  "b": "The weekly on-call handoff for the data team happens Wednesday morning.",
+  "label": "related"
+ },
+ {
+  "a": "Customer data in the EU region is stored in Frankfurt.",
+  "b": "EU customer data lives in Dublin.",
+  "label": "contradict"
+ },
+ {
+  "a": "Customer data in the EU region is stored in Frankfurt.",
+  "b": "EU region customer data is hosted in Frankfurt (eu-central-1).",
+  "label": "consistent"
+ },
+ {
+  "a": "Customer data in the EU region is stored in Frankfurt.",
+  "b": "Customer data in the US region is stored in Virginia.",
+  "label": "related"
+ },
+ {
+  "a": "The team decided not to support IE11 in the web app.",
+  "b": "We decided to continue supporting IE11 through next year.",
+  "label": "contradict"
+ },
+ {
+  "a": "The team decided not to support IE11 in the web app.",
+  "b": "IE11 is not supported; we dropped it from the web app.",
+  "label": "consistent"
+ },
+ {
+  "a": "The team decided not to support IE11 in the web app.",
+  "b": "The team decided not to support Android 8 in the mobile app.",
+  "label": "related"
+ },
+ {
+  "a": "The Redis cache TTL for user sessions is 1 hour.",
+  "b": "Session TTL in Redis is 24 hours.",
+  "label": "contradict"
+ },
+ {
+  "a": "The Redis cache TTL for user sessions is 1 hour.",
+  "b": "User session keys in Redis expire after 60 minutes.",
+  "label": "consistent"
+ },
+ {
+  "a": "The Redis cache TTL for user sessions is 1 hour.",
+  "b": "The Redis cache TTL for product catalog entries is 10 minutes.",
+  "label": "related"
+ },
+ {
+  "a": "Hana is out on leave through the end of June.",
+  "b": "Hana returns from leave on June 3 and is working normally.",
+  "label": "contradict"
+ },
+ {
+  "a": "Hana is out on leave through the end of June.",
+  "b": "Hana will be unavailable until June 30 because of leave.",
+  "label": "consistent"
+ },
+ {
+  "a": "Hana is out on leave through the end of June.",
+  "b": "Hana was on leave for two weeks last November.",
+  "label": "related"
+ },
+ {
+  "a": "The migration to the new billing provider was completed last quarter.",
+  "b": "The billing provider migration hasn't started yet; it is planned for next quarter.",
+  "label": "contradict"
+ },
+ {
+  "a": "The migration to the new billing provider was completed last quarter.",
+  "b": "The billing provider migration finished last quarter, and the legacy provider is being decommissioned.",
+  "label": "consistent"
+ },
+ {
+  "a": "The migration to the new billing provider was completed last quarter.",
+  "b": "The migration of analytics to the new data warehouse is planned for next quarter.",
+  "label": "related"
+ },
+ {
+  "a": "We use ArgoCD for deployments.",
+  "b": "Deployments run through Jenkins pipelines; ArgoCD isn't used.",
+  "label": "contradict"
+ },
+ {
+  "a": "We use ArgoCD for deployments.",
+  "b": "Deployments are driven by ArgoCD.",
+  "label": "consistent"
+ },
+ {
+  "a": "We use ArgoCD for deployments to the production cluster.",
+  "b": "Preview environments are deployed by GitHub Actions.",
+  "label": "related"
+ },
+ {
+  "a": "The on-call engineer must acknowledge pages within 5 minutes.",
+  "b": "Pages must be acknowledged within 15 minutes.",
+  "label": "contradict"
+ },
+ {
+  "a": "The on-call engineer must acknowledge pages within 5 minutes.",
+  "b": "Pages must be acked within five minutes by whoever is on call.",
+  "label": "consistent"
+ },
+ {
+  "a": "Sev1 pages must be acknowledged within 5 minutes.",
+  "b": "Sev3 tickets must be acknowledged within 1 business day.",
+  "label": "related"
+ },
+ {
+  "a": "The design review for the onboarding revamp is Wednesday at 3 PM.",
+  "b": "The onboarding revamp design review is on Thursday at 3 PM.",
+  "label": "contradict"
+ },
+ {
+  "a": "The design review for the onboarding revamp is Wednesday at 3 PM.",
+  "b": "Onboarding revamp design review: Wednesday, 3 PM, in the Cedar room.",
+  "label": "consistent"
+ },
+ {
+  "a": "The design review for the onboarding revamp is Wednesday at 3 PM.",
+  "b": "The design review for the pricing page is Friday at 11 AM.",
+  "label": "related"
+ },
+ {
+  "a": "Our Slack alerts channel for deploy failures is #deploy-alerts, and the release manager is responsible for triaging every failure within one hour.",
+  "b": "Deploy failures are triaged by the on-call developer, not the release manager, and should be handled within four hours.",
+  "label": "contradict"
+ },
+ {
+  "a": "Our Slack alerts channel for deploy failures is #deploy-alerts, and the release manager is responsible for triaging every failure within one hour.",
+  "b": "Failed deploys post to #deploy-alerts, and the release manager has to look at each one within an hour.",
+  "label": "consistent"
+ },
+ {
+  "a": "Our Slack alerts channel for deploy failures is #deploy-alerts, and the release manager is responsible for triaging every failure within one hour.",
+  "b": "Our Slack channel for security findings is #sec-findings, and the security lead triages each finding within one business day.",
+  "label": "related"
+ },
+ {
+  "a": "Ana's working hours are 8 to 4 Eastern.",
+  "b": "Ana works 10 to 6 Eastern.",
+  "label": "contradict"
+ },
+ {
+  "a": "Ana's working hours are 8 to 4 Eastern.",
+  "b": "Ana is online from 8 AM to 4 PM Eastern.",
+  "label": "consistent"
+ },
+ {
+  "a": "Ana's working hours are 8 to 4 Eastern.",
+  "b": "Ben's working hours are 11 to 7 Eastern.",
+  "label": "related"
+ }
+]

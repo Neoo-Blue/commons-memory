@@ -153,6 +153,7 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
             out_items.append(dict(out, confidence=conf, method=f"curator:{model}",
                                   status="keep" if conf >= auto_approve else "review"))
             counts["kept" if conf >= auto_approve else "queued"] += 1
+        out_items = [x for x in out_items if not x.get("_missing")]  # gone from the source since the batch was built
         try:
             res = sink(out_items) if out_items else {}
         except Exception as e:  # noqa: BLE001 - the hub was unreachable: nothing was recorded, a re-run redoes this batch
@@ -182,9 +183,20 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
         if budget is not None:  # trim to what the budget buys at the batch discount
             per = (est["est_cost"] * 0.5) / max(1, len(chunks))
             chunks = chunks[: max(1, int(budget / max(per, 1e-9)))]
-        bid = resume_batch or pl.batch_submit(model, [
-            {"id": f"c{n}", "prompt": prompt_of(c), "system": "ROLE: curator.", "cache_prefix": SYSTEM,
-             "max_tokens": 200 * len(c) + 2000, "effort": "minimal", "schema": SCHEMA} for n, c in enumerate(chunks)])
+        if resume_batch:  # rebuild the chunks the batch was built from: c{n}'s answers index into chunk n as it was then
+            saved = s.q("SELECT value FROM meta WHERE key=?", (f"curate:batch:{resume_batch}",))
+            if not saved:
+                raise CommonsError(f"no chunk map stored for {resume_batch} in this database: resuming would apply the "
+                                   "curator's decisions to the wrong items (run with the same COMMONS_DB it was submitted from)")
+            by_src = {i["src"]: i for i in items if i.get("src")}
+            chunks = [[by_src.get(x) or {"src": x, "_missing": True} for x in c] for c in json.loads(saved[0]["value"])]
+            bid = resume_batch
+        else:
+            bid = pl.batch_submit(model, [
+                {"id": f"c{n}", "prompt": prompt_of(c), "system": "ROLE: curator.", "cache_prefix": SYSTEM,
+                 "max_tokens": 200 * len(c) + 2000, "effort": "minimal", "schema": SCHEMA} for n, c in enumerate(chunks)])
+            s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"curate:batch:{bid}", json.dumps([[i.get("src") for i in c]
+                                                                                              for c in chunks])))
         s.x("INSERT OR REPLACE INTO meta VALUES('curate:last_batch', ?)", (bid,))
         log(f"submitted batch {bid} ({len(chunks)} requests); resume with --resume-batch {bid}")
         while True:

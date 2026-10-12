@@ -143,7 +143,14 @@ class Librarian:
         from .kb import KB
         report["kb_rebuilt"] = KB(self.s).refresh_dirty(force=True)
         report["summaries"] = self._summaries(run_id)
-        report["indexed"] = self.build_index()
+        # the "where to find X" index is a full rewrite (~165k rows at 6k items) under the store lock: hourly is plenty
+        built = self.s.q("SELECT value FROM meta WHERE key='librarian_index_at'")
+        every = float(os.environ.get("COMMONS_LIBRARIAN_INDEX_EVERY", "3600"))
+        if full or not built or now() - float(built[0]["value"]) >= every:
+            report["indexed"] = self.build_index()
+            self.s.x("INSERT OR REPLACE INTO meta VALUES('librarian_index_at', ?)", (str(now()),))
+        else:
+            report["indexed"] = 0
         if items:
             self.s.x("INSERT OR REPLACE INTO meta VALUES('librarian_watermark', ?)", (str(items[-1]["created_at"]),))
         self.s.x("INSERT OR REPLACE INTO meta VALUES('librarian_last_run', ?)", (json.dumps(report | {"ts": now()}),))
