@@ -176,7 +176,9 @@ class SkillPool:
         sk = self._skill(name)
         r = self.s.q("SELECT status FROM skill_versions WHERE skill_id=? AND version=?", (sk["id"], version))
         if not r or r[0]["status"] not in ("active", "superseded"):
-            raise CommonsError("can only roll back to a previously approved version")
+            st = r[0]["status"] if r else "missing"
+            raise CommonsError(f"can only roll back to a previously approved version (v{version} is {st}; "
+                               f"approve it with skill_review first, or see skill_history)")
         self._activate(sk["id"], version)
         self.s.audit(agent_id, "skill.rollback", f"{name}@{version}")
         return {"skill": name, "active_version": version}
@@ -251,7 +253,11 @@ class SkillPool:
         sk = self._skill(name)
         v = version or sk["active_version"]
         if not v:
-            raise CommonsError(f"skill {name} has no approved version yet")
+            pend = self.s.q("SELECT version FROM skill_versions WHERE skill_id=? AND status='pending' ORDER BY version",
+                            (sk["id"],))
+            hint = (f"; pending version(s) {[x['version'] for x in pend]} need approval by another agent: "
+                    f"skill_review(name='{name}', version={pend[0]['version']}, approve=true)") if pend else ""
+            raise CommonsError(f"skill {name} has no approved version yet{hint}")
         r = self.s.q("SELECT * FROM skill_versions WHERE skill_id=? AND version=?", (sk["id"], v))[0]
         if version and r["status"] not in ("active", "superseded") and not include_files:
             raise CommonsError("that version is not approved")

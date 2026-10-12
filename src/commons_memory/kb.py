@@ -232,6 +232,9 @@ class KB:
     def _ensure(self, bucket: str) -> bool:
         st = self.s.q("SELECT * FROM kb_state WHERE bucket=?", (bucket.split("/")[0] if bucket.startswith("misc/") else bucket,))
         never = not self.s.q("SELECT 1 FROM kb_pages WHERE bucket=?", (bucket,))
+        if never and bucket != "misc" and not bucket.startswith("misc/") \
+                and not self.s.q("SELECT 1 FROM projects WHERE name=?", (bucket,)):
+            return False  # unknown bucket: don't materialize an empty KB for an arbitrary (typo'd) name
         if never or (st and st[0]["dirty"] and now() - (st[0]["built_at"] or 0) >= debounce()):
             self.build("misc" if bucket.startswith("misc/") else bucket)
             return False

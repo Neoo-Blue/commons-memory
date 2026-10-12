@@ -10,6 +10,33 @@ from pathlib import Path
 
 from . import __version__
 
+def run_masked(cmd: list[str], env: dict, secret: str, mask: str = "***") -> int:
+    """Run cmd, streaming stdout/stderr with every occurrence of `secret` replaced by `mask`.
+
+    Agents usually capture tool output into their transcript (and from there into memory), so
+    an accidental `echo $TOKEN` must not leak the value. Output is processed line by line."""
+    import threading
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sb = secret.encode()
+
+    def pump(src, dst):
+        for line in iter(src.readline, b""):
+            if len(sb) >= 4:  # masking 1-3 char values would shred ordinary output
+                line = line.replace(sb, mask.encode())
+            dst.write(line)
+            dst.flush()
+        src.close()
+
+    ts = [threading.Thread(target=pump, args=(proc.stdout, sys.stdout.buffer), daemon=True),
+          threading.Thread(target=pump, args=(proc.stderr, sys.stderr.buffer), daemon=True)]
+    for t in ts:
+        t.start()
+    rc = proc.wait()
+    for t in ts:
+        t.join()
+    return rc
+
+
 SNIPPET = {
     "claude_desktop (claude_desktop_config.json)": {"mcpServers": {"commons": {
         "command": "commons", "args": ["serve"], "env": {"COMMONS_AGENT": "claude-desktop", "COMMONS_DB": "{db}"}}}},
@@ -21,6 +48,15 @@ SNIPPET = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .store import CommonsError
+    try:
+        return _main(argv)
+    except CommonsError as e:
+        print(f"commons: error: {e}", file=sys.stderr)
+        return 1
+
+
+def _main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="commons", description="Unified cross-AI memory hub (MCP).")
     p.add_argument("--db", default=None, help="SQLite path or postgresql:// DSN (default $COMMONS_DB or ~/.commons/commons.db)")
     p.add_argument("--version", action="version", version=__version__)
@@ -33,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-auth", action="store_true", help="HTTP: allow writes without api keys (local dev only)")
     s.add_argument("--dashboard", action="store_true", help="also serve the web dashboard (default port 8766)")
     s.add_argument("--dashboard-port", type=int, default=8766)
+    s.add_argument("--dashboard-host", default=None,
+                   help="dashboard bind address (default: same as --host; needs a token when non-loopback)")
     s.add_argument("--tls-cert", help="HTTPS certificate (PEM) for --transport http and the dashboard")
     s.add_argument("--tls-key", help="HTTPS private key (PEM)")
     s.add_argument("--tls-self-signed", action="store_true", help="generate/use a self-signed cert in ~/.commons/tls")
@@ -275,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
     x = sub.add_parser("secret-exec", help="run a command with a leased secret injected as an env var")
     x.add_argument("lease_id")
     x.add_argument("--as", dest="var", required=True)
+    x.add_argument("--no-mask", action="store_true",
+                   help="do not redact the secret value from the command's stdout/stderr")
     x.add_argument("command", nargs="*")
     sub.add_parser("stats")
     args = p.parse_args(argv)
@@ -292,9 +332,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.dashboard:
             from .dashboard import serve_dashboard
             from .store import Store as _S
-            serve_dashboard(_S(args.db), port=args.dashboard_port, background=True, tls_cert=args.tls_cert,
-                            tls_key=args.tls_key)
-            print(f"dashboard: {'https' if args.tls_cert else 'http'}://127.0.0.1:{args.dashboard_port}/", file=sys.stderr)
+            dhost = args.dashboard_host or (args.host if args.transport == "http" and args.host else "127.0.0.1")
+            serve_dashboard(_S(args.db), host=dhost, port=args.dashboard_port, background=True,
+                            tls_cert=args.tls_cert, tls_key=args.tls_key)
+            print(f"dashboard: {'https' if args.tls_cert else 'http'}://{dhost}:{args.dashboard_port}/", file=sys.stderr)
         run(args.transport, args.host, args.port, args.db, req)
         return 0
     if args.cmd == "install-skill":
@@ -354,7 +395,9 @@ def main(argv: list[str] | None = None) -> int:
         if not cmd:
             p.error("command required after --")
         value = Broker(store).resolve(args.lease_id)
-        return subprocess.call(cmd, env={**os.environ, args.var: value})
+        if getattr(args, "no_mask", False):
+            return subprocess.call(cmd, env={**os.environ, args.var: value})
+        return run_masked(cmd, {**os.environ, args.var: value}, value)
     elif args.cmd == "dashboard":
         from .dashboard import self_signed_cert, serve_dashboard
         if args.tls_self_signed and not args.tls_cert:

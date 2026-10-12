@@ -313,7 +313,8 @@ Use `--url http://hub:8765/mcp --api-key …` to work against a remote hub. See 
 ## Dashboard
 
 `commons dashboard` (or `commons serve --dashboard`) → http://127.0.0.1:8766. It binds to localhost only; set `--token`
-or `COMMONS_DASHBOARD_TOKEN` to bind elsewhere. Pages: live agent activity (claims, lease countdowns, last seen,
+or `COMMONS_DASHBOARD_TOKEN` to bind elsewhere. With `serve --transport http --host <ip> --dashboard`, the dashboard follows
+`--host` (since 0.5.1); override with `--dashboard-host`. Pages: live agent activity (claims, lease countdowns, last seen,
 learned scores), sessions and leftovers, orchestration DAGs with debate transcripts and gate verdicts, cost and usage charts by
 agent, project, job, model and day, a memory browser with conflict resolution, editable preferences, an interactive graph,
 secret references, leases and audit log (never values), recurring schedules, and a kill switch. Prometheus metrics are at `/metrics`.
@@ -461,7 +462,8 @@ flowchart LR
    `op://vault/item/field` (1Password CLI) or `infisical://…` (adapter interface). Refs can be limited to named agents and a max TTL.
 3. **Short-lived, agent-bound leases.** `secret_request` returns a lease handle (default 5 min, max 1 h) — never the value.
    The value is resolved only by `commons secret-exec <lease> --as VAR -- <cmd>`, which injects it into a child
-   process environment, so it never enters a model's context. Leases are bound to the requesting agent, expire, and can be revoked
+   process environment, so it never enters a model's context. Since 0.5.1, the value is also masked as `***` in the child's
+   stdout and stderr, so an accidental `echo $VAR` does not leak into a transcript. Use `--no-mask` to opt out. Leases are bound to the requesting agent, expire, and can be revoked
    individually, per agent, or per ref.
 4. **Audit.** Register / lease / resolve / deny / revoke / redaction events go to an append-only audit table (no values).
 5. **Identity & provenance.** Agents get API keys (only SHA-256 hashes are stored). Every record carries `agent_id` and an

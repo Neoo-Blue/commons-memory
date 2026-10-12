@@ -113,7 +113,7 @@ class McpClient:
         from mcp.client.streamable_http import streamablehttp_client
 
         async def go():
-            async with streamablehttp_client(self.url) as (r, w, _):
+            async with streamablehttp_client(self.url, headers={"Authorization": f"Bearer {self.key}"} if self.key else None) as (r, w, _):
                 async with ClientSession(r, w) as s:
                     await s.initialize()
                     res = await s.call_tool(tool, {**args, "api_key": self.key})

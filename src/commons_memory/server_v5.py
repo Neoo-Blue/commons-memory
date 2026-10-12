@@ -30,7 +30,14 @@ def register_v5(mcp, store, who):
             r = store.q("SELECT role FROM project_acl WHERE project_id=? AND agent_id=?", (pid, aid))
             if r and r[0]["role"] == "admin":
                 return aid
-        raise CommonsError("admin rights required (project admin ACL or COMMONS_ADMIN_AGENTS)")
+            # bootstrap: a project with no ACL yet whose records were all written by the caller can be made
+            # private by that owner (otherwise agents could never protect their own projects over HTTP)
+            if aid and not store.q("SELECT 1 FROM project_acl WHERE project_id=?", (pid,)):
+                authors = {x["agent_id"] for x in store.q("SELECT DISTINCT agent_id FROM items WHERE project_id=?", (pid,))}
+                if authors == {aid}:
+                    return aid
+        raise CommonsError("admin rights required: be a project admin (acl_grant role=admin), be listed in "
+                           "COMMONS_ADMIN_AGENTS, or be the sole author of a project that has no ACL yet")
 
     @mcp.tool()
     def acl_grant(project: str, grantee: str, role: str = "read", agent: str = "", api_key: str = "") -> str:

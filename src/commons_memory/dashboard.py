@@ -766,7 +766,7 @@ async Secrets(){const a=await api("audit");return `<div class="card"><h3>Secret 
 <h3>Audit log</h3><table>${a.log.map(l=>`<tr><td class="mut">${E(l.ts)}</td><td>${E(l.action)}</td><td>${E(l.target)}</td><td class="mut">${E(l.detail||"")}</td></tr>`).join("")}</table></div>`},
 async Recurring(){const r=await api("recurring");return `<div class="card"><h3>Recurring schedules</h3><table><tr><th>name</th><th>cron</th><th>next run</th><th>last run</th><th>last job</th><th>task</th></tr>${r.map(x=>`<tr><td>${E(x.name)}</td><td><code>${E(x.cron)}</code></td><td>${E(x.next_run)}</td><td class="mut">${E(x.last_run)}</td><td class="mut">${E(x.last_job||"")}</td><td>${E(x.task.slice(0,120))}</td></tr>`).join("")}</table></div>`}});
 Object.assign(V,{
-async "Org chart"(){const root=window.oc_root||"workspace",mode=window.oc_mode||"chart";window.oc_open=window.oc_open||{};
+async "Org chart"(){const root=window.oc_root||"workspace",mode=window.oc_mode||"chart";window.oc_open=window.oc_open||{};window.oc_sel=window.oc_sel||"";
 if(window.oc_jump){const j=window.oc_jump;window.oc_jump=null;window.oc_center=1;const parts=j.replace(/^\w+\//,"").split(".");let pre=j.includes("/")?j.split("/")[0]+"/":"";for(let i=1;i<parts.length;i++)oc_open[pre+parts.slice(0,i).join(".")]=1;window.oc_sel=j}
 const top=await api("tree_children?ref="+root);
 const kids=async(ref)=>(await api("tree_children?ref="+encodeURIComponent(ref))).children;
