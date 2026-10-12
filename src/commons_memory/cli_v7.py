@@ -221,13 +221,19 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
         ok = True
         if args.agent_cmd:
             log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}")
-            try:
-                r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True, timeout=args.timeout)
-                ok = r.returncode == 0
-                log((r.stdout or r.stderr or "")[-2000:])
-            except (OSError, subprocess.TimeoutExpired) as e:
-                log(f"agent command failed: {e}")
-                ok = False
+            for attempt, pause in enumerate((30, 120, 0)):  # provider blips (a 503) shouldn't park work for the lease
+                try:
+                    r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True,
+                                       timeout=args.timeout)
+                    ok = r.returncode == 0
+                    log((r.stdout or r.stderr or "")[-2000:])
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    log(f"agent command failed: {e}")
+                    ok = False
+                if ok or not pause:
+                    break
+                log(f"attempt {attempt + 1} failed; retrying in {pause}s")
+                time.sleep(pause)
         else:
             print(prompt, flush=True)
         if ok:
