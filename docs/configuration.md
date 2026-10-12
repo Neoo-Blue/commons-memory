@@ -18,6 +18,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_BACKUP_KEEP` | `7` | Number of backups to keep | retention.py |
 | `COMMONS_BACKUP_KEY` | — | Secret ref used to encrypt backups | retention.py |
 | `COMMONS_BG_POLL` | `2` | Background loop tick in seconds | background.py |
+| `COMMONS_CALL_TIMEOUT` | `300` | Seconds a remote CLI/worker call to the hub may take before it fails and is retried by the caller (default 300) | worker.py |
 | `COMMONS_CAPTURE` | `1` | Global switch for hook auto-capture (0 disables everywhere) | capture.py |
 | `COMMONS_CF_ACCESS_AS_AUTH` | — | Treat a valid Cloudflare Access identity as an agent principal (`1`) | auth.py |
 | `COMMONS_CF_ACCESS_AUD` | — | Cloudflare Access application audience tag to verify | expose.py |

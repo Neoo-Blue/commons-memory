@@ -123,7 +123,10 @@ class McpClient:
                     if res.isError:
                         raise RuntimeError(res.content[0].text)
                     return res.content[0].text
-        return asyncio.run(go())
+
+        async def bounded():  # a hub restart mid-call left the SDK waiting forever (no socket, no error)
+            return await asyncio.wait_for(go(), float(os.environ.get("COMMONS_CALL_TIMEOUT", "300")))
+        return asyncio.run(bounded())
 
     def claim(self, lease):
         txt = self._call("claim_subtask", {"lease_seconds": lease})
