@@ -175,7 +175,13 @@ class Store:
         if a:
             self.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), a["id"]))
             return a["id"]
-        return self.register_agent(name, issue_key=False)["id"]
+        try:
+            return self.register_agent(name, issue_key=False)["id"]
+        except Exception as e:  # noqa: BLE001 - another process/thread registered it first (fresh DB race)
+            a = self.get_agent(name)
+            if a and "unique" in str(e).lower():
+                return a["id"]
+            raise
 
     def authenticate(self, api_key: str) -> dict | None:
         r = self.q("SELECT * FROM agents WHERE key_hash=?", (_hash_key(api_key),))

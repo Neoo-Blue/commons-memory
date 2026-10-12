@@ -1,8 +1,9 @@
-.venv
 .git
-.github
+.venv
+**/__pycache__
 dist
 build
-**/__pycache__
-*.db*
+*.db
+*.db-*
 tests
+docs/img

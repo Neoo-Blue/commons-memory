@@ -62,6 +62,15 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | **Single-job-at-a-time feel** | Fair-share multi-project scheduler with priorities, limits, budgets, agent capacity, preemption and cross-project dependencies, plus Mission control | Stress test: 5 projects × 3 jobs, 6 concurrent agents, no duplicate claims |
 | **Inconsistent tool arguments** (Muse critique) | Shared alias layer + friendly errors on every tool; project-name validation (rejects names like `commons-live?`) | `test_friendly_tool_args_and_project_names` |
 
+## New in v0.7.2: Docker image and tokenless private dashboard
+
+| Area | What changed | Tested by |
+|---|---|---|
+| **Container** | Multi-stage non-root image with tini, a healthcheck, the `/data` volume, docker-secrets `*_FILE` loading and a Postgres wait. Compose profiles cover postgres/pgvector, tailscale, cloudflared and ngrok. Multi-arch amd64/arm64 | Built and run with rootless Podman: 401 without a key, agent registration, MCP tool call, dashboard 200, persistence across container recreation, the compose postgres profile. `tests/test_v072_docker.py` |
+| **Fresh-DB race** | Two threads registering the same built-in agent (`librarian`) at first start crashed the server | Test: 8 concurrent `ensure_agent` calls |
+| **Dashboard on private networks** | No token needed on loopback/LAN/tailnet binds. Wildcard and public binds still need one. `COMMONS_DASHBOARD_REQUIRE_TOKEN=1` forces it | Tests |
+| **Private-network trust** | Anyone who can reach a private-address dashboard can use it (admin actions included) when no token is set | That is the requested trade-off. Set `COMMONS_DASHBOARD_REQUIRE_TOKEN=1` on shared LANs or tailnets. Agent keys still protect MCP. |
+
 ## Part 2: Still open, and why
 
 | Risk / gap | Status in v0.5 | Why it is still open |

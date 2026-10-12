@@ -6,6 +6,7 @@ Secrets: only references, leases and audit events are ever shown — never value
 """
 from __future__ import annotations
 
+import ipaddress
 import hashlib
 import hmac
 import json
@@ -579,11 +580,30 @@ def self_signed_cert(dir_: str | None = None, host: str = "localhost") -> tuple[
     return str(cert), str(key)
 
 
+def _private_host(host: str) -> bool:
+    """True for loopback, RFC1918/ULA LAN, link-local and Tailscale CGNAT (100.64.0.0/10) addresses.
+    Wildcard binds (0.0.0.0/::) and public IPs/hostnames are not private."""
+    if host in ("localhost",):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.is_unspecified:
+        return False
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return True
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
 def make_server(store: Store, host: str = "127.0.0.1", port: int = 8766, token: str | None = None,
                 tls_cert: str | None = None, tls_key: str | None = None) -> ThreadingHTTPServer:
     token = token or os.environ.get("COMMONS_DASHBOARD_TOKEN") or None
-    if host not in ("127.0.0.1", "localhost", "::1") and not token and not dashboard_users(store):
-        raise CommonsError("refusing to bind dashboard to a non-loopback host without a token")
+    if not token and not dashboard_users(store) and not _private_host(host):
+        raise CommonsError("refusing to bind dashboard to a public/wildcard host without a token "
+                           "(private, LAN and tailnet addresses are allowed; set a token to expose publicly)")
+    if os.environ.get("COMMONS_DASHBOARD_REQUIRE_TOKEN") in ("1", "true", "yes") and not token and not dashboard_users(store):
+        raise CommonsError("COMMONS_DASHBOARD_REQUIRE_TOKEN is set but no dashboard token/users are configured")
     srv = ThreadingHTTPServer((host, port), make_handler(API(store), token))
     srv.daemon_threads = True
     srv.tls = False

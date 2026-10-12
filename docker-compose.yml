@@ -1,42 +1,105 @@
-# docker compose up -d                      -> Commons on SQLite, localhost only
-# docker compose --profile postgres up -d   -> Commons on Postgres + pgvector
-# docker compose --profile tunnel up -d     -> + Cloudflare named tunnel (set TUNNEL_TOKEN in .env)
+# Commons in Docker. Copy .env.example to .env first.
+#   docker compose up -d                                   SQLite in the commons-data volume (localhost ports)
+#   docker compose --profile postgres up -d                + Postgres 16 with pgvector (set COMMONS_DB, see .env.example)
+#   docker compose --profile tailscale up -d               + Tailscale sidecar: https://commons.<tailnet>.ts.net
+#   docker compose --profile cloudflared up -d             + Cloudflare named tunnel
+#   docker compose --profile ngrok up -d                   + ngrok tunnel
+# Secrets: put values in ./secrets/<name> files (docker secrets) or reference them (env://, vault://, op://); never in YAML.
+
+x-commons-env: &commons-env
+  COMMONS_REQUIRE_KEYS: "1"
+  COMMONS_DB: ${COMMONS_DB:-/data/commons.db}
+  COMMONS_DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
+  COMMONS_PUBLIC_URL: ${COMMONS_PUBLIC_URL:-}
+  COMMONS_WEBHOOK_ALLOWLIST: ${COMMONS_WEBHOOK_ALLOWLIST:-}
+  COMMONS_BACKGROUND: ${COMMONS_BACKGROUND:-1}
+  COMMONS_DRIVE_BACKEND: ${COMMONS_DRIVE_BACKEND:-local}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
 services:
   commons:
-    build: .
-    image: ghcr.io/neoo-blue/commons-memory:latest
+    image: ghcr.io/neoo-blue/commons-memory:${COMMONS_VERSION:-latest}
+    build:
+      context: .
+      args:
+        VERSION: ${COMMONS_VERSION:-dev}
     restart: unless-stopped
+    init: false            # tini is the image entrypoint
     ports:
-      - "127.0.0.1:8765:8765"   # MCP (streamable HTTP) + A2A
-      - "127.0.0.1:8766:8766"   # dashboard
+      - "${COMMONS_BIND:-127.0.0.1}:8765:8765"   # MCP + A2A + /bus + /agent
+      - "${COMMONS_BIND:-127.0.0.1}:8766:8766"   # dashboard
     environment:
-      COMMONS_REQUIRE_KEYS: "1"
-      COMMONS_DASHBOARD_TOKEN: ${COMMONS_DASHBOARD_TOKEN:?set COMMONS_DASHBOARD_TOKEN in .env}
-      COMMONS_DB: ${COMMONS_DB:-/data/commons.db}
+      <<: *commons-env
+    secrets:
+      - dashboard_token
     volumes:
       - commons-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
 
   postgres:
     profiles: ["postgres"]
-    image: pgvector/pgvector:pg16
+    image: docker.io/pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: commons
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: commons
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - pg-data:/var/lib/postgresql/data
-    # then set COMMONS_DB=postgresql://commons:${POSTGRES_PASSWORD}@postgres/commons for the commons service
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commons -d commons"]
+      interval: 10s
+      retries: 5
+    # COMMONS_DB=postgresql://commons:<password>@postgres/commons in .env (password must match secrets/postgres_password)
+
+  tailscale:
+    profiles: ["tailscale"]
+    image: docker.io/tailscale/tailscale:latest
+    hostname: ${TS_HOSTNAME:-commons}
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}            # or TS_AUTHKEY_FILE via a secret; use an ephemeral, tagged key
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./docker/tailscale-serve.json:/config/serve.json:ro
+    # serves https://<TS_HOSTNAME>.<tailnet>.ts.net -> commons:8765 and :8766 (tailnet only; enable Funnel yourself if you must)
 
   cloudflared:
-    profiles: ["tunnel"]
-    image: cloudflare/cloudflared:latest
+    profiles: ["cloudflared"]
+    image: docker.io/cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
-    # in the Cloudflare dashboard, route your hostname to http://commons:8765 (and protect it with Access)
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # Cloudflare dashboard: route your hostname to http://commons:8765 and protect it with Access (Commons validates Cf-Access JWTs)
+
+  ngrok:
+    profiles: ["ngrok"]
+    image: docker.io/ngrok/ngrok:latest
+    restart: unless-stopped
+    command: http commons:8765 ${NGROK_FLAGS:-}
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    ports:
+      - "127.0.0.1:4040:4040"   # ngrok inspector (shows the public URL)
+
+secrets:
+  dashboard_token:
+    file: ./secrets/dashboard_token
+  postgres_password:
+    file: ./secrets/postgres_password
 
 volumes:
   commons-data:
   pg-data:
+  ts-state:
