@@ -71,6 +71,20 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | **Dashboard on private networks** | No token needed on loopback/LAN/tailnet binds. Wildcard and public binds still need one. `COMMONS_DASHBOARD_REQUIRE_TOKEN=1` forces it | Tests |
 | **Private-network trust** | Anyone who can reach a private-address dashboard can use it (admin actions included) when no token is set | That is the requested trade-off. Set `COMMONS_DASHBOARD_REQUIRE_TOKEN=1` on shared LANs or tailnets. Agent keys still protect MCP. |
 
+## New in v0.8.0: retrieval quality and capture
+- Fixed: the default embedder was a lexical hash. It is now fastembed when installed, or an OpenAI-compatible
+  endpoint. Hash is kept as the fallback.
+- Fixed: ranking ignored entities and time. It now has entity, time-proximity and recency signals, and
+  `explain` shows their contribution.
+- Fixed: there were no published benchmarks. Retrieval benchmarks are now reproducible, with per-question results.
+- Fixed: agents had to call memory tools manually. Lifecycle hooks and the observation pipeline now capture
+  automatically.
+- Open: end-to-end QA accuracy (answering with a reader LLM) isn't benchmarked yet. It needs an LLM budget.
+- Open: on LoCoMo, the recency signal lowers R@1. Default weights are untuned.
+- Verified only against the documentation: the Codex, Gemini and Cursor hook formats. The installers write the
+  documented schemas, but those CLIs are not installed on the build box. Claude Code's format matches its
+  documented schema.
+
 ## Part 2: Still open, and why
 
 | Risk / gap | Status in v0.5 | Why it is still open |

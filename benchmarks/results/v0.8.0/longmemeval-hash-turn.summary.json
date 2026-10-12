@@ -1,0 +1,103 @@
+{
+  "benchmark": "longmemeval",
+  "dataset": "longmemeval_s_cleaned.json",
+  "granularity": "turn",
+  "embedder": "hash",
+  "rerank": false,
+  "embedder_resolved": "hash",
+  "n": 470,
+  "seconds": 92.2,
+  "metrics": {
+    "any@1": 0.766,
+    "all@1": 0.2489,
+    "any@3": 0.8766,
+    "all@3": 0.6404,
+    "any@5": 0.9362,
+    "all@5": 0.7766,
+    "any@10": 0.9787,
+    "all@10": 0.8915,
+    "any@20": 0.9957,
+    "all@20": 0.9574
+  },
+  "by_type": {
+    "knowledge-update": {
+      "n": 72,
+      "any@1": 0.9306,
+      "all@1": 0,
+      "any@3": 0.9722,
+      "all@3": 0.8472,
+      "any@5": 1,
+      "all@5": 0.9306,
+      "any@10": 1,
+      "all@10": 0.9861,
+      "any@20": 1,
+      "all@20": 0.9861
+    },
+    "multi-session": {
+      "n": 121,
+      "any@1": 0.7851,
+      "all@1": 0,
+      "any@3": 0.9339,
+      "all@3": 0.405,
+      "any@5": 0.9669,
+      "all@5": 0.6033,
+      "any@10": 0.9917,
+      "all@10": 0.7851,
+      "any@20": 1,
+      "all@20": 0.9174
+    },
+    "single-session-assistant": {
+      "n": 56,
+      "any@1": 0.7321,
+      "all@1": 0.7321,
+      "any@3": 0.7857,
+      "all@3": 0.7857,
+      "any@5": 0.8929,
+      "all@5": 0.8929,
+      "any@10": 0.9821,
+      "all@10": 0.9821,
+      "any@20": 1,
+      "all@20": 1
+    },
+    "single-session-preference": {
+      "n": 30,
+      "any@1": 0.3,
+      "all@1": 0.3,
+      "any@3": 0.5,
+      "all@3": 0.5,
+      "any@5": 0.7,
+      "all@5": 0.7,
+      "any@10": 0.8,
+      "all@10": 0.8,
+      "any@20": 0.9333,
+      "all@20": 0.9333
+    },
+    "single-session-user": {
+      "n": 64,
+      "any@1": 0.8281,
+      "all@1": 0.8281,
+      "any@3": 0.9219,
+      "all@3": 0.9219,
+      "any@5": 0.9688,
+      "all@5": 0.9688,
+      "any@10": 1,
+      "all@10": 1,
+      "any@20": 1,
+      "all@20": 1
+    },
+    "temporal-reasoning": {
+      "n": 127,
+      "any@1": 0.748,
+      "all@1": 0.1102,
+      "any@3": 0.874,
+      "all@3": 0.5748,
+      "any@5": 0.9291,
+      "all@5": 0.7244,
+      "any@10": 0.9843,
+      "all@10": 0.8661,
+      "any@20": 1,
+      "all@20": 0.9449
+    }
+  },
+  "commons_version": "0.7.2"
+}

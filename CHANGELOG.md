@@ -2,6 +2,32 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.8.0: retrieval quality and proof, plus zero-effort capture
+- **Better default embedder.** `COMMONS_EMBEDDER=auto` uses fastembed (bge-small, with query instructions) when it
+  is installed. Installers and the Docker image now include it, and the image bakes the model in. Otherwise it uses
+  any OpenAI-compatible `/v1/embeddings` endpoint (`COMMONS_EMBED_URL`), falling back to hash. There is a
+  `commons reindex` command and a background reindex job. Vectors are stored per model.
+- **Ranking signals.** Weighted RRF plus entity boost (graph entities named in the query), time proximity ("last
+  week", "in May", dates), recency decay and trust. `search(as_of=, explain=)` and the `Store.rank` API.
+- **Optional rerank.** A local cross-encoder (fastembed) or an LLM (role `reranker`), budget-capped.
+- **Benchmarks.** `commons bench longmemeval|locomo`, with per-question results committed. LongMemEval-S any@5 is
+  97.7%; LoCoMo turn R@10 is 71.1% (75.1% with rerank) and session R@10 is 95.8%. See
+  [benchmarks/README.md](benchmarks/README.md).
+- **Lifecycle hooks.** `commons hooks install claude-code|codex|gemini|cursor`. Hooks inject context at session
+  start, recall at prompt time, record tool observations and summarise at stop, session end and pre-compact. They
+  never block, and they queue events while offline. See [docs/hooks.md](docs/hooks.md).
+- **Observation pipeline.** Typed observations (decision, bugfix, discovery, security_alert, todo, change, summary)
+  fan out to decisions, leftovers and notifications. Uses an LLM `observer` role or heuristics. `<private>` text is
+  excluded, and capture can be switched off per project. New MCP tools: `observe`, `capture_settings`, `memory_stream`.
+- **Three-step search.** `search_index`, then `timeline_around`, then `get_items`.
+- **Also in this release:**
+  - Temporal facts with validity windows (`fact_set`, `fact_get(as_of)`, `fact_history`, `fact_invalidate`).
+  - `commons sweep`, a verbatim per-message store.
+  - Scoped spaces (project, topic, person) and `memory_audit`.
+  - Interactive HTML diagrams of the code graph and job plans, inspired by Archify.
+
+  See [docs/knowledge.md](docs/knowledge.md).
+
 ## v0.7.1 — README consolidation, one-line installers, universal prompt
 - README rewritten around a 2-minute quickstart. Version history moved here, and deep docs moved to `docs/`.
 - `install.sh` (`curl -fsSL … | sh`) and `install.ps1` (`irm … | iex`) one-line installers. They detect uv, then pipx, then Python, install from the GitHub release, and run `commons init`.

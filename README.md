@@ -31,7 +31,7 @@ Connect a second AI the same way and it can see the first one's memory immediate
 ## Feature tour
 | Area | What you get | Learn more |
 |---|---|---|
-| **Memory & knowledge** | Hybrid search (BM25 + vectors) with token budgets · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
+| **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · auto-capture hooks for Claude Code/Codex/Gemini/Cursor with typed observations ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
 | **Continuity** | Sessions, checkpoints, handoffs that resume in another AI · layered context packs (L0 gist → L3 full) so the next AI doesn't re-pay tokens · decisions with rationale and `why()` · leftovers and recurring jobs | [docs/guide.md](docs/guide.md) |
 | **Teamwork** | Submit a task and get a DAG: plan → parallel parts → cross-review (author ≠ reviewer) → debate/consensus → merge. Quality gates, budgets, leases with automatic reassignment, an escalation ladder, routing to the right agent + model + effort, multi-project scheduling, task breakdown view | [docs/guide.md](docs/guide.md), [docs/multitasking.md](docs/multitasking.md) |
 | **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS, `commons agent daemon`) | [docs/messaging.md](docs/messaging.md) |
@@ -163,6 +163,19 @@ Everything works with defaults. These are the settings people usually change:
 - **What does it cost?** Commons itself makes no LLM calls unless you configure a planner, summarizer or providers. Usage reported by agents shows up on the dashboard.
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
+
+## Benchmarks (retrieval, v0.8.0)
+Measured on CPU with no LLM in the loop. Full tables, caveats and per-question results are in
+[benchmarks/README.md](benchmarks/README.md).
+
+| Benchmark | Metric | Commons (default: fastembed bge-small) |
+|---|---|---|
+| LongMemEval-S, 470 questions | session recall_any@5 | **97.7%** (any@10 99.6%) |
+| LoCoMo, 1,982 questions | evidence-turn R@10 | 71.1%, or **75.1%** with `--rerank` |
+| LoCoMo | evidence-session R@10 | **95.8%** |
+
+These are retrieval recall numbers, not QA accuracy, and metric definitions differ between projects. Read the
+caveats before comparing them with others' claims.
 
 ## Comparison
 | Project | Great at | Commons' angle |

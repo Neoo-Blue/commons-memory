@@ -52,3 +52,121 @@ def register_v8(mcp, store, who):
     def memory_stream(project: str = "", limit: int = 30) -> str:
         """Latest captured observations (prompts, tool calls, typed observations) across agents."""
         return _js(cap.stream(project or None, limit=limit))
+    # ---- progressive disclosure: search_index -> timeline_around -> get_items
+    @mcp.tool()
+    def search_index(query: str, project: str = "", kinds: list[str] | None = None, since: str = "", until: str = "",
+                     as_of: str = "", limit: int = 20, rerank: bool = False) -> str:
+        """STEP 1 of 3 (cheapest). Ranked ids with a ~12-word gist each (≈15 tokens/hit). Pick promising ids, then
+        STEP 2 timeline_around(id) for what happened around one, STEP 3 get_items(ids) for full content.
+        as_of: reference time for 'last week'/'in May' style queries (default now)."""
+        ids, total, why = store.rank(query, project=project or None, kinds=kinds, since=since or None,
+                                     until=until or None, limit=max(limit, 30) if rerank else limit, as_of=as_of or None)
+        if rerank:
+            from .rerank import rerank_ids
+            ids = rerank_ids(store, query, ids, how="cross-encoder")[:limit]
+        rows = {}
+        for i in range(0, len(ids), 500):
+            ch = ids[i:i + 500]
+            for r in store.q(f"SELECT id, kind, summary, created_at FROM items WHERE id IN ({','.join('?' * len(ch))})", ch):
+                rows[r["id"]] = r
+        from .store import iso
+        lines = [f"{i} {rows[i]['kind'][:4]} {iso(rows[i]['created_at'])[:10]} {' '.join((rows[i]['summary'] or '').split()[:12])}"
+                 for i in ids if i in rows]
+        return "\n".join(lines) + f"\n({len(lines)} of {total}; next: timeline_around(id) / get_items([ids]))"
+
+    @mcp.tool()
+    def timeline_around(anchor: str, before: int = 5, after: int = 5, same_project: bool = True) -> str:
+        """STEP 2 of 3. Items immediately before/after an anchor item (same project by default): the context of a hit."""
+        a = store.q("SELECT id, project_id, created_at FROM items WHERE id=?", (anchor,))
+        if not a:
+            raise CommonsError(f"no item {anchor}")
+        a = a[0]
+        cond, args = ("AND project_id IS ?" if a["project_id"] is None else "AND project_id=?", [a["project_id"]]) if same_project else ("", [])
+        prev = store.q(f"SELECT id, kind, summary, created_at FROM items WHERE created_at<? {cond} AND superseded_by IS NULL "
+                       f"ORDER BY created_at DESC LIMIT ?", [a["created_at"]] + args + [before])
+        nxt = store.q(f"SELECT id, kind, summary, created_at FROM items WHERE created_at>? {cond} AND superseded_by IS NULL "
+                      f"ORDER BY created_at LIMIT ?", [a["created_at"]] + args + [after])
+        me_ = store.q("SELECT id, kind, summary, created_at FROM items WHERE id=?", (anchor,))
+        from .store import iso
+        rows = list(reversed(prev)) + me_ + nxt
+        return "\n".join(f"{'>' if r['id'] == anchor else ' '} {r['id']} {iso(r['created_at'])[:16]} [{r['kind']}] "
+                         f"{(r['summary'] or '')[:140]}" for r in rows)
+
+    @mcp.tool()
+    def get_items(ids: list[str], max_tokens: int = 3000) -> str:
+        """STEP 3 of 3. Full content for several ids at once (token-budgeted, in the order given)."""
+        from .store import estimate_tokens
+        out, used = [], 0
+        for i in ids[:50]:
+            try:
+                d = store.expand(i, max_tokens=max(200, max_tokens - used))
+            except Exception as e:  # noqa: BLE001
+                d = {"id": i, "error": str(e)}
+            t = estimate_tokens(_js(d))
+            if used + t > max_tokens and out:
+                out.append({"id": i, "truncated": "budget exhausted; request fewer ids"})
+                break
+            used += t
+            out.append(d)
+        return _js(out)
+
+    # ---- temporal facts
+    from .facts import Facts
+    facts = Facts(store)
+
+    @mcp.tool()
+    def fact_set(subject: str, predicate: str, value: str, valid_from: str = "", project: str = "",
+                 agent: str = "", api_key: str = "") -> str:
+        """Assert subject.predicate = value from valid_from (default now). The previous value is closed at exactly
+        that instant (valid_to), never deleted, so fact_get(as_of=...) answers 'what was true then'."""
+        return _js(facts.set(subject, predicate, value, valid_from=valid_from or None, project=project or None,
+                             agent_id=me(agent, api_key)))
+
+    @mcp.tool()
+    def fact_invalidate(subject: str, predicate: str, at: str = "", agent: str = "", api_key: str = "") -> str:
+        """End the current value of subject.predicate at `at` (default now) without replacing it."""
+        me(agent, api_key)
+        return _js(facts.invalidate(subject, predicate, at=at or None))
+
+    @mcp.tool()
+    def fact_get(subject: str, predicate: str = "", as_of: str = "") -> str:
+        """Facts about subject valid at as_of (default now). Omit predicate for all of them."""
+        return _js(facts.get(subject, predicate or None, as_of=as_of or None))
+
+    @mcp.tool()
+    def fact_history(subject: str, predicate: str = "") -> str:
+        """Full validity timeline of a subject's facts (valid_from -> valid_to)."""
+        return _js(facts.history(subject, predicate or None))
+
+    # ---- scoped spaces
+    from .spaces import Spaces, audit
+    sp = Spaces(store)
+
+    @mcp.tool()
+    def spaces(scope_type: str = "") -> str:
+        """List memory spaces: projects, KB topics and people (scope_type: project|topic|person)."""
+        return _js(sp.list(scope_type or None))
+
+    @mcp.tool()
+    def space_search(scope: str, query: str, limit: int = 10, max_tokens: int = 600) -> str:
+        """Search inside one space: 'project:NAME', 'topic:NAME' or 'person:NAME' (items linked to that person)."""
+        return sp.search(scope, query, limit=limit, max_tokens=max_tokens)["text"]
+
+    @mcp.tool()
+    def memory_audit(project: str = "") -> str:
+        """Organisation score of the memory (orphans, untagged, duplicates, stale leftovers, conflicts) with fixes."""
+        return _js(audit(store, project or None))
+
+    @mcp.tool()
+    def diagram(kind: str, target: str = "") -> str:
+        """Write an interactive HTML diagram to Commons Drive: kind=code (target=project) or job (target=job id).
+        Returns the Drive path."""
+        from .diagrams import code_diagram, job_diagram
+        html = code_diagram(store, target or None) if kind == "code" else job_diagram(store, target)
+        from .drive import Drive
+        path = f"/{target or 'shared'}/diagrams/{kind}-{(target or 'all').replace('/', '_')}.html".replace("//", "/")
+        try:
+            Drive(store).write(path, html.encode(), agent_id=None, project=None, mime="text/html")
+        except Exception as e:  # noqa: BLE001
+            return _js({"error": str(e), "bytes": len(html)})
+        return _js({"path": path, "bytes": len(html)})
