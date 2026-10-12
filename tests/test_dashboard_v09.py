@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 
 from commons_memory.dashboard import PAGE, make_server
-from tests.conftest import make_store
+from conftest import make_store
 
 
 def _get(base, path):
