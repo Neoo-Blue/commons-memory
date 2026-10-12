@@ -33,7 +33,8 @@ def cross_encoder():
     name = os.environ.get("COMMONS_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")
     if name not in _CE:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
-        _CE[name] = TextCrossEncoder(model_name=name)
+        th = os.environ.get("COMMONS_EMBED_THREADS")
+        _CE[name] = TextCrossEncoder(model_name=name, **({"threads": int(th)} if th else {}))
     return _CE[name]
 
 

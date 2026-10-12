@@ -165,6 +165,8 @@ def locomo(path: str, out: str, embedder: str = "auto", limit: int | None = None
 # ---------------------------------------------------------------------------------------------- common
 def _run(name, fn, jobs, out, workers, cfg, group_key, flat=False):
     os.makedirs(out, exist_ok=True)
+    # each worker's ONNX session defaults to every core; N workers x all cores thrashes (load ~40 on 8 cores)
+    os.environ.setdefault("COMMONS_EMBED_THREADS", str(max(1, (os.cpu_count() or 2) // max(1, workers))))
     t0 = time.time()
     rows = []
     with ProcessPoolExecutor(max_workers=workers) as ex:

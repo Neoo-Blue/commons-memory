@@ -5,11 +5,22 @@ import json
 import os
 import sys
 
-NOSTORE = {"hook", "hooks", "bench"}
+NOSTORE = {"hook", "hooks", "bench", "import"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
+    x = sub.add_parser("import", help="import memories from claude-mem, mem0, Claude Code memory files or sesame "
+                                      "(idempotent; locally or into a remote hub with --url)")
+    x.add_argument("source", choices=["claude-mem", "mem0", "claude-memory", "sesame", "all"])
+    x.add_argument("--path", help="claude-mem db / memory root / sesame registry (defaults: the usual locations)")
+    x.add_argument("--mem0-url", help="mem0 server (default $MEM0_SELFHOSTED_URL)")
+    x.add_argument("--user-id", help="mem0 user_id filter")
+    x.add_argument("--prompts", action="store_true", help="claude-mem: also import raw user prompts (noisy; off by default)")
+    x.add_argument("--url", help="remote Commons MCP url (http://host:8770/mcp); default: the local database")
+    x.add_argument("--api-key-file", help="key for --url (default ~/.commons/agents/<COMMONS_AGENT>.key or $COMMONS_API_KEY)")
+    x.add_argument("--batch", type=int, default=300)
+    x.add_argument("--dry-run", action="store_true", help="count and show a sample, write nothing")
     x = sub.add_parser("hook", help="(called by agent harness hooks) handle one lifecycle event from stdin; never blocks")
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "generic"])
     x.add_argument("event")
@@ -64,8 +75,46 @@ def add_parsers(sub) -> None:
     sub.add_parser("audit", help="memory organisation audit (librarian score)").add_argument("--project")
 
 
+def _import(args) -> int:
+    from . import importers as I
+    srcs = list(I.SOURCES) if args.source == "all" else [args.source]
+    total = {}
+    for src in srcs:
+        kw = {"claude-mem": {"path": args.path, "prompts": args.prompts}, "mem0": {"url": args.mem0_url, "user_id": args.user_id},
+              "claude-memory": {"root": args.path}, "sesame": {"path": args.path}}[src]
+        try:
+            items = I.collect(src, **kw)
+        except Exception as e:  # noqa: BLE001 - one missing source must not stop `all`
+            print(f"{src}: skipped ({e})", file=sys.stderr)
+            continue
+        if args.dry_run:
+            print(f"{src}: {len(items)} items, e.g. {json.dumps(items[0], default=str)[:300] if items else '-'}")
+            continue
+        res = {"added": 0, "skipped": 0, "preferences": 0, "embedded": 0, "error_count": 0}
+        if args.url:
+            from .worker import McpClient
+            key = os.environ.get("COMMONS_API_KEY") or ""
+            kf = args.api_key_file
+            if kf and os.path.exists(os.path.expanduser(kf)):
+                key = open(os.path.expanduser(kf)).read().strip()
+            cli = McpClient(args.url, key)
+            for i in range(0, len(items), args.batch):
+                r = json.loads(cli._call("import_items", {"items": items[i:i + args.batch]}))
+                for k in res:
+                    res[k] += r.get(k, 0)
+                print(f"{src}: {min(i + args.batch, len(items))}/{len(items)} sent", file=sys.stderr, flush=True)
+        else:
+            from .store import Store
+            res = I.import_items(Store(args.db), items)
+        total[src] = res
+        print(f"{src}: {json.dumps(res)}", flush=True)
+    return 0
+
+
 def handle_nostore(args) -> int:
     c = args.cmd
+    if c == "import":
+        return _import(args)
     if c == "hook":
         from .capture import run_hook
         try:
