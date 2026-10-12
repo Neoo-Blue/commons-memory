@@ -704,8 +704,9 @@ class Store:
 
 
 
-    def reindex(self, limit: int | None = None, batch: int = 64, force: bool = False) -> dict:
-        """(Re)compute vectors for items that have none for the active embedder (after switching models)."""
+    def reindex(self, limit: int | None = None, batch: int = 8, force: bool = False) -> dict:
+        """(Re)compute vectors for items that have none for the active embedder (after switching models). Small batches:
+        ONNX keeps its peak activation arena, and 64 long notes at once held ~340 MB more than 8 at the same speed."""
         if not self.embedder:
             return {"embedder": "none", "done": 0, "remaining": 0}
         if not self._reindexing.acquire(blocking=False):  # another thread is embedding these same rows right now
