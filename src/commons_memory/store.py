@@ -412,11 +412,11 @@ class Store:
                tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,
                until: str | None = None, entity: str | None = None, limit: int = 20,
                max_tokens: int = 800, include_superseded: bool = False, as_of: str | float | None = None,
-               explain: bool = False, rerank: bool | str | None = None) -> dict:
+               explain: bool = False, rerank: bool | str | None = None, conflict: bool | None = None) -> dict:
         ranked, total, why = self.rank(query, mode=mode, project=project, agent=agent, tags=tags, kinds=kinds,
                                        since=since, until=until, entity=entity,
                                        limit=max(limit, int(os.environ.get("COMMONS_RERANK_TOP", "30"))) if rerank else limit,
-                                       include_superseded=include_superseded, as_of=as_of)
+                                       include_superseded=include_superseded, as_of=as_of, conflict=conflict)
         if ranked is None:
             return why
         from .rerank import mode as rr_mode
@@ -433,10 +433,12 @@ class Store:
     def rank(self, query: str = "", *, mode: str = "hybrid", project: str | None = None, agent: str | None = None,
              tags: list[str] | None = None, kinds: list[str] | None = None, since: str | None = None,
              until: str | None = None, entity: str | None = None, limit: int = 20,
-             include_superseded: bool = False, as_of: str | float | None = None):
+             include_superseded: bool = False, as_of: str | float | None = None, conflict: bool | None = None):
         """Ranked item ids (no token budget) -> (ids, total_candidates, per-id signal breakdown)."""
         from . import ranking as R
         where, args = ["1=1"], []
+        if conflict:
+            where.append("COALESCE(i.conflict,0)=1")
         if project:
             pid = self.q("SELECT id FROM projects WHERE name=? OR id=?", (project, project))
             if not pid:
