@@ -1,6 +1,6 @@
 # MCP tools reference
 
-Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `msg_ack`, `msg_history`, `presence`, `wake_channels`), routing, Drive and breakdown tools; `commons serve` lists them all via MCP `tools/list`.
+Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `msg_ack`, `msg_history`, `presence`, `wake_channels`), routing, Drive and breakdown tools; v0.8 adds capture, three-step search, temporal facts, spaces and diagrams (CLI: `commons fact`, `commons sweep`, `commons space`, `commons audit`, `commons diagram`); `commons serve` lists them all via MCP `tools/list`.
 
 ## Tools
 
@@ -18,6 +18,11 @@ Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `m
 | Continuity | `pickup`, `add_leftover`, `resolve_leftover`, `list_leftovers`, `schedule_recurring`, `run_recurring`, `list_recurring` |
 | Preferences | `observe_preference`, `extract_preferences`, `get_preferences`, `confirm_preference`, `forget_preference` |
 | Usage | `report_usage`, `usage_summary` |
+| Capture (v0.8) | `observe`, `capture_settings`, `memory_stream` (`<private>…</private>` text is stripped before storage) |
+| 3-step search (v0.8) | `search_index` → `timeline_around` → `get_items` (compact index first, full content only on request) |
+| Temporal facts (v0.8) | `fact_set`, `fact_invalidate`, `fact_get` (`as_of=`), `fact_history` (valid_from / valid_to) |
+| Spaces (v0.8) | `spaces`, `space_search`, `memory_audit` |
+| Diagrams (v0.8) | `diagram` (kind=`code` or `job`; interactive HTML written to Drive) |
 | Knowledge base | `kb_get`, `kb_search`, `kb_list`, `kb_refresh` |
 | Graph views | `graph_view`, `graph_rebuild` |
 | Skill pool | `skill_list`, `skill_search`, `skill_get`, `skill_publish`, `skill_update`, `skill_review`, `skill_history`, `skill_rollback`, `skill_rate`, `skill_fork`, `skill_catalog`, `skill_catalog_add` |

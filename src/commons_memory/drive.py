@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,7 +68,7 @@ class LocalBlobs:
         p = self._p(sha)
         if not p.exists():
             p.parent.mkdir(exist_ok=True)
-            tmp = p.with_suffix(".tmp")
+            tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_bytes(data)
             os.replace(tmp, p)
 
