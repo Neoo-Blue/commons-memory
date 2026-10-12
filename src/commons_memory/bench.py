@@ -356,7 +356,7 @@ def _day(ts) -> str:  # "8 May 2023" reads (and gets echoed back) like the bench
 
 
 def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label, neighbors: int = 0):
-    from .ids import iso
+    from .temporal import annotate
     ids, _, _ = s.rank(question, limit=k, as_of=as_of)
     ctx = []
     if neighbors:  # each hit with the turns around it from the same session, in time order, grouped by date
@@ -368,12 +368,12 @@ def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label, neighbors: 
                              (r[0]["created_at"], r[0]["rid"] - neighbors, r[0]["rid"] + neighbors)):
                     rows[x["rid"]] = x
         for x in sorted(rows.values(), key=lambda x: (x["created_at"], x["rid"])):
-            ctx.append(f"[{_day(x['created_at'])}] {x['content'][:700]}")
+            ctx.append(f"[{_day(x['created_at'])}] {annotate(x['content'][:700], x['created_at'])}")
     else:
         for i in ids or []:
             r = s.q("SELECT content, created_at FROM items WHERE id=?", (i,))
             if r:
-                ctx.append(f"[{_day(r[0]['created_at'])}] {r[0]['content'][:700]}")
+                ctx.append(f"[{_day(r[0]['created_at'])}] {annotate(r[0]['content'][:700], r[0]['created_at'])}")
     prompt = f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
     a = pl.chat(model, prompt, system="ROLE: reader.", cache_prefix=QA_READER, max_tokens=200, role="grader")
     answer = (a["text"] or "").strip()
@@ -454,7 +454,8 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                     log(f"{len(rows)}/{len(data)}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
     os.makedirs(out, exist_ok=True)
     tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}" + (f"-n{neighbors}" if neighbors else "") + \
-        ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "")
+        ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "") + \
+        ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "")
     with open(os.path.join(out, f"{tag}.jsonl"), "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

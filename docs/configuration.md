@@ -97,6 +97,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_RERANK_MAX_TOKENS` | `3000` | Token budget for the LLM reranker prompt | rerank.py |
 | `COMMONS_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model (default Xenova/ms-marco-MiniLM-L-6-v2) | rerank.py |
 | `COMMONS_RERANK_TOP` | `30` | How many top hits the reranker reorders | bench.py, store.py |
+| `COMMONS_RESOLVE_DATES` | — | Set to 0 to stop annotating relative time words in results with absolute dates from each memory's own date ("yesterday (7 May 2023)") | bench.py, temporal.py |
 | `COMMONS_RETAIN_*` | — | Retention days per table for `commons prune`, e.g. `COMMONS_RETAIN_USAGE=90` |  |
 | `COMMONS_RETRO_AUTO_APPROVE` | — | Import retro-learning findings without review (`1`) | retro.py |
 | `COMMONS_RETRO_AUTO_MIN_CONF` | `0` | Minimum confidence for auto-approved retro findings | retro.py |

@@ -461,6 +461,7 @@ class Store:
     def _with_context(self, out: dict, n: int, budget: int) -> None:
         """Attach the n notes before and after each hit from the same session: a hit like "yes, last week" is only
         useful with the turn it answers (LoCoMo QA +5 points over hits alone, no model at write time)."""
+        from .temporal import annotate
         seen = {r["id"] for r in out["results"]}
         extra, used = [], 0
         for r in out["results"]:
@@ -476,6 +477,7 @@ class Store:
             hidden = self.hidden_ids([x["id"] for x in near])
             ctx = [{"id": x["id"], "summary": x["summary"], "created_at": iso(x["created_at"])}
                    for x in sorted(near, key=lambda x: (x["created_at"], x["rid"])) if x["id"] not in seen | hidden]
+            x_ts = {x["id"]: x["created_at"] for x in near}
             for c in ctx:
                 t = estimate_tokens(c["summary"] or "") + 4
                 if used + t > budget:
@@ -483,7 +485,7 @@ class Store:
                 used += t
                 seen.add(c["id"])
                 r.setdefault("context", []).append(c)
-                extra.append(f"  ↳ {c['id']} {c['created_at'][:10]}: {c['summary']}")
+                extra.append(f"  ↳ {c['id']} {c['created_at'][:10]}: {annotate(c['summary'], x_ts.get(c['id']))}")
         if extra:
             out["text"] += "\ncontext (same session, around the hits):\n" + "\n".join(extra)
             out["tokens"] += used
@@ -737,6 +739,7 @@ class Store:
         return {"embedder": name, "done": done, "remaining": max(0, total - done)}
 
     def _budgeted(self, ids: list[str], max_tokens: int, total: int) -> dict:
+        from .temporal import annotate
         from .trust import Trust
         lines, results, used, trust = [], [], 0, Trust(self)
         hidden = self.hidden_ids(ids)
@@ -752,7 +755,7 @@ class Store:
             if r["agent_id"] and trust.score(r["agent_id"]) < 0.3:
                 flag += " ⚠low-trust"
             line = (f"{r['id']} [{r['kind']}] {iso(r['created_at'])[:10]} "
-                    f"{r['project_name'] or '-'}/{r['agent_name'] or '-'}{flag}: {r['summary']}")
+                    f"{r['project_name'] or '-'}/{r['agent_name'] or '-'}{flag}: {annotate(r['summary'], r['created_at'])}")
             t = estimate_tokens(line)
             if used + t > max_tokens and results:
                 break

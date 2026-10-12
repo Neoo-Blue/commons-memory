@@ -118,3 +118,4 @@ COMMONS_CONTRADICTION_MAX	New notes checked for contradictions per librarian pas
 COMMONS_LIBRARIAN_INDEX_EVERY	Seconds between full rebuilds of the librarian's "where to find X" index during incremental passes (default 3600; a full pass always rebuilds)
 COMMONS_QA_DATES	bench qa-*: `iso` prints memory dates as 2023-05-08 (the v0.9.0 style); default "8 May 2023"
 COMMONS_CALL_TIMEOUT	Seconds a remote CLI/worker call to the hub may take before it fails and is retried by the caller (default 300)
+COMMONS_RESOLVE_DATES	Set to 0 to stop annotating relative time words in results with absolute dates from each memory's own date ("yesterday (7 May 2023)")
