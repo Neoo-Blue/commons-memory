@@ -205,3 +205,32 @@ def test_concurrent_recv_and_a2a_ownership_and_mount_escape(store, tmp_path, mon
     with pytest.raises(KeyError):
         svc.own(t["id"], other)
     svc.own(t["id"], owner)
+
+
+def test_memory_tiers_hot_warm_cold(store):
+    import time as _t
+    from commons_memory.orchestrator import Orchestrator
+    from commons_memory.tiers import retier, set_tier
+    day = 86400
+    old_obs = store.add_item("observation", "build status green on the payments service", created_at=_t.time() - 200 * day)["id"]
+    old_note = store.add_item("memory", "payments service uses idempotent retries", created_at=_t.time() - 200 * day)["id"]
+    fresh = store.add_item("memory", "payments service moved to the new region", created_at=_t.time() - 2 * day)["id"]
+    dec = store.add_item("decision", "payments service keeps Stripe", created_at=_t.time() - 3 * day)["id"]
+    counts = retier(store)
+    tier = {r["id"]: r["tier"] for r in store.q("SELECT id, tier FROM items")}
+    assert tier[old_obs] == "cold" and tier[old_note] == "cold" and tier[dec] == "hot" and tier[fresh] == "warm"
+    assert counts["cold"] == 2
+    ids = [r["id"] for r in store.search("payments service")["results"]]  # search counts as use
+    assert ids.index(dec) < ids.index(old_obs)  # hot above cold for an equal match
+    tier = {r["id"]: r["tier"] for r in store.q("SELECT id, tier FROM items")}
+    assert tier[old_obs] == "warm"  # a cold item that gets used is promoted right away
+    retier(store)
+    assert store.q("SELECT tier FROM items WHERE id=?", (old_note,))[0]["tier"] == "hot"  # used this week
+    set_tier(store, fresh, "pin")
+    set_tier(store, old_note, "archive")
+    retier(store)
+    t2 = {r["id"]: (r["tier"], r["pinned"]) for r in store.q("SELECT id, tier, pinned FROM items")}
+    assert t2[fresh] == ("hot", 1) and t2[old_note][0] == "cold"  # pin and archive survive re-tiering
+    a = store.ensure_agent("checker")
+    out = Orchestrator(store).pickup(a)["text"]
+    assert "HOT MEMORY" in out and fresh in out

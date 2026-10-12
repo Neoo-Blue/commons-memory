@@ -536,12 +536,13 @@ class Store:
             meta = {}
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i + 500]
-                for r in self.q(f"SELECT id, agent_id, created_at FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                for r in self.q(f"SELECT id, agent_id, created_at, tier FROM items WHERE id IN ({','.join('?' * len(chunk))})", chunk):
                     meta[r["id"]] = r
             ref = _parse_time(str(as_of)) if as_of not in (None, "") else now()
             win = R.time_window(query, ref)
             ents = self._query_entity_items(query)
             w_ent, w_time, w_rec = R.w("entity", 0.3), R.w("time", 0.6), R.w("recency", 0.1)
+            w_hot, w_cold = R.w("hot", 0.1), R.w("cold", 0.25)  # memory tiers: in use now vs. stale
             half = R.w("half_life_days", 30)
             trust = None
             if os.environ.get("COMMONS_TRUST_WEIGHTING", "1") == "1":  # provenance-weighted ranking
@@ -561,6 +562,10 @@ class Store:
                 if w_rec:
                     r_ = R.recency(m["created_at"], ref, half)
                     f *= 1 + w_rec * r_; d["recency"] = round(r_, 3)
+                if m["tier"] == "hot" and w_hot:
+                    f *= 1 + w_hot; d["tier"] = "hot"
+                elif m["tier"] == "cold" and w_cold:
+                    f *= 1 - w_cold; d["tier"] = "cold"
                 if trust is not None:
                     t = trust.score(m["agent_id"])
                     f *= 0.5 + t; d["trust"] = round(t, 3)
@@ -693,7 +698,11 @@ class Store:
             lines.append(line)
             results.append({"id": r["id"], "kind": r["kind"], "title": r["title"], "summary": r["summary"], "project": r["project_name"],
                             "agent": r["agent_name"], "created_at": iso(r["created_at"]), "conflict": bool(r["conflict"]),
+                            "tier": r["tier"] or "warm",
                             "authenticated": bool(r["authenticated"])})
+        if results:
+            from .tiers import touch
+            touch(self, [x["id"] for x in results])
         more = max(0, total - len(results))
         text = "\n".join(lines) or "(no results)"
         if more:
@@ -745,6 +754,9 @@ class Store:
     def expand(self, any_id: str, depth: int = 0, max_tokens: int = 2000) -> dict:
         self.check_ids(any_id)
         d = self.get_item(any_id)
+        if d is not None:
+            from .tiers import touch
+            touch(self, [any_id])
         if d is None:
             r = self.q("SELECT * FROM entities WHERE id=?", (any_id,))
             if r:

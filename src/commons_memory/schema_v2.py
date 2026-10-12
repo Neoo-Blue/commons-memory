@@ -204,6 +204,8 @@ def _v5(db):
         fact_columns = None
     if fact_columns:
         fact_columns(db)
+    from .tiers import add_columns as tier_columns
+    tier_columns(db)
 
 
 _v4e_migrate = migrate

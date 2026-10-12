@@ -13,8 +13,8 @@ COLUMNS = [("items", "valid_from", "REAL"), ("items", "valid_to", "REAL"),
            ("relations", "valid_from", "REAL"), ("relations", "valid_to", "REAL")]
 
 
-def add_columns(db):
-    for t, c, typ in COLUMNS:
+def add_columns(db, columns=None):
+    for t, c, typ in (columns or COLUMNS):
         try:
             cols = {r[1] for r in db.execute(f"PRAGMA table_info({t})")}
         except Exception:  # noqa: BLE001

@@ -21,9 +21,9 @@ from .store import Store
 
 INTERVALS = {  # seconds (env COMMONS_EVERY_<NAME> overrides)
     "recurring": 30, "reap": 30, "escalate": 60, "kb": 5, "librarian": 600, "models": 3600, "routing_validate": 3600,
-    "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3, "reindex": 60,
+    "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3, "reindex": 60, "tiers": 3600,
 }
-LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex")
+LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex", "tiers")
 
 
 def _every(name: str) -> float:
@@ -104,6 +104,11 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
         r = s.reindex(limit=int(os.environ.get("COMMONS_REINDEX_BATCH", "512")))
         return r if r.get("done") else None
     run("reindex", reindex)
+
+    def tiers():  # hot / warm / cold from recency, frequency and kind
+        from .tiers import retier
+        return retier(s)
+    run("tiers", tiers)
 
     def esc():
         from .escalation import Escalator

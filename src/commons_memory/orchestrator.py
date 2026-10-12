@@ -830,6 +830,11 @@ class Orchestrator:
         if ranked:
             lines.append("LEFTOVERS (by priority x your expertise):")
             lines += [f"- {lo['id']} [{lo['task_type']}, p{lo['priority']}] {lo['text'][:90]}" for lo in ranked[:8]]
+        from .tiers import hot
+        hots = hot(self.s, project)
+        if hots:
+            lines.append("HOT MEMORY (in use now; expand(id) for detail):")
+            lines += [f"- {h['id']} [{h['kind']}] {(h['summary'] or '')[:110]}" for h in hots]
         text = "\n".join(lines) or "Nothing pending."
         if prefs["text"]:
             text += "\n\n" + prefs["text"]

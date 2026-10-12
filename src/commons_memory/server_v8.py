@@ -66,6 +66,14 @@ def register_v8(mcp, store, who):
         return _js(_imp(store, items, agent_id=aid))
 
     @mcp.tool()
+    def memory_tier(id: str, tier: str, agent: str = "", api_key: str = "") -> str:
+        """Pin a memory (tier=hot: stays in every agent's check-in), return it to warm, or archive it (cold: ranked
+        lower, never deleted, promoted again when used)."""
+        me(agent, api_key)
+        from .tiers import set_tier
+        return _js(set_tier(store, id, tier))
+
+    @mcp.tool()
     def memory_stream(project: str = "", limit: int = 30) -> str:
         """Latest captured observations (prompts, tool calls, typed observations) across agents."""
         return _js(cap.stream(project or None, limit=limit))
