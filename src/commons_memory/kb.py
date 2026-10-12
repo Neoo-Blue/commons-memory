@@ -8,6 +8,7 @@ citations are preserved in a Sources line).
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -61,9 +62,10 @@ def _clean(text: str) -> str:
     return re.sub(r"(?m)^\[[\w.-]+\] [\w_]+: ", "", text).strip()
 
 
-def _sentences(text: str) -> list[str]:
+@functools.lru_cache(maxsize=16384)  # most items are unchanged between rebuilds: split each text once per process
+def _sentences(text: str) -> tuple[str, ...]:
     text = re.sub(r"\s+", " ", _clean(text)).strip()
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9`\[])", text) if len(s.strip()) > 12]
+    return tuple(s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9`\[])", text) if len(s.strip()) > 12)
 
 
 def _terms(text: str) -> list[str]:
