@@ -130,6 +130,14 @@ class Scheduler:
                 deps = json.loads(j["after_jobs"] or "[]")
                 j["blocked"] = bool(deps) and bool(self.s.q(
                     f"SELECT 1 FROM jobs WHERE id IN ({','.join('?' * len(deps))}) AND status NOT IN ('done','cancelled')", deps))
+                dead = deps and self.s.q(f"SELECT id, status FROM jobs WHERE id IN ({','.join('?' * len(deps))}) "
+                                         "AND status IN ('failed','budget_exceeded')", deps)
+                if dead:  # a prerequisite can never finish: fail this job instead of blocking it forever
+                    self.s.x("UPDATE jobs SET status='failed', result=?, updated_at=? WHERE id=? AND status NOT IN "
+                             "('failed','done','cancelled')", (f"prerequisite job {dead[0]['id']} {dead[0]['status']}",
+                                                               now(), j["id"]))
+                    self.s.x("UPDATE subtasks SET status='cancelled', updated_at=? WHERE job_id=? AND status IN "
+                             "('pending','ready')", (now(), j["id"]))
                 ps = j["sched"]
                 j["full"] = bool(ps["max_concurrent"]) and inflight.get(j["project_id"], 0) >= int(ps["max_concurrent"])
                 j["broke"] = bool(ps["budget_cost"]) and self.project_cost(j["project_id"]) >= float(ps["budget_cost"])

@@ -17,7 +17,7 @@ import contextvars
 import json
 import os
 
-CORE = ["pickup", "msg_recv", "msg_send", "resume", "context_load", "search", "expand", "why", "remember",
+CORE = ["pickup", "msg_recv", "msg_send", "summon", "resume", "context_load", "search", "expand", "why", "remember",
         "record_decision", "observe_preference", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
         "add_leftover", "report_usage", "whoami", "tools", "call"]
 IDENTITY = ("agent", "api_key")

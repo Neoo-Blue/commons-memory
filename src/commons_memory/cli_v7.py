@@ -69,6 +69,7 @@ def add_parsers(sub) -> None:
     x.add_argument("--wait", type=float, default=25)
     x.add_argument("--once", action="store_true")
     x.add_argument("--timeout", type=int, default=3600)
+    x.add_argument("--parallel", type=int, default=2, help="agent runs at once (new work starts while one is busy)")
     x.add_argument("--print-unit", choices=["systemd", "launchd", "windows"], help="print a service unit and exit")
     asub.add_parser("list", help="registered agents with presence and tool profile")
     x = asub.add_parser("tools", help="show or set the tools an agent's client lists (core | all | core,name,...)")
@@ -193,35 +194,52 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
         else:
             msg.ack(aid, ids)
 
+    import concurrent.futures as cf
+    pool = cf.ThreadPoolExecutor(max_workers=max(1, getattr(args, "parallel", 2)))
+    busy: set = set()
+
+    def run(msgs):
+        subs = [m.get("meta", {}).get("subtask") for m in msgs if (m.get("meta") or {}).get("subtask")]
+        lines = [f"- #{m['id']} [{m.get('type', 'message')}] from {m.get('from') or 'commons'}: "
+                 f"{(m.get('text') or m.get('body') or '')[:500]}" for m in msgs]
+        prompt = (f"You are agent '{args.agent}', woken by Commons just now. New messages:\n" + "\n".join(lines) +
+                  "\n\nUse the Commons MCP tools: pickup() first, then " +
+                  (f"claim_subtask(subtask_id=...) for {', '.join(subs)}, heartbeat while working, complete_subtask "
+                   "with the full result" if subs else "claim_subtask() for assigned work") +
+                  "; answer questions with msg_send; finish with handoff() and report_usage(). Be concise.")
+        ok = True
+        if args.cmd:
+            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.cmd}")
+            try:
+                r = subprocess.run(shlex.split(args.cmd), input=prompt, text=True, capture_output=True, timeout=args.timeout)
+                ok = r.returncode == 0
+                log((r.stdout or r.stderr or "")[-2000:])
+            except (OSError, subprocess.TimeoutExpired) as e:
+                log(f"agent command failed: {e}")
+                ok = False
+        else:
+            print(prompt, flush=True)
+        if ok:
+            ack([m["id"] for m in msgs])
+
     while True:
+        if len(busy) >= max(1, getattr(args, "parallel", 2)):  # every slot is running the agent: wait for one to finish
+            cf.wait(busy, return_when=cf.FIRST_COMPLETED)
+            busy = {f for f in busy if not f.done()}
+            continue
         try:
             msgs = recv()
         except Exception as e:  # noqa: BLE001
             log(f"recv failed: {e}; retrying")
             if args.once:
                 return 1
-            time.sleep(5)
+            time.sleep(2)
             continue
         if msgs:
-            lines = [f"- #{m['id']} [{m.get('type', 'message')}] from {m.get('from')}: "
-                     f"{(m.get('text') or m.get('body') or '')[:500]}" for m in msgs]
-            prompt = (f"You are agent '{args.agent}' and were woken by Commons. New messages:\n" + "\n".join(lines) +
-                      "\n\nHandle them: reply with msg_send; for task/handoff messages use my_inbox / claim_subtask on the "
-                      "Commons MCP server. Be concise.")
-            ok = True
-            if args.cmd:
-                log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.cmd}")
-                try:
-                    r = subprocess.run(shlex.split(args.cmd), input=prompt, text=True, capture_output=True, timeout=args.timeout)
-                    ok = r.returncode == 0
-                    log((r.stdout or r.stderr or "")[-2000:])
-                except (OSError, subprocess.TimeoutExpired) as e:
-                    log(f"agent command failed: {e}")
-                    ok = False
-            else:
-                print(prompt, flush=True)
-            if ok:
-                ack([m["id"] for m in msgs])
+            if args.once:
+                run(msgs)
+                return 0
+            busy.add(pool.submit(run, msgs))
         if args.once:
             return 0
 

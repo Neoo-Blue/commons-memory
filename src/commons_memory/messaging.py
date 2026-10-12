@@ -78,6 +78,7 @@ class Hub:
     def __init__(self):
         self.lock = threading.Lock()
         self.listeners: dict[str, set] = {}
+        self.pollers: dict[str, int] = {}  # agents blocked in a long-poll recv (`commons agent daemon`): instantly wakeable
         self.cond = threading.Condition()
         self.seq = 0
 
@@ -93,7 +94,11 @@ class Hub:
 
     def live(self, agent_id: str) -> int:
         with self.lock:
-            return len(self.listeners.get(agent_id, ()))
+            return len(self.listeners.get(agent_id, ())) + self.pollers.get(agent_id, 0)
+
+    def polling(self, agent_id: str, delta: int) -> None:
+        with self.lock:
+            self.pollers[agent_id] = max(0, self.pollers.get(agent_id, 0) + delta)
 
     def publish(self, agent_id: str, payload: dict) -> int:
         with self.lock:
@@ -328,11 +333,15 @@ class Messaging:
         heartbeat(self.s, aid, client="recv")
         deadline = time.time() + min(max(wait, 0), 60)
         seq = HUB.seq
-        while True:
-            rows = [r for r in self._pending(aid, limit) if not types or r["mtype"] in types]
-            if rows or time.time() >= deadline:
-                break
-            seq = HUB.wait(seq, min(1.0, max(0.05, deadline - time.time())))  # wake on publish, else poll the DB
+        HUB.polling(aid, 1) if wait > 0 else None
+        try:
+            while True:
+                rows = [r for r in self._pending(aid, limit) if not types or r["mtype"] in types]
+                if rows or time.time() >= deadline:
+                    break
+                seq = HUB.wait(seq, min(1.0, max(0.05, deadline - time.time())))  # wake on publish, else poll the DB
+        finally:
+            HUB.polling(aid, -1) if wait > 0 else None
         t = now()
         out = []
         for r in rows:
@@ -437,6 +446,47 @@ def board(s: Store) -> list[dict]:
     out = [presence(s, r["id"]) | {"unread": Messaging(s).unread(r["id"])} for r in rows]
     order = {"online": 0, "idle": 1, "sleeping": 2, "offline": 3}
     return sorted(out, key=lambda p: (order[p["state"]], p["agent"]))
+
+
+SUMMON_SKIP = ("cli", "user", "librarian", "commons")
+
+
+def summon(s: Store, sender: str | None, agents: list[str] | None = None, reason: str = "", wait: float = 10,
+           project: str | None = None) -> dict:
+    """Wake agents now and report who is ready. Each target gets a mailbox task (so a `commons agent daemon` or a
+    live stream fires within a second, and chat agents see it on their next msg_recv) plus its wake channels; then
+    we wait up to `wait` seconds for the rest to come online."""
+    me = sender or ""
+    if agents:
+        ids = [Messaging(s)._aid(a) for a in agents]
+    else:
+        ids = [r["id"] for r in s.q("SELECT id, name FROM agents WHERE id<>? ORDER BY name", (me,))
+               if r["name"] not in SUMMON_SKIP and not r["name"].startswith(("provider:", "cf:"))]
+    t0 = now()
+    live0 = {aid: presence(s, aid)["live_connections"] for aid in ids}  # listening right now = receives it instantly
+    text = reason or "You are summoned: check in with pickup() and msg_recv(), then claim your work."
+    for aid in ids:
+        Messaging(s).send(sender, aid, text, mtype="task", subject="summon", project=project, meta={"summon": True})
+    deadline = time.time() + max(0.0, min(wait, 60))
+    while True:
+        out = []
+        for aid in ids:
+            p = presence(s, aid)
+            fresh = (p["last_heartbeat"] or 0) >= t0
+            ready_now = live0[aid] > 0 or p["live_connections"] > 0 or fresh
+            how = ("daemon/stream (instant)" if live0[aid] or p["live_connections"] else
+                   f"wake channel: {', '.join(p['channels'])}" if p["channels"] else "none")
+            row = {"agent": p["agent"], "ready": ready_now, "state": p["state"], "wake": how}
+            if not ready_now and how == "none":
+                row["fix"] = (f"no way to wake {p['agent']} while idle: run `commons agent daemon --agent {p['agent']} "
+                              "--cmd '<its CLI>'` on its machine, or add a wake channel (commons wake add); chat-only "
+                              "AIs see the task the next time they call msg_recv")
+            out.append(row)
+        if all(r["ready"] for r in out) or time.time() >= deadline:
+            break
+        time.sleep(0.5)
+    return {"summoned": len(out), "ready": sum(r["ready"] for r in out), "agents": out,
+            "seconds": round(now() - t0, 1)}
 
 
 def ready(s: Store, agent_id: str) -> bool:

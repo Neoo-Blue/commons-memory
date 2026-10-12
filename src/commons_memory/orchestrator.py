@@ -362,9 +362,13 @@ class Orchestrator:
             used[best[1]["id"]] = used.get(best[1]["id"], 0) + 1
             self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (best[1]["id"], st["id"]))
             self.s.relate(st["id"], best[1]["id"], "assigned_to")
-            from .messaging import emit
-            emit(self.s, best[1]["id"], "review" if st["gate_of"] or st["type"] == "review" else "task",
-                 ref=st["id"], preview=st["title"], job=job_id, subtask=st["id"])
+            # a mailbox task, not just a wake event: `commons agent daemon` long-polls the mailbox and fires within a
+            # second, and chat agents see the assignment on their next msg_recv
+            from .messaging import Messaging
+            kind = "review" if st["gate_of"] or st["type"] == "review" else "task"
+            Messaging(self.s).send(None, best[1]["id"], f"{kind} assigned: {st['title']} (job {job_id}). "
+                                   f"Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
+                                   subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"]})
 
     # ---------------------------------------------------------------- claims
     def claimable(self, agent_id: str, limit: int = 10) -> list[dict]:
@@ -408,6 +412,8 @@ class Orchestrator:
             job = self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0]
             if self._over_budget(job):
                 self.s.x("UPDATE jobs SET status='budget_exceeded', updated_at=? WHERE id=?", (now(), job["id"]))
+                self.s.x("UPDATE subtasks SET status='cancelled', updated_at=? WHERE job_id=? AND status IN "
+                         "('pending','ready')", (now(), job["id"]))  # nothing left dangling as 'pending' forever
                 return None
             cur = self.s.db.execute(
                 "UPDATE subtasks SET status='claimed', claimed_by=?, lease_expires=?, attempts=attempts+1, "
@@ -467,10 +473,11 @@ class Orchestrator:
                             "items and 'PREFERENCE: <text>' for user preferences you learned."}
 
     def heartbeat(self, subtask_id: str, agent_id: str, lease_seconds: int = DEFAULT_LEASE) -> dict:
-        r = self.s.q("SELECT claimed_by, status FROM subtasks WHERE id=?", (subtask_id,))
-        if not r or r[0]["claimed_by"] != agent_id or r[0]["status"] != "claimed":
+        with self.s.lock:  # conditional: a late heartbeat must not extend a lease someone else now holds
+            ok = self.s.db.execute("UPDATE subtasks SET lease_expires=?, updated_at=? WHERE id=? AND claimed_by=? "
+                                   "AND status='claimed'", (now() + lease_seconds, now(), subtask_id, agent_id)).rowcount
+        if ok != 1:
             raise CommonsError("not your active claim")
-        self.s.x("UPDATE subtasks SET lease_expires=?, updated_at=? WHERE id=?", (now() + lease_seconds, now(), subtask_id))
         return {"subtask_id": subtask_id, "lease_expires": iso(now() + lease_seconds)}
 
     def reap(self) -> list[str]:
@@ -478,22 +485,34 @@ class Orchestrator:
         out = []
         for st in self.s.q("SELECT * FROM subtasks WHERE status='claimed' AND lease_expires<?", (now(),)):
             excl = json.loads(st["excluded_agents"] or "[]") + [st["claimed_by"]]
+            with self.s.lock:  # only reap if it is still the same expired claim (no heartbeat/complete in between)
+                won = self.s.db.execute(
+                    "UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=NULL, excluded_agents=?, updated_at=? "
+                    "WHERE id=? AND status='claimed' AND claimed_by=? AND lease_expires<?",
+                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", _j(excl), now(), st["id"],
+                     st["claimed_by"], now())).rowcount == 1
+            if not won:
+                continue
             self.profiles.record_outcome(st["claimed_by"], st["type"], False, subtask_id=st["id"], note="lease timeout")
             if st["attempts"] >= st["max_attempts"]:
                 self._fail(st["id"], "lease expired too many times")
             else:
-                self.s.x("UPDATE subtasks SET status='pending', claimed_by=NULL, assigned_agent=NULL, "
-                         "excluded_agents=?, updated_at=? WHERE id=?", (_j(excl), now(), st["id"]))
                 self.s.audit(st["claimed_by"], "subtask.timeout", st["id"])
                 self.allocate(st["job_id"])
             out.append(st["id"])
         return out
 
     # ---------------------------------------------------------------- completion & gates
-    def complete(self, subtask_id: str, agent_id: str, result: str, *, verdict: str | None = None,
-                 tokens: int | None = None, cost: float | None = None, leftovers: list[str] | None = None,
-                 preferences: list[str] | None = None, success: bool = True, tokens_in: int | None = None,
-                 model: str | None = None) -> dict:
+    def complete(self, subtask_id: str, agent_id: str, result: str, **kw) -> dict:
+        """Finish a claimed subtask. Runs under the store lock so the reaper, a late heartbeat or a parallel
+        completion of a sibling (job budget read-modify-write) can't interleave with it."""
+        with self.s.lock:
+            return self._complete(subtask_id, agent_id, result, **kw)
+
+    def _complete(self, subtask_id: str, agent_id: str, result: str, *, verdict: str | None = None,
+                  tokens: int | None = None, cost: float | None = None, leftovers: list[str] | None = None,
+                  preferences: list[str] | None = None, success: bool = True, tokens_in: int | None = None,
+                  model: str | None = None) -> dict:
         st = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0])
         if st["claimed_by"] != agent_id or st["status"] != "claimed":
             raise CommonsError("subtask is not claimed by you")
@@ -531,8 +550,10 @@ class Orchestrator:
         is_gate = st["gate_of"] is not None or st["type"] in ("vote",)
         v = (verdict or parse_verdict(result)) if is_gate else None
         new_status = "awaiting_gate" if gates else "done"
-        self.s.x("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=?",
-                 (new_status, result, v, now(), subtask_id))
+        # ponytail: conditional write guards other processes on a shared Postgres; side effects above aren't undone
+        if self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND claimed_by=? "
+                             "AND status='claimed'", (new_status, result, v, now(), subtask_id, agent_id)).rowcount != 1:
+            raise CommonsError("subtask claim expired or was reassigned before completion")
         item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
                                agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
         self.s.relate(subtask_id, item["id"], "produced")
@@ -578,6 +599,7 @@ class Orchestrator:
             for x in gates:  # all gates re-run on the new revision
                 self.s.x("UPDATE subtasks SET status='pending', verdict=NULL, claimed_by=NULL, updated_at=? WHERE id=?",
                          (now(), x["id"]))
+            self.allocate(g["job_id"])  # route the rework (and wake the author) instead of waiting for a poll
             return
         if all(x["status"] == "done" and x["verdict"] == "approve" for x in gates):
             self.s.x("UPDATE subtasks SET status='done', updated_at=? WHERE id=?", (now(), gated_id))
@@ -593,9 +615,9 @@ class Orchestrator:
         """Run automatic steps (vote tallies) and close the job when everything is done."""
         for t in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND type='tally' AND status='pending'", (job_id,)):
             if self._deps_ok(dict(t)):
+                deps = json.loads(t["deps"] or "[]")
                 votes = [r["verdict"] for r in self.s.q(
-                    f"SELECT verdict FROM subtasks WHERE id IN ({','.join('?' * len(json.loads(t['deps'])))})",
-                    json.loads(t["deps"]))]
+                    f"SELECT verdict FROM subtasks WHERE id IN ({','.join('?' * len(deps))})", deps)] if deps else []
                 yes = votes.count("approve")
                 res = f"{yes}/{len(votes)} approve -> {'APPROVED' if yes * 2 > len(votes) else 'REJECTED'}"
                 self.s.x("UPDATE subtasks SET status='done', result=?, verdict=?, updated_at=? WHERE id=?",

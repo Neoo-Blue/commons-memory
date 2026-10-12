@@ -994,9 +994,14 @@ class Store:
             self.relate(tid, from_agent, "requested_by")
         if to_id != "*":
             self.relate(tid, to_id, "assigned_to")
+        if kind != "notification":  # into the mailbox too, so daemons and msg_recv see delegations instantly
+            from .messaging import Messaging
+            Messaging(self).send(from_agent, to_id, f"{body}\n\n(task {tid}: answer with respond_task)",
+                                 mtype="handoff" if kind == "handoff" else "task", subject=body[:80],
+                                 meta={"task": tid})
+        else:
             from .messaging import emit
-            emit(self, to_id, {"notification": "escalation", "handoff": "handoff"}.get(kind, "inbox"), ref=tid, preview=body,
-                 sender=self.label(from_agent)[1] if from_agent else None)
+            emit(self, to_id, "escalation", ref=tid, preview=body, sender=self.label(from_agent)[1] if from_agent else None)
         for c in context_ids or []:
             if self._exists(c):
                 self.relate(tid, c, "context")

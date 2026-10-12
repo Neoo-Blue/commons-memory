@@ -322,7 +322,7 @@ class Router:
                 if r["model"]:
                     author_fams.add(family(r["model"]))
         cands = []
-        top_agent = max(sc for sc, _ in ranked) or 1.0
+        top_agent = max(0.001, max(sc for sc, _ in ranked))  # all-negative scores must not invert the ranking
         for sc, a in ranked:
             pr = presence(self.s, a["id"])
             if not pr["ready"] and pr["state"] == "offline":

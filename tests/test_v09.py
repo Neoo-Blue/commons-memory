@@ -147,3 +147,32 @@ def test_tokenless_dashboard_refuses_rebinding_hosts(monkeypatch):
         assert not _host_allowed(bad), bad
     monkeypatch.setenv("COMMONS_DASHBOARD_HOSTS", "nas.home")
     assert _host_allowed("nas.home:8771")
+
+
+def test_instant_wake_assignments_reach_long_polling_daemon_and_summon(store):
+    """v0.9: an assigned subtask lands in the agent's mailbox, so a long-polling `commons agent daemon` fires at
+    once; summon() reports live daemons as ready instantly and explains how to fix unreachable agents."""
+    import time as _t
+    from commons_memory.messaging import Messaging, summon
+    from commons_memory.orchestrator import Orchestrator
+    w = store.register_agent("daemon-bot")["id"]
+    store.register_agent("chat-only")
+    o = Orchestrator(store)
+    o.profiles.set(w, expertise={"code": 1.0, "plan": 1.0, "test": 1.0, "general": 1.0})
+    got, t0 = [], _t.time()
+    th = threading.Thread(target=lambda: got.extend(Messaging(store).recv(w, wait=15)))
+    th.start()
+    _t.sleep(0.3)
+    o.submit("Write the changelog", project="docs", pattern="plan_execute_verify")
+    th.join(10)
+    assert got and got[0]["type"] in ("task", "review") and _t.time() - t0 < 5
+    assert (got[0]["meta"] or {}).get("subtask", "").startswith("sub_")
+    Messaging(store).ack(w, [m["id"] for m in got + Messaging(store).recv(w)])  # drain the rest of the job's mail
+    th = threading.Thread(target=lambda: Messaging(store).recv(w, wait=10))
+    th.start()
+    _t.sleep(0.3)
+    r = summon(store, None, ["daemon-bot", "chat-only"], "all hands: ship v0.9", wait=1)
+    by = {a["agent"]: a for a in r["agents"]}
+    assert by["daemon-bot"]["ready"] and "instant" in by["daemon-bot"]["wake"]
+    assert not by["chat-only"]["ready"] and "commons agent daemon" in by["chat-only"]["fix"]
+    th.join(12)

@@ -32,6 +32,17 @@ def register_v7(mcp, store, who):
 
     # ---- messaging
     @mcp.tool()
+    def summon(agents: list[str] | None = None, reason: str = "", wait: float = 10, project: str = "",
+               agent: str = "", api_key: str = "") -> str:
+        """Call other agents to work NOW and see who is ready (default: every agent except you). Agents running
+        `commons agent daemon` or holding a live stream start within a second; others are woken through their
+        channels, and the result says how to make any unreachable one instantly wakeable. `reason` is the task text
+        they receive."""
+        from .messaging import summon as _summon
+        return _js(_summon(store, me(agent, api_key), agents or None, reason, wait=min(max(wait, 0), 30),
+                           project=project or None))
+
+    @mcp.tool()
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
                  project: str = "", agent: str = "", api_key: str = "") -> str:
         """Send a direct (to=agent name) or broadcast (to='*') message. type: message|task|question|review|fyi.
