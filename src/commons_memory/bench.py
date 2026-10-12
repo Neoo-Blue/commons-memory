@@ -16,6 +16,7 @@ import json
 import os
 import re
 import statistics
+import sys
 import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -251,4 +252,60 @@ def selfcheck(s, sample: int = 100, model: str | None = None, seed: int = 7, kin
            "by_kind": {k: agg([r for r in rows if r["kind"] == k]) for k in sorted({r["kind"] for r in rows})},
            "misses": [r for r in rows if not r["rank"]][:15], "ts": time.time()}
     s.x("INSERT OR REPLACE INTO meta VALUES('selfcheck:last', ?)", (json.dumps({k: v for k, v in out.items() if k != "misses"}),))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- scale / latency
+def scale(sizes=(1000, 10000, 50000), queries: int = 40, embedder: str = "auto", log=lambda m: None) -> dict:
+    """Search latency, write throughput, DB size and process memory as the store grows. Items are synthetic
+    sentences with real keyword structure; vectors are random unit vectors of the embedder's dimension (scan cost
+    doesn't depend on content), while each query is embedded for real, so latency includes the query embedding."""
+    import random
+    import resource
+    import statistics as st
+    from .embed import get_embedder
+    from .store import Store
+    from .embed import pack
+    rng = random.Random(1)
+    words = ("deploy payment webhook retry stripe postgres index cache latency cluster backup restore token auth key "
+             "graph memory agent review queue schedule budget invoice tenant region gateway proxy tunnel vault secret "
+             "dashboard metric alert incident rollback migration schema replica shard lease worker").split()
+    e = get_embedder(None if embedder == "auto" else embedder)
+    out = {"embedder": e.name if e else "none", "dim": e.dim if e else 0, "sizes": []}
+    d, path = tempfile.mkdtemp(prefix="cscale-"), None
+    try:
+        path = os.path.join(d, "s.db")
+        s = Store(path, embedder=e)
+        s.defer_embed = True
+        n = 0
+        for target in sizes:
+            t0 = time.time()
+            with s.lock:
+                s.db.execute("BEGIN")
+                while n < target:
+                    txt = " ".join(rng.choice(words) for _ in range(rng.randint(8, 30)))
+                    iid = s.add_item("memory", f"note {n}: {txt}", project=f"p{n % 5}")["id"]
+                    if e:
+                        v = [rng.gauss(0, 1) for _ in range(e.dim)]
+                        nv = sum(x * x for x in v) ** 0.5
+                        s.db.execute("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)",
+                                     (iid, e.name, pack([x / nv for x in v])))
+                    n += 1
+                s.db.execute("COMMIT")
+            write_s = time.time() - t0
+            lat = []
+            for q in range(queries):
+                qtext = " ".join(rng.choice(words) for _ in range(rng.randint(2, 6)))
+                t1 = time.perf_counter()
+                s.search(qtext, limit=10, max_tokens=600)
+                lat.append((time.perf_counter() - t1) * 1000)
+            lat.sort()
+            row = {"items": n, "search_p50_ms": round(st.median(lat), 1), "search_p95_ms": round(lat[int(len(lat) * 0.95) - 1], 1),
+                   "insert_per_s": round((target - (out["sizes"][-1]["items"] if out["sizes"] else 0)) / max(write_s, 1e-6)),
+                   "db_mb": round(os.path.getsize(path) / 1e6, 1),
+                   "rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == "darwin" else 1e3), 1)}
+            out["sizes"].append(row)
+            log(json.dumps(row))
+    finally:
+        _cleanup(d)
     return out

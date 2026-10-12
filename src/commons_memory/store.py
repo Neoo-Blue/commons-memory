@@ -486,6 +486,17 @@ class Store:
                 rows = self.q(f"SELECT f.item_id AS id, ts_rank(f.tsv, to_tsquery('english', ?)) AS b FROM items_fts f "
                               f"JOIN items i ON i.id=f.item_id WHERE f.tsv @@ to_tsquery('english', ?) AND {wsql} "
                               f"ORDER BY b DESC LIMIT 200", [tsq, tsq] + args)
+            elif fts and not (project or agent or kinds or tags or since or until or entity or as_of):
+                # rank inside FTS first, then apply the cheap filters to the top 500: joining before ranking makes
+                # SQLite score every match through the join (30k items: 106 ms -> 26 ms)
+                top = self.q("SELECT item_id AS id, -bm25(items_fts) AS b FROM items_fts WHERE items_fts MATCH ? "
+                             "ORDER BY bm25(items_fts) LIMIT 500", [fts])
+                ok = set()
+                for b in range(0, len(top), 500):
+                    ch = [r["id"] for r in top[b:b + 500]]
+                    ok |= {r["id"] for r in self.q(f"SELECT i.id FROM items i WHERE i.id IN ({','.join('?' * len(ch))}) "
+                                                   f"AND {wsql}", ch + args)}
+                rows = [r for r in top if r["id"] in ok][:200]
             elif fts:
                 rows = self.q(f"SELECT f.item_id AS id, -bm25(items_fts) AS b FROM items_fts f JOIN items i ON i.id=f.item_id "
                               f"WHERE items_fts MATCH ? AND {wsql} ORDER BY bm25(items_fts) LIMIT 200", [fts] + args)
@@ -502,9 +513,12 @@ class Store:
                               f"ORDER BY e.v <=> ?::vector LIMIT 200", [_vecstr(qv), self.embedder.name] + args + [_vecstr(qv)])
                 sims = [(float(r["sim"]), r["id"]) for r in rows]
             else:
-                rows = self.q(f"SELECT e.item_id AS id, e.vec FROM embeddings e JOIN items i ON i.id=e.item_id "
-                              f"WHERE e.model=? AND {wsql}", [self.embedder.name] + args)
-                sims = sorted(((cosine(qv, unpack(r["vec"])), r["id"]) for r in rows), reverse=True)[:200]
+                restrictive = bool(project or agent or kinds or tags or since or until or entity or as_of)
+                sims = self._vec_search(qv, wsql, args, restrictive)
+                if sims is None:  # no numpy: pure-python scan (fine for small stores)
+                    rows = self.q(f"SELECT e.item_id AS id, e.vec FROM embeddings e JOIN items i ON i.id=e.item_id "
+                                  f"WHERE e.model=? AND {wsql}", [self.embedder.name] + args)
+                    sims = sorted(((cosine(qv, unpack(r["vec"])), r["id"]) for r in rows), reverse=True)[:200]
             floor = 0.12 if self.embedder.name == "hash" else float(os.environ.get("COMMONS_RANK_SIM_FLOOR", "0.3"))
             for rank, (sim, iid) in enumerate(sims):
                 if sim < floor:
@@ -554,6 +568,60 @@ class Store:
                 d["score"] = round(scores[k], 6)
         ranked = [k for k, _ in sorted(scores.items(), key=lambda kv: -kv[1])][:limit]
         return ranked, len(scores), why
+
+    def _vec_matrix(self):
+        """(ids, row index, unit-normalised float32 matrix) for the active embedder, cached until the embeddings
+        table changes (row count + max rowid catch inserts, replacements and deletes, even from another process)."""
+        import numpy as np
+        name = self.embedder.name
+        fp = tuple(self.q("SELECT COUNT(*) n, MAX(rowid) m FROM embeddings")[0])  # no WHERE: an unindexed filter scans
+        c = getattr(self, "_vm", None)
+        if c and c[0] == fp:
+            return c[1], c[2], c[3]
+        rows = self.q("SELECT item_id, vec FROM embeddings WHERE model=?", (name,))
+        ids = [r["item_id"] for r in rows]
+        mat = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32).reshape(len(rows), -1) if rows \
+            else np.zeros((0, self.embedder.dim), dtype=np.float32)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        mat = mat / np.where(norms == 0, 1, norms)
+        self._vm = (fp, ids, {i: n for n, i in enumerate(ids)}, mat)
+        return ids, self._vm[2], mat
+
+    def _vec_search(self, qv, wsql: str, args: list, restrictive: bool, k: int = 200):
+        """Top-k (sim, id) by one matrix multiply instead of a python loop over every vector (30k items: 1.4 s ->
+        tens of ms). Filtered queries mask to the allowed ids; unfiltered ones take the global top 2000 and apply the
+        cheap filters (superseded, ACL) in SQL. None when numpy is missing (callers fall back to the python scan)."""
+        if self.dialect != "sqlite":
+            return None
+        try:
+            import numpy as np
+        except ImportError:
+            return None
+        ids, index, mat = self._vec_matrix()
+        if not ids:
+            return []
+        q = np.asarray(qv, dtype=np.float32)
+        q /= (np.linalg.norm(q) or 1.0)
+        sims = mat @ q
+        if restrictive:
+            allowed = [index[r["id"]] for r in self.q(f"SELECT i.id FROM items i WHERE {wsql}", args) if r["id"] in index]
+            if not allowed:
+                return []
+            sub = np.asarray(allowed)
+            order = sub[np.argsort(-sims[sub])[:k]]
+            return [(float(sims[j]), ids[j]) for j in order]
+        m = min(len(ids), 2000)
+        top = np.argpartition(-sims, m - 1)[:m] if m < len(ids) else np.arange(len(ids))
+        top = top[np.argsort(-sims[top])]
+        out = []
+        for b in range(0, len(top), 500):
+            chunk = [ids[j] for j in top[b:b + 500]]
+            ok = {r["id"] for r in self.q(f"SELECT i.id FROM items i WHERE i.id IN ({','.join('?' * len(chunk))}) AND {wsql}",
+                                          chunk + args)}
+            out += [(float(sims[j]), ids[j]) for j in top[b:b + 500] if ids[j] in ok]
+            if len(out) >= k:
+                break
+        return out[:k]
 
     def _query_entity_items(self, query: str) -> set[str]:
         """Items linked to entities whose name appears in the query (graph-aware boost)."""

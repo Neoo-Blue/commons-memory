@@ -48,10 +48,11 @@ def add_parsers(sub) -> None:
     x.add_argument("--force", action="store_true", help="re-embed everything")
     x.add_argument("--limit", type=int)
     x = sub.add_parser("bench", help="retrieval benchmarks (LongMemEval, LoCoMo)")
-    x.add_argument("suite", choices=["longmemeval", "locomo", "self"],
+    x.add_argument("suite", choices=["longmemeval", "locomo", "self", "scale"],
                    help="self = known-item retrieval on YOUR store: a model writes questions from sampled memories")
     x.add_argument("--data", help="dataset json (longmemeval_s_cleaned.json / locomo10.json)")
     x.add_argument("--sample", type=int, default=100, help="self: memories to sample")
+    x.add_argument("--sizes", help="scale: comma list of store sizes (default 1000,10000,50000)")
     x.add_argument("--model", help="self: question-writing model provider/model (default: curator role)")
     x.add_argument("--out", default="bench-results")
     x.add_argument("--embedder", default="auto")
@@ -182,6 +183,11 @@ def handle_nostore(args) -> int:
         return 0
     if c == "bench":
         from . import bench
+        if args.suite == "scale":
+            s = bench.scale(sizes=tuple(int(x) for x in (args.sizes or "1000,10000,50000").split(",")),
+                            embedder=args.embedder, log=lambda m: print(m, file=sys.stderr, flush=True))
+            print(json.dumps(s, indent=2))
+            return 0
         if args.suite == "self":
             from .store import Store
             s = bench.selfcheck(Store(args.db), sample=args.sample, model=args.model,
