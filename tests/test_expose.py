@@ -198,3 +198,20 @@ def test_status_cli_shows_network(store, env, capsys):
     out = capsys.readouterr().out
     assert "tailscale -> https://box.tail123.ts.net" in out
     srv.shutdown()
+
+
+def test_status_sees_http_serve_bind(tmp_path, monkeypatch):
+    """`commons status` in another process used to print 'localhost only' while serve listened on a LAN IP."""
+    from commons_memory import expose
+    from commons_memory.store import Store
+    monkeypatch.setenv("COMMONS_HOME", str(tmp_path))
+    st = Store(str(tmp_path / "s.db"), embedder="hash")
+    assert expose.health(st)["health"] is None
+    info = expose.record_serve("192.168.50.111", 8770)
+    assert info["url"] == "http://192.168.50.111:8770" and expose.serve_info()["port"] == 8770
+    monkeypatch.setattr(expose, "probe", lambda url, timeout=5, ctx=None: {"ok": True, "status": 401})
+    h = expose.health(st)
+    assert h["provider"] == "http" and h["url"] == info["url"] and not h["public"] and h["health"]["ok"]
+    assert expose.record_serve("0.0.0.0", 8765)["url"] == "http://127.0.0.1:8765"
+    (tmp_path / "serve.json").write_text('{"pid": 999999999, "url": "x", "host": "h", "port": 1}')
+    assert expose.serve_info() is None  # dead process

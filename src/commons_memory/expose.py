@@ -150,9 +150,40 @@ def reachable_url(s: Store, default: str = "http://127.0.0.1:8765") -> str:
     return (st.get("url") or default).rstrip("/")
 
 
+def record_serve(host: str, port: int, tls: bool = False) -> dict:
+    """Written by `commons serve --transport http` so other processes (status, dashboard, the Docker healthcheck)
+    know the real bind instead of assuming 127.0.0.1:8765."""
+    h = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    info = {"host": host, "port": int(port), "pid": os.getpid(), "started_at": now(),
+            "url": f"{'https' if tls else 'http'}://{'[' + h + ']' if ':' in h else h}:{int(port)}"}
+    try:
+        _home().mkdir(parents=True, exist_ok=True)
+        (_home() / "serve.json").write_text(json.dumps(info))
+    except OSError:
+        pass
+    return info
+
+
+def serve_info() -> dict | None:
+    """The live `commons serve` HTTP bind, or None when nothing (still) runs."""
+    try:
+        d = json.loads((_home() / "serve.json").read_text())
+        os.kill(int(d["pid"]), 0)
+    except PermissionError:  # alive, owned by another user
+        return d
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return d
+
+
 def health(s: Store, timeout: float = 5) -> dict:
     st = state(s)
     if not st.get("url"):
+        sv = serve_info()
+        if sv:
+            from .dashboard import _private_host  # no tunnel, but the hub listens on HTTP (LAN / tailnet bind)
+            return {"provider": "http", "url": sv["url"], "public": not _private_host(sv["host"]),
+                    "health": probe(sv["url"], timeout)}
         return st | {"health": None}
     alive = True
     if st.get("pid"):

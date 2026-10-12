@@ -21,7 +21,10 @@ RUN python -m venv /opt/commons \
  && /opt/commons/bin/pip install "$(ls /wheels/*.whl)[${EXTRAS}]" \
  && /opt/commons/bin/pip uninstall -y build pip setuptools wheel || true
 # bake the default embedding model into the image (no download on first start; works offline)
-RUN FASTEMBED_CACHE_PATH=/opt/models /opt/commons/bin/python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+# chmod: huggingface_hub writes its tree cache 0600 as root, which the non-root runtime user can't read (it printed
+# "Ignoring corrupted tree cache file ... Permission denied" on every command)
+RUN FASTEMBED_CACHE_PATH=/opt/models /opt/commons/bin/python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" \
+ && chmod -R a+rX /opt/models
 
 # ---------- runtime
 FROM python:${PYTHON}-slim
@@ -57,7 +60,8 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8765 8766
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS "http://127.0.0.1:${COMMONS_PORT}/bus/health" >/dev/null || exit 1
+  CMD u=$(sed -n 's/.*"url": *"\([^"]*\)".*/\1/p' /data/serve.json 2>/dev/null); \
+      curl -fsSk "${u:-http://127.0.0.1:${COMMONS_PORT}}/bus/health" >/dev/null || exit 1
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/bin/tini", "--", "commons-entrypoint"]
 CMD ["serve"]

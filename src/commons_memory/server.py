@@ -178,13 +178,19 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         return _fmt(store.checkpoint(session_id, note, state, aid, related_ids), "json")
 
     @mcp.tool()
-    def handoff(session_id: str, summary: str, state: str = "", decisions: list[str] | None = None,
+    def handoff(summary: str = "", session_id: str = "", state: str = "", decisions: list[str] | None = None,
                 next_steps: list[str] | None = None, open_questions: list[str] | None = None,
-                relevant_ids: list[str] | None = None, to_agent: str = "", goal: str = "",
+                relevant_ids: list[str] | None = None, to_agent: str = "", goal: str = "", project: str = "",
                 agent: str = "", api_key: str = "") -> str:
-        """Write a structured handoff packet (goal, state, decisions, next steps, open questions, relevant ids).
-        If to_agent is set, a task is posted to that agent's inbox."""
+        """Write a structured handoff packet (summary, state, decisions, next steps, open questions, relevant ids)
+        so another AI can resume(). session_id is optional: without it your latest active session (in `project`)
+        is used, or a new one is opened. Next steps and open questions become leftovers. If to_agent is set, a
+        task is posted to that agent's inbox."""
+        if not summary.strip():
+            raise CommonsError("handoff needs `summary` (what you did and where it stands)")
         aid, _ = who(agent, api_key)
+        if not session_id:
+            session_id = store.session_for(aid, project or None, goal or summary)
         return _fmt(store.handoff(session_id, summary=summary, state=state, decisions=decisions, next_steps=next_steps,
                                   open_questions=open_questions, relevant_ids=relevant_ids, to_agent=to_agent or None,
                                   agent_id=aid, goal=goal or None), "json")
@@ -363,6 +369,8 @@ def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db:
     from .agent_http import mount as mount_agent
     inner = mount_agent(inner, build_agent_app(store))
     app = AuthMiddleware(inner, store, resource_url=public)
+    from .expose import record_serve
+    record_serve(host, port, tls=bool(os.environ.get("COMMONS_TLS_CERT")))
     ssl = {}
     if os.environ.get("COMMONS_TLS_CERT"):
         ssl = {"ssl_certfile": os.environ["COMMONS_TLS_CERT"], "ssl_keyfile": os.environ.get("COMMONS_TLS_KEY")}

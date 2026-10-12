@@ -696,7 +696,7 @@ def _main(argv: list[str] | None = None) -> int:
             from .expose import health, state
             xs = state(store) if args.no_probe else health(store, timeout=3)
             h = xs.get("health") or {}
-            print(f"network: {xs.get('provider', 'local')}" + (f" -> {xs['url']}" if xs.get("url") else " (localhost only)")
+            print(f"network: {xs.get('provider', 'local')}" + (f" -> {xs['url']}" if xs.get("url") else " (stdio only: no HTTP server running)")
                   + (" [PUBLIC]" if xs.get("public") else "")
                   + (f"  health: {'ok, auth enforced (401)' if h.get('ok') else 'status ' + str(h.get('status')) + ' ' + str(h.get('error') or '')}" if h else ""))
             print(f"db: {store.path} ({store.dialect})\n")

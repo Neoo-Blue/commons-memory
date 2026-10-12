@@ -117,3 +117,20 @@ async def test_core_tool_profile(tmp_path, monkeypatch):
         REQUESTED.reset(r)
     finally:
         PRINCIPAL.reset(tok)
+
+
+async def test_handoff_without_session_and_resume_reads_only(tmp_path):
+    """The PROMPT routine calls handoff() without session_start and resume() first thing; neither may fail or
+    create junk projects."""
+    st = Store(str(tmp_path / "h.db"), embedder="hash")
+    mcp = build_server(st)
+    key = json.loads(text(await mcp.call_tool("register_agent", {"name": "ho"})))["api_key"]
+    r = json.loads(text(await mcp.call_tool("resume", {"project": "typo-proj", "api_key": key})))
+    assert r["session_id"] is None and not st.q("SELECT 1 FROM projects WHERE name='typo-proj'")
+    h = json.loads(text(await mcp.call_tool("handoff", {"summary": "did A", "next_steps": ["do B"], "project": "web",
+                                                        "api_key": key})))
+    sid = h["packet"]["session_id"]
+    h2 = json.loads(text(await mcp.call_tool("handoff", {"summary": "did C", "project": "web", "api_key": key})))
+    assert h2["packet"]["session_id"] != sid  # first session was handed off; a new one opens
+    r = json.loads(text(await mcp.call_tool("resume", {"project": "web", "api_key": key})))
+    assert r["handoff"]["summary"] == "did C"

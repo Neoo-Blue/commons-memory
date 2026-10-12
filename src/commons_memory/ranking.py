@@ -97,3 +97,29 @@ def time_score(ts: float, win: tuple[float, float]) -> float:
 def recency(ts: float, ref: float, half_life_days: float) -> float:
     age = max(0.0, ref - ts) / 86400.0
     return 0.5 ** (age / max(0.1, half_life_days))
+
+
+def fuse(lex: dict[str, float], sem: dict[str, float], wk: float, wv: float) -> dict[str, float]:
+    """Fuse lexical and semantic candidates into one relevance score per id.
+
+    ``COMMONS_RANK_FUSION=rrf`` is reciprocal-rank fusion (k = ``COMMONS_RANK_RRF_K``). ``score`` is a convex
+    combination of min-max normalised scores, which keeps how *much* better a match is (RRF only keeps the order),
+    so the multiplicative signals applied afterwards can't override a clearly stronger match.
+    """
+    how = os.environ.get("COMMONS_RANK_FUSION", "rrf")
+    out: dict[str, float] = {}
+    if how == "rrf":
+        k = w("rrf_k", 60)
+        for src, wt in ((lex, wk), (sem, wv)):
+            for rank, iid in enumerate(sorted(src, key=lambda i: -src[i])):
+                out[iid] = out.get(iid, 0.0) + wt / (k + rank)
+        return out
+    for src, wt in ((lex, wk), (sem, wv)):
+        if not src:
+            continue
+        lo, hi = min(src.values()), max(src.values())
+        span = (hi - lo) or 1.0
+        for iid, v in src.items():
+            out[iid] = out.get(iid, 0.0) + wt * ((v - lo) / span if hi > lo else 1.0)
+    tot = (wk if lex else 0) + (wv if sem else 0)
+    return {i: v / tot for i, v in out.items()} if tot else out

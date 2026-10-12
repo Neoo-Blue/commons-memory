@@ -403,20 +403,22 @@ class Store:
         why: dict[str, dict] = {}
         query = (query or "").strip()
         wk, wv = R.w("keyword", 1.0), R.w("semantic", 1.0 if (self.embedder and self.embedder.name != "hash") else 0.7)
+        lex: dict[str, float] = {}  # id -> lexical score (higher is better)
+        sem: dict[str, float] = {}  # id -> cosine similarity
         if query and mode in ("hybrid", "keyword"):
             fts = R.fts_query(query)
             if fts and self.dialect == "postgres":
                 tsq = " | ".join(t.strip('"') for t in fts.split(" OR "))
-                rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
-                              f"WHERE f.tsv @@ to_tsquery('english', ?) AND {wsql} "
-                              f"ORDER BY ts_rank(f.tsv, to_tsquery('english', ?)) DESC LIMIT 200", [tsq] + args + [tsq])
+                rows = self.q(f"SELECT f.item_id AS id, ts_rank(f.tsv, to_tsquery('english', ?)) AS b FROM items_fts f "
+                              f"JOIN items i ON i.id=f.item_id WHERE f.tsv @@ to_tsquery('english', ?) AND {wsql} "
+                              f"ORDER BY b DESC LIMIT 200", [tsq, tsq] + args)
             elif fts:
-                rows = self.q(f"SELECT f.item_id AS id FROM items_fts f JOIN items i ON i.id=f.item_id "
+                rows = self.q(f"SELECT f.item_id AS id, -bm25(items_fts) AS b FROM items_fts f JOIN items i ON i.id=f.item_id "
                               f"WHERE items_fts MATCH ? AND {wsql} ORDER BY bm25(items_fts) LIMIT 200", [fts] + args)
             else:
                 rows = []
             for rank, r in enumerate(rows):
-                scores[r["id"]] = scores.get(r["id"], 0) + wk / (60 + rank)
+                lex[r["id"]] = float(r["b"] or 0)
                 why.setdefault(r["id"], {})["bm25_rank"] = rank + 1
         if query and mode in ("hybrid", "semantic") and self.embedder:
             qv = self.embedder.embed_query(query)
@@ -433,8 +435,9 @@ class Store:
             for rank, (sim, iid) in enumerate(sims):
                 if sim < floor:
                     break
-                scores[iid] = scores.get(iid, 0) + wv / (60 + rank)
+                sem[iid] = sim
                 why.setdefault(iid, {}).update(vec_rank=rank + 1, sim=round(sim, 4))
+        scores = R.fuse(lex, sem, wk, wv)
         if not query:
             rows = self.q(f"SELECT i.id FROM items i WHERE {wsql} ORDER BY i.created_at DESC LIMIT ?", args + [limit])
             ranked = [r["id"] for r in rows]
@@ -734,6 +737,17 @@ class Store:
             self.relate(sid, agent_id, "run_by", agent_id=agent_id)
         return {"session_id": sid, "goal": goal, "project": project}
 
+    def session_for(self, agent_id: str | None, project: str | None, goal: str) -> str:
+        """The caller's latest active session (in `project` when given), or a new one: handoff without session_start."""
+        where, args = ["status='active'"], []
+        if agent_id:
+            where.append("agent_id=?"); args.append(agent_id)
+        if project:
+            where.append("project_id=?"); args.append(self.project_id(project))
+        r = self.q(f"SELECT id FROM sessions WHERE {' AND '.join(where)} ORDER BY updated_at DESC LIMIT 1", args) \
+            if agent_id else []
+        return r[0]["id"] if r else self.session_start(" ".join(goal.split())[:120], agent_id, project)["session_id"]
+
     def _session(self, sid: str) -> sqlite3.Row:
         r = self.q("SELECT * FROM sessions WHERE id=?", (sid,))
         if not r:
@@ -786,11 +800,14 @@ class Store:
                max_tokens: int = 1200) -> dict:
         if not sid:
             where, args = "1=1", []
-            if project:
-                where, args = "project_id=?", [self.project_id(project)]
+            if project:  # look up only: a read must not create a project from a typo
+                p = self.q("SELECT id FROM projects WHERE name=? OR id=?", (project.strip(), project.strip()))
+                where, args = "project_id=?", [p[0]["id"] if p else "__none__"]
             r = self.q(f"SELECT id FROM sessions WHERE {where} ORDER BY updated_at DESC LIMIT 1", args)
             if not r:
-                raise CommonsError("no sessions found")
+                return {"session_id": None, "handoff": None,
+                        "note": "no sessions yet" + (f" in project {project!r}" if project else "") +
+                                ": nothing to resume, start fresh (handoff() before you stop)."}
             sid = r[0]["id"]
         s = self._session(sid)
         h = self.q("SELECT id FROM items WHERE session_id=? AND kind='handoff' ORDER BY created_at DESC LIMIT 1", (sid,))
