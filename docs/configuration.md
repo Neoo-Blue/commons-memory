@@ -11,7 +11,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
-| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, server.py |
+| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, server.py |
 | `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
 | `COMMONS_BACKUP_DIR` | — | Backup directory (default `~/.commons/backups`) | retention.py |
@@ -37,7 +37,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EMBEDDER` | `auto` | Embeddings: `auto` (fastembed if installed, else openai if COMMONS_EMBED_URL, else hash), `fastembed[:model]`, `openai[:model]`, `hash`, `none` | embed.py |
 | `COMMONS_EMBED_KEY_REF` | — | Secret reference for the embeddings endpoint key | embed.py |
 | `COMMONS_EMBED_MODEL` | `text-embedding-3-small` | Embedding model (fastembed default BAAI/bge-small-en-v1.5; openai default text-embedding-3-small) | embed.py |
-| `COMMONS_EMBED_THREADS` | — | ONNX threads for the fastembed embedder (default: all cores) | embed.py |
+| `COMMONS_EMBED_THREADS` | — | ONNX threads for the fastembed embedder (default: all cores) | embed.py, rerank.py |
 | `COMMONS_EMBED_URL` | — | OpenAI-compatible embeddings base URL (OpenAI, Ollama, LM Studio, vLLM) | embed.py |
 | `COMMONS_ENTROPY_MIN` | `4.3` | Shannon-entropy threshold for redacting unknown secret-looking strings | redact.py |
 | `COMMONS_ENTROPY_REDACT` | `1` | Redact high-entropy strings on write (`0` off) | redact.py |
@@ -47,7 +47,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, expose.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, cli_v7.py, expose.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
 | `COMMONS_HOOK_RECALL_SIM` | `0.6` | Min similarity for prompt-time recall snippets injected by hooks | capture.py |
 | `COMMONS_HOOK_TIMEOUT` | `2` | Seconds a hook waits for the server before queueing offline | capture.py |
@@ -56,6 +56,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_KB_CLUSTER` | `auto` | Misc-topic clustering for the knowledge base: `auto`, `semantic`, `tags` | kb.py |
 | `COMMONS_KB_CLUSTER_SIM` | `computed` | Cluster similarity threshold (0.55 with real embeddings, 0.35 with `hash`) | kb.py |
 | `COMMONS_KB_DEBOUNCE` | `10` | Seconds between KB rebuilds of a dirty project | kb.py |
+| `COMMONS_KB_MAX_STALE` | `600` | Seconds a dirty knowledge-base bucket may stay stale while writes keep arriving (default 600); otherwise it rebuilds after COMMONS_KB_DEBOUNCE seconds of quiet | kb.py |
 | `COMMONS_KB_MIN_TRUST` | `0.2` | Minimum author trust for a record to be cited in the KB | kb.py |
 | `COMMONS_KB_SUMMARIZER` | — | Shell command that post-processes each KB section (markdown on stdin/stdout) | kb.py |
 | `COMMONS_LEASE_SECONDS` | `900` | Default subtask lease; expired leases are reassigned | orchestrator.py |

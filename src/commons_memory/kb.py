@@ -42,6 +42,15 @@ def debounce() -> float:
     return float(os.environ.get("COMMONS_KB_DEBOUNCE", "10"))
 
 
+def due(st, t: float | None = None) -> bool:
+    """Rebuild a dirty bucket once writes have been quiet for the debounce period, or at the latest every
+    COMMONS_KB_MAX_STALE seconds. Throttling on the last build alone rebuilt big projects every 10 s for the whole of a
+    bulk import (each rebuild reads every item in the project), pinning a 4-core NAS."""
+    t = t or now()
+    return bool(st["dirty"]) and (t - (st["dirtied_at"] or 0) >= debounce() or
+                                  t - (st["built_at"] or 0) >= float(os.environ.get("COMMONS_KB_MAX_STALE", "600")))
+
+
 PROTOCOL = re.compile(r"(?im)^\s*(?:VERDICT|LEFTOVER|PREFERENCE|TOKENS|Applied preference):.*$")
 
 
@@ -221,7 +230,7 @@ class KB:
     def refresh_dirty(self, force: bool = False) -> list[str]:
         out = []
         for r in self.s.q("SELECT * FROM kb_state WHERE dirty=1"):
-            if force or now() - (r["built_at"] or 0) >= debounce():
+            if force or due(r):
                 b = r["bucket"]
                 if b.startswith("misc/"):
                     b = "misc"
@@ -235,7 +244,7 @@ class KB:
         if never and bucket != "misc" and not bucket.startswith("misc/") \
                 and not self.s.q("SELECT 1 FROM projects WHERE name=?", (bucket,)):
             return False  # unknown bucket: don't materialize an empty KB for an arbitrary (typo'd) name
-        if never or (st and st[0]["dirty"] and now() - (st[0]["built_at"] or 0) >= debounce()):
+        if never or (st and due(st[0])):
             self.build("misc" if bucket.startswith("misc/") else bucket)
             return False
         return bool(st and st[0]["dirty"])
