@@ -106,8 +106,9 @@ def _lme_one(args):
 def longmemeval(path: str, out: str, embedder: str = "auto", granularity: str = "turn", limit: int | None = None,
                 workers: int = 4, rerank: bool = False) -> dict:
     data = [q for q in json.load(open(path)) if q.get("answer_session_ids") and not q["question_id"].endswith("_abs")]
-    if limit:
-        data = data[:limit]
+    if limit:  # a seeded random sample: the file is ordered by question type, so the first N would be one type
+        import random
+        data = random.Random(7).sample(data, min(limit, len(data)))
     return _run("longmemeval", _lme_one, [(q, embedder, granularity, rerank) for q in data], out, workers,
                 {"dataset": os.path.basename(path), "granularity": granularity, "embedder": embedder, "rerank": rerank},
                 group_key="type")
