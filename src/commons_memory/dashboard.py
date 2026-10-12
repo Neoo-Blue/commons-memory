@@ -793,7 +793,8 @@ main{padding:20px 22px 60px;max-width:1440px;width:100%;margin:0 auto;animation:
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:16px;box-shadow:var(--sh);overflow-x:auto}
 .card h3{margin:0 0 10px;font-size:14.5px;letter-spacing:-.01em;display:flex;flex-wrap:wrap;align-items:center;gap:8px}.card h2{letter-spacing:-.02em}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:16px}.grid .card{margin:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:16px}
+.grid8{grid-template-columns:repeat(8,minmax(0,1fr))}@media (max-width:1380px){.grid8{grid-template-columns:repeat(4,minmax(0,1fr))}}@media (max-width:620px){.grid8{grid-template-columns:repeat(2,minmax(0,1fr))}}.grid .card{margin:0}
 .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.grid4 .card{margin:0}
 .stat .mut{font-size:12px}.stat{overflow:hidden}.stat svg{display:block;max-width:100%;height:auto}.big{font-size:27px;font-weight:750;letter-spacing:-.03em}
 .stat.hero{background:linear-gradient(var(--acc-soft),var(--acc-soft)),var(--card);border-color:color-mix(in srgb,var(--acc) 35%,transparent)}.stat.hero .big{color:var(--acc)}
@@ -992,7 +993,7 @@ const V={
 async Overview(){const [o,act,us,ag]=await Promise.all([api("overview"),api("activity"),api("usage_series?days=14"),api("agents")]);
 const cost=[...Array(us.days).keys()].map(d=>Object.values(us.series).reduce((a,v)=>a+v[d],0));
 const st=(k,l,extra="")=>`<div class="card stat"><div class="mut">${l}</div><div class="big">${E(o[k])}</div>${extra}</div>`;
-return `<div class="grid"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
+return `<div class="grid grid8"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
 ${st("running_jobs","Running jobs")}${st("agents","Agents")}${st("items","Memories",`<div class="mut" style="font-size:11px">tokens/day</div>${spark(us.tokens,150,26)}`)}${st("open_leftovers","Open leftovers")}${st("conflicts","Conflicts")}${st("entities","Graph entities")}${st("relations","Relations")}</div>
 <div class="cols"><div class="card"><h3>Agents now</h3>${ag.length?`<table>${ag.slice(0,10).map(x=>{const st=agentState(x);const cls=st.text==="never seen"?"offline":(x.claims.length?"busy":st.cls);const doing=st.text==="never seen"?'<span class="mut">offline</span>':(x.claims.length?x.claims.map(c=>pill(c.type)+" "+E(c.title.slice(0,40))).join("<br>"):'<span class="mut">idle</span>');return `<tr><td><span class="dot ${cls}" title="${E(cls)}"></span><b>${E(x.name)}</b> <span class="mut">${E(x.platform||"")}</span></td><td>${doing}</td><td class="mut">${E(st.text)}</td></tr>`}).join("")}</table>`:empty("🤖","No agents yet","<div><code>commons connect --agent claude-code --platform claude-code</code></div>")}</div>
 <div class="card"><h3>Live activity</h3>${act.length?`<ul class="feed">${act.map((e,i)=>`<li style="animation-delay:${i*18}ms"><span class="t">${ago(e.ago)}</span><span>${pill(e.type)} ${E(e.text)} ${e.agent?`<span class="mut">· ${E(e.agent)}</span>`:""}</span></li>`).join("")}</ul>`:empty("✨","Quiet so far","<div>Activity from agents, the librarian and MCP calls streams in here.</div>")}</div></div>

@@ -187,7 +187,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     from .prefs import Preferences
     have = known(s, [i.get("src") for i in items])
     queued_already = queued_srcs(s, [i.get("src") for i in items])
-    added, skipped, prefs, queued, ledger, errors = 0, 0, 0, 0, 0, []
+    added, skipped, prefs, queued, ledger, errors, new_ids = 0, 0, 0, 0, 0, [], []
     s.defer_embed = True
     try:
         for it in items:
@@ -223,6 +223,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
             except CommonsError as e:
                 errors.append(f"{src}: {e}")
                 continue
+            new_ids.append(r["id"])
             if src:
                 s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", r["id"]))
                 have.add(src)
@@ -233,7 +234,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
             added += 1
     finally:
         s.defer_embed = False
-    emb = s.reindex() if added else {"done": 0}
+    emb = {"done": s.embed_ids(new_ids)}  # only this call's rows: a backlog is the background reindex's job
     return {"added": added, "skipped": skipped, "queued": queued, "decided": ledger, "preferences": prefs,
             "embedded": emb.get("done", 0), "errors": errors[:20], "error_count": len(errors)}
 

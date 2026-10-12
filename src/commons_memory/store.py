@@ -718,6 +718,25 @@ class Store:
         finally:
             self._reindexing.release()
 
+    def embed_ids(self, ids: list[str], batch: int = 8) -> int:
+        """Vectors for exactly these items (a bulk write's own rows), leaving any older backlog to reindex()."""
+        if not self.embedder or not ids:
+            return 0
+        name, done = self.embedder.name, 0
+        for k in range(0, len(ids), batch):
+            ch = ids[k:k + batch]
+            rows = self.q(f"SELECT i.id, i.title, i.summary, i.content FROM items i LEFT JOIN embeddings e ON e.item_id=i.id "
+                          f"AND e.model=? WHERE i.id IN ({','.join('?' * len(ch))}) AND e.item_id IS NULL", [name] + ch)
+            if not rows:
+                continue
+            vecs = self.embedder.embed([f"{r['title'] or ''}\n{r['summary'] or ''}\n{r['content'] or ''}"[:4000] for r in rows])
+            for r, v in zip(rows, vecs):
+                self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (r["id"], name, pack(v)))
+                if self._pgvec:
+                    self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(v), r["id"]))
+            done += len(rows)
+        return done
+
     def _reindex(self, limit: int | None, batch: int, force: bool) -> dict:
         name = self.embedder.name
         cond = "" if force else "WHERE e.item_id IS NULL OR e.model<>?"
