@@ -411,7 +411,8 @@ def heartbeat(s: Store, agent_id: str, *, status: str | None = None, sleeping: b
 
 
 def presence(s: Store, agent_id: str) -> dict:
-    r = s.q("SELECT p.*, a.name FROM agents a LEFT JOIN agent_presence p ON p.agent_id=a.id WHERE a.id=?", (agent_id,))
+    r = s.q("SELECT p.*, a.name, a.last_seen AS agent_seen FROM agents a LEFT JOIN agent_presence p "
+            "ON p.agent_id=a.id WHERE a.id=?", (agent_id,))
     if not r:
         raise CommonsError("unknown agent")
     r = dict(r[0])
@@ -427,9 +428,11 @@ def presence(s: Store, agent_id: str) -> dict:
         state = "offline"
     chans = [c["kind"] for c in s.q("SELECT kind FROM wake_channels WHERE agent_id=? AND enabled=1", (agent_id,))]
     wakeable = bool(chans) or live > 0
+    seen = bool(r.get("agent_seen"))
     return {"agent": r["name"], "id": agent_id, "state": state, "status": r.get("status_text") or "",
             "last_heartbeat": r.get("last_heartbeat"), "live_connections": live, "channels": chans,
-            "wakeable": wakeable, "ready": state in ("online", "idle") or wakeable, "client": r.get("client")}
+            "wakeable": wakeable, "ready": state in ("online", "idle") or wakeable, "client": r.get("client"),
+            "seen": seen, "last_seen": r.get("agent_seen") or None}
 
 
 def board(s: Store) -> list[dict]:

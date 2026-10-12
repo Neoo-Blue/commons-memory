@@ -45,7 +45,8 @@ class API:
                             (a["id"],))
             prof = json.loads(a["profile"] or "{}")
             out.append({"id": a["id"], "name": a["name"], "platform": a["platform"], "vendor": a["vendor"],
-                        "model": a["model"], "last_seen": iso(a["last_seen"]), "availability": prof.get("availability"),
+                        "model": a["model"], "last_seen": iso(a["last_seen"]) if a["last_seen"] else None,
+                        "seen": bool(a["last_seen"]), "availability": prof.get("availability"),
                         "expertise": prof.get("expertise", {}), "claims": claims,
                         "last_activity": (dict(last[0]) | {"created_at": iso(last[0]["created_at"])}) if last else None,
                         "learned": self.o.profiles.get(a["id"])["learned"]})
@@ -80,14 +81,17 @@ class API:
                 "daily": self.u.summary("day"), "spent_24h": self.u.spent_today()}
 
     def search(self, q):
-        return self.s.search(q.get("q", ""), project=q.get("project") or None, max_tokens=int(q.get("max_tokens", 2000)),
-                             limit=50)
+        kinds = [k for k in (q.get("kind") or "").split(",") if k] or None
+        conflict = q.get("conflict") in ("1", "true", "yes")
+        return self.s.search(q.get("q", ""), project=q.get("project") or None, kinds=kinds,
+                             conflict=True if conflict else None, max_tokens=int(q.get("max_tokens", 4000)),
+                             limit=int(q.get("limit", 50)))
 
     def timeline(self, q):
         return self.s.timeline(project=q.get("project") or None, limit=100, max_tokens=4000)
 
     def item(self, q):
-        return self.s.expand(q["id"], depth=1)
+        return self.s.expand(q["id"], depth=1, max_tokens=int(q.get("max_tokens", 8000)))
 
     def conflicts(self, q):
         out = []
@@ -390,7 +394,62 @@ class API:
             return rebuild(self.s)
         if path == "/api/lease/revoke":
             return self.b.revoke(body["id"])
+        if path in ("/api/item/update", "/api/item/delete", "/api/items/bulk"):
+            return self._items(path, body)
         raise CommonsError("unknown action")
+
+    def _items(self, path, body):
+        who = self.s.ensure_agent("dashboard-user")
+        if path == "/api/item/update":
+            kw = {}
+            if body.get("content") is not None:
+                kw["content"] = body["content"]
+            if body.get("title") is not None:
+                kw["title"] = body["title"]
+            if "tags" in body and body.get("tags") is not None:
+                raw = body["tags"]
+                if isinstance(raw, str):
+                    raw = [t.strip() for t in raw.split(",")]
+                if not isinstance(raw, list):
+                    raise CommonsError("tags must be a list")
+                kw["tags"] = raw
+            if "project" in body:
+                kw["project"] = body.get("project") or ""
+            return self.s.update_item(body["id"], agent_id=who, **kw)
+        if path == "/api/item/delete":
+            return self.s.delete_item(body["id"], agent_id=who)
+        ids = body.get("ids") or []
+        if not isinstance(ids, list):
+            raise CommonsError("ids must be a list")
+        action = body.get("action")
+        if action not in ("delete", "tag", "untag", "move"):
+            raise CommonsError("unknown bulk action")
+        tag = (body.get("tag") or "").strip().lower()
+        if action in ("tag", "untag") and not tag:
+            raise CommonsError("tag required")
+        if action == "move" and "project" not in body:
+            raise CommonsError("project required")
+        out = []
+        for iid in ids:
+            try:
+                if action == "delete":
+                    out.append(self.s.delete_item(iid, agent_id=who))
+                elif action == "move":
+                    out.append(self.s.update_item(iid, project=body.get("project") or "", agent_id=who))
+                else:
+                    item = self.s.get_item(iid)
+                    if not item:
+                        raise CommonsError(f"unknown id {iid}")
+                    tags = list(item.get("tags") or [])
+                    if action == "tag":
+                        if tag not in tags:
+                            tags.append(tag)
+                    else:
+                        tags = [t for t in tags if t != tag]
+                    out.append(self.s.update_item(iid, tags=tags, agent_id=who))
+            except CommonsError as e:
+                out.append({"id": iid, "error": str(e)})
+        return {"results": out}
 
 
 def metrics(api: API) -> str:
@@ -669,16 +728,17 @@ def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, backg
 
 PAGE = r"""<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><title>Commons dashboard</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c9cff'/%3E%3C/svg%3E">
 <style>
-:root{--bg:#0b0d13;--bg2:#10131c;--card:rgba(24,28,40,.72);--card2:#161a26;--line:rgba(255,255,255,.07);--fg:#e8eaf2;--mut:#8a93ab;
+:root{--bg:#0b0d13;--bg2:#10131c;--card:rgba(24,28,40,.72);--card2:#161a26;--line:rgba(255,255,255,.07);--fg:#e8eaf2;--mut:#b4bdd4;
 --acc:#7c9cff;--acc2:#b07cff;--grad:linear-gradient(135deg,#7c9cff,#b07cff 55%,#ff7cc8);--ok:#3ddc97;--bad:#ff5d73;--warn:#ffc35c;
 --r:14px;--sh:0 8px 30px rgba(0,0,0,.35);--font:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"JetBrains Mono",Menlo,monospace}
-[data-theme=light]{--bg:#f5f6fb;--bg2:#eceff7;--card:rgba(255,255,255,.85);--card2:#fff;--line:rgba(10,20,50,.09);--fg:#141826;--mut:#5d6680;--sh:0 6px 24px rgba(30,40,90,.08)}
+[data-theme=light]{--bg:#f5f6fb;--bg2:#eceff7;--card:rgba(255,255,255,.85);--card2:#fff;--line:rgba(10,20,50,.09);--fg:#141826;--mut:#3e4760;--sh:0 6px 24px rgba(30,40,90,.08)}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.5 var(--font);background:var(--bg);color:var(--fg);
 background-image:radial-gradient(1200px 600px at 85% -10%,rgba(124,156,255,.13),transparent),radial-gradient(900px 500px at -10% 110%,rgba(176,124,255,.10),transparent);background-attachment:fixed}
 a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:6px}
-.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}.app>div{min-width:0}
 aside{position:sticky;top:0;height:100vh;overflow:auto;padding:16px 10px;border-right:1px solid var(--line);background:linear-gradient(180deg,var(--bg2),transparent)}
 .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;padding:4px 10px 16px;letter-spacing:-.02em}
 .logo i{width:30px;height:30px;border-radius:9px;background:var(--grad);display:grid;place-items:center;font-style:normal;color:#fff;box-shadow:0 4px 18px rgba(124,156,255,.45)}
@@ -688,14 +748,16 @@ aside{position:sticky;top:0;height:100vh;overflow:auto;padding:16px 10px;border-
 .nav svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .nav kbd{margin-left:auto;font-size:10px;opacity:.5}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:12px 22px;backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg) 70%,transparent);border-bottom:1px solid var(--line)}
-header h1{margin:0;font-size:19px;letter-spacing:-.02em}.spacer{flex:1}
+header h1{margin:0;font-size:19px;letter-spacing:-.02em;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.spacer{flex:1}
+#ks{display:flex;align-items:center;gap:8px;flex:none}#ks button{white-space:nowrap}
 .search{display:flex;align-items:center;gap:8px;min-width:260px;padding:7px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--mut);cursor:pointer}
 kbd{font:11px var(--mono);padding:1px 6px;border-radius:5px;border:1px solid var(--line);background:var(--bg2);color:var(--mut)}
 main{padding:20px 22px 60px;max-width:1440px;width:100%;margin:0 auto;animation:fade .25s ease}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.card{background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:16px;box-shadow:var(--sh)}
-.card h3{margin:0 0 10px;font-size:14.5px;letter-spacing:-.01em}.card h2{letter-spacing:-.02em}
+.card{background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:16px;box-shadow:var(--sh);overflow-x:auto}
+.card h3{margin:0 0 10px;font-size:14.5px;letter-spacing:-.01em;display:flex;flex-wrap:wrap;align-items:center;gap:8px}.card h2{letter-spacing:-.02em}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:14px;margin-bottom:16px}.grid .card{margin:0}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.grid4 .card{margin:0}
 .stat .mut{font-size:12px;text-transform:capitalize}.big{font-size:27px;font-weight:750;letter-spacing:-.03em}
 .stat.hero{background:var(--grad);color:#fff;border:0}.stat.hero .mut{color:rgba(255,255,255,.85)}
 .cols{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.cols>.card{margin:0}
@@ -712,13 +774,14 @@ button:hover{border-color:var(--acc)}button:active{transform:scale(.97)}button.p
 input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:6px 10px}
 .bar{height:10px;border-radius:99px;background:var(--grad)}pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--bg2);padding:10px;border-radius:10px;max-height:320px;overflow:auto;border:1px solid var(--line)}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mut);margin-right:6px;vertical-align:middle}
-.dot.live{background:var(--ok);box-shadow:0 0 0 0 rgba(61,220,151,.6);animation:pulse 1.8s infinite}.dot.busy{background:var(--warn);animation:pulse 1.2s infinite}.dot.idle{background:#4b5470}
+.dot.live{background:var(--ok);box-shadow:0 0 0 0 rgba(61,220,151,.6);animation:pulse 1.8s infinite}.dot.busy{background:var(--warn);animation:pulse 1.2s infinite}.dot.idle{background:#6d7896}.dot.offline{background:#5c657c;box-shadow:none;animation:none}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(61,220,151,.55)}70%{box-shadow:0 0 0 9px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}
 .feed{list-style:none;margin:0;padding:0;max-height:430px;overflow:auto}.feed li{display:flex;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);animation:slide .35s ease both}
 .feed li .t{min-width:46px;color:var(--mut);font-size:11px;text-align:right}@keyframes slide{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
 .empty{text-align:center;padding:34px 10px;color:var(--mut)}.empty b{display:block;color:var(--fg);font-size:15px;margin:8px 0 4px}.empty .ico{font-size:30px;opacity:.8}
 #toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:50}
 .toast{min-width:240px;max-width:380px;padding:11px 14px;border-radius:12px;background:var(--card2);border:1px solid var(--line);box-shadow:var(--sh);animation:slide .25s ease;font-size:13px}
+.toast button{margin-left:8px;padding:3px 8px}.mact button{padding:4px 8px}.bulk input,.bulk select{min-width:140px}
 .toast.ok{border-left:3px solid var(--ok)}.toast.err{border-left:3px solid var(--bad)}
 #pal{position:fixed;inset:0;background:rgba(5,7,12,.55);backdrop-filter:blur(4px);display:none;z-index:40;align-items:flex-start;justify-content:center;padding-top:12vh}
 #pal.on{display:flex}#pal .box{width:min(640px,92vw);background:var(--card2);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden;animation:fade .15s}
@@ -747,9 +810,33 @@ input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px sol
 .ix{font:11px var(--mono);color:var(--acc)}.cnt{color:var(--mut);font-size:11px}.outline{white-space:pre;font:12.5px/1.55 var(--mono)}
 iframe{width:100%;height:76vh;border:0;border-radius:12px;background:var(--bg2)}.kb{line-height:1.7}.cite{font-size:11px;color:var(--acc)}
 .menu-btn{display:none}
+.seg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.toolbar input[type=search],.toolbar input#mq{flex:1;min-width:160px}
+.chip{border-radius:99px;background:transparent}
+.chip.on{background:rgba(124,156,255,.16);border-color:var(--acc);color:var(--fg)}
+.mlist{min-width:0}
+.mrow{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:4px 10px;align-items:start;padding:10px 2px;border-bottom:1px solid var(--line)}
+.mrow.cur{background:rgba(124,156,255,.1);border-radius:10px}
+.mrow.on{box-shadow:inset 3px 0 0 var(--acc)}
+.mmeta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.msum{grid-column:2;color:var(--fg);overflow-wrap:anywhere}
+.mact{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.drawer,.medit{grid-column:1/-1;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:4px}
+.medit textarea{width:100%;min-height:140px;font:13px/1.45 var(--mono);resize:vertical}
+.medit input{width:min(420px,100%);margin-top:8px}
+.bulk{position:sticky;bottom:10px;z-index:6;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;margin-top:12px;border:1px solid var(--acc);border-radius:12px;background:var(--card2);box-shadow:var(--sh)}
+.skel{height:14px;border-radius:8px;margin:12px 0;background:linear-gradient(90deg,var(--line),rgba(124,156,255,.25),var(--line));background-size:200% 100%;animation:sh 1.1s linear infinite}
+.skel.w{width:70%}@keyframes sh{to{background-position:-200% 0}}
+pre,code{overflow-wrap:anywhere}
 @media (max-width:900px){.app{grid-template-columns:1fr}aside{position:fixed;z-index:30;width:250px;transform:translateX(-100%);transition:transform .2s;background:var(--bg2)}
-aside.open{transform:none}.menu-btn{display:inline-block}.search{min-width:0}.search span{display:none}.cols{grid-template-columns:1fr}main{padding:14px}
-div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1fr"]{grid-template-columns:1fr!important}}
+aside.open{transform:none}.menu-btn{display:inline-block}.search{min-width:0;flex:0 0 auto}.search span{display:none}.cols{grid-template-columns:1fr}main{padding:14px}
+.grid4{grid-template-columns:1fr 1fr}
+div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1fr"]{grid-template-columns:1fr!important}
+.card table{min-width:640px}
+header{padding:10px 12px;gap:8px}header h1{font-size:16px;flex:1}
+.mrow{grid-template-columns:28px minmax(0,1fr)}.mact{grid-column:1/-1;justify-content:flex-start}.msum{grid-column:2}}
+@media (max-width:520px){.grid4{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="app"><aside id="side"><div class="logo"><i>⛬</i>Commons</div><nav class="nav" id="tabs" aria-label="Pages"></nav></aside>
@@ -765,8 +852,10 @@ const GROUPS=[["Live",["Overview","Mission control","Agents","Presence","Orchest
 let [tab,hq]=(decodeURI(location.hash.slice(1))||"Overview").split("?");if(!T.includes(tab))tab="Overview";
 if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get("scope"),id:u.get("id")||""};if(u.get("bucket"))window.kb=u.get("bucket");if(u.get("path"))window.oc_jump=u.get("path");if(u.get("mode"))window.oc_mode=u.get("mode");if(u.get("cite"))setTimeout(()=>cite(u.get("cite")),800)}
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const J=v=>E(JSON.stringify(v??""));
 const api=p=>fetch("/api/"+p,{credentials:"same-origin"}).then(r=>r.json());
-const post=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json()).then(r=>{toast(r&&r.error?r.error:(p.replace(/\//g," › ")+" ✓"),r&&r.error?"err":"ok");render()}).catch(e=>toast(String(e),"err"));
+const postRaw=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
+const post=(p,b)=>postRaw(p,b).then(r=>{toast(r&&r.error?r.error:(p.replace(/\//g," › ")+" ✓"),r&&r.error?"err":"ok");render();return r}).catch(e=>toast(String(e),"err"));
 function toast(msg,k="ok"){const t=document.createElement("div");t.className="toast "+k;t.textContent=msg;$("#toasts").appendChild(t);setTimeout(()=>{t.style.opacity=0;t.style.transition="opacity .4s"},3200);setTimeout(()=>t.remove(),3700)}
 const empty=(ico,title,hint)=>`<div class="empty"><div class="ico">${ico}</div><b>${E(title)}</b>${hint||""}</div>`;
 const ago=s=>s<60?s+"s":s<3600?Math.round(s/60)+"m":s<86400?Math.round(s/3600)+"h":Math.round(s/86400)+"d";
@@ -787,13 +876,64 @@ async function palRender(q){const pages=T.filter(t=>t.toLowerCase().includes(q.t
 palItems=pages;if(q.length>1){try{palItems=pages.concat(await api("palette?q="+encodeURIComponent(q)))}catch(e){}}palSel=0;palDraw()}
 function palDraw(){$("#palr").innerHTML=palItems.map((x,i)=>`<div class="it ${i==palSel?"sel":""}" onclick="palGo(${i})">${x.kind=="page"?"↪":x.kind=="place"?"⌖":"◆"} ${E(x.label)}<small>${E(x.sub||"")}</small></div>`).join("")||'<div class="empty">No results</div>'}
 function palGo(i){const x=palItems[i];if(!x)return;palClose();if(x.kind=="page")go(x.go);else if(x.kind=="place"){oc_root=x.path.includes("/")?x.path.split("/")[0]:"workspace";oc_jump=x.path;go("Org chart")}else{mq=x.id;go("Memory");setTimeout(()=>show(x.id),400)}}
-let palT;document.addEventListener("input",e=>{if(e.target.id=="palq"){clearTimeout(palT);palT=setTimeout(()=>palRender(e.target.value),120)}});
+let palT;document.addEventListener("input",e=>{
+if(e.target.id=="palq"){clearTimeout(palT);palT=setTimeout(()=>palRender(e.target.value),120)}
+if(e.target.id=="mq"){window.mq=e.target.value;window._mcaret=e.target.selectionStart;window._mfocus=true;clearTimeout(window._mqT);window._mqT=setTimeout(()=>render(),250)}
+if(e.target.id=="med"||e.target.id=="metags")window._draft={id:window.medit,content:($("#med")||{}).value||"",tags:($("#metags")||{}).value||""}});
 document.addEventListener("keydown",e=>{const inField=/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+const ed=document.activeElement&&(document.activeElement.id==="med"||document.activeElement.id==="metags");
 if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()=="k"){e.preventDefault();pal();return}
+if(ed&&e.key==="Escape"){e.preventDefault();window.medit=null;window._draft=null;render();return}
+if(ed&&e.key==="Enter"&&(e.metaKey||e.ctrlKey)){e.preventDefault();memSave(window.medit);return}
 if($("#pal").classList.contains("on")){if(e.key=="Escape")palClose();else if(e.key=="ArrowDown"){palSel=Math.min(palItems.length-1,palSel+1);palDraw();e.preventDefault()}else if(e.key=="ArrowUp"){palSel=Math.max(0,palSel-1);palDraw();e.preventDefault()}else if(e.key=="Enter")palGo(palSel);return}
-if(inField)return;if(e.key=="/"){e.preventDefault();pal()}else if(e.key=="t")theme();else if(e.key=="r")render();else if(e.key=="?")toast("Shortcuts: ⌘K or / search · 1-9 pages · [ ] prev/next page · t theme · r refresh · +/- zoom org chart","ok");
+if(inField)return;
+if(tab==="Memory"&&!e.metaKey&&!e.ctrlKey&&!e.altKey){
+if(e.key==="j"||e.key==="k"){e.preventDefault();memMove(e.key==="j"?1:-1);return}
+if(e.key==="x"){e.preventDefault();const row=(window.mrows||[])[window.mcur];if(row)memSel(row.id,false,window.mcur);return}
+if(e.key==="e"){e.preventDefault();const row=(window.mrows||[])[window.mcur];if(row)memEdit(row.id);return}
+if(e.key==="Enter"){e.preventDefault();const row=(window.mrows||[])[window.mcur];if(row){window.medit=null;window.mopen=window.mopen===row.id?null:row.id;render()}return}}
+if(e.key=="/"){e.preventDefault();if(tab==="Memory"){const el=$("#mq");if(el)el.focus();else window._mfocus=true}else pal()}
+else if(e.key=="t")theme();else if(e.key=="r")render();else if(e.key=="?")toast("Shortcuts: cmd-K or / search, j/k move, x select, e edit, enter expand, 1-9 pages, [ ] prev/next, t theme, r refresh","ok");
 else if(/^[1-9]$/.test(e.key))go(T[+e.key-1]);else if(e.key=="]"||e.key=="[")go(T[(T.indexOf(tab)+(e.key=="]"?1:T.length-1))%T.length]);else if((e.key=="+"||e.key=="=")&&tab=="Org chart")ocZoom(1.15);else if(e.key=="-"&&tab=="Org chart")ocZoom(1/1.15)});
 const pill=s=>`<span class="pill ${E(s)}">${E(s)}</span>`;
+function agentState(x){const ls=x&&x.last_seen;const t=ls?Date.parse(ls):NaN;if(!ls||!(t>864e5))return {cls:"offline",text:"never seen"};const age=(Date.now()-t)/1000;return {cls:x.claims&&x.claims.length?"busy":age<300?"live":"idle",text:ago(Math.round(age))+" ago"}}
+function dotFor(s){return s==="online"||s==="live"?"live":s==="busy"?"busy":s==="idle"?"idle":s==="offline"?"offline":"busy"}
+function rel(iso){const t=Date.parse(iso||"");if(!(t>864e5))return "";return ago(Math.max(0,Math.round((Date.now()-t)/1000)))+" ago"}
+function memIds(){const vis=new Set((window.mrows||[]).map(x=>x.id));return (window.msel||[]).filter(id=>vis.has(id))}
+function memSel(id,shift,i){window.msel=window.msel||[];const rows=window.mrows||[];
+if(shift&&window.manchor!=null){const a=Math.min(window.manchor,i),z=Math.max(window.manchor,i);for(let k=a;k<=z;k++){const rid=rows[k]&&rows[k].id;if(rid&&!window.msel.includes(rid))window.msel.push(rid)}}
+else{window.msel=window.msel.includes(id)?window.msel.filter(x=>x!==id):window.msel.concat([id]);window.manchor=i}
+window.mcur=i;render()}
+function memMove(d){const rows=window.mrows||[];if(!rows.length)return;let i=(window.mcur==null||window.mcur<0?(d>0?-1:0):window.mcur)+d;window.mcur=Math.max(0,Math.min(rows.length-1,i));render();setTimeout(()=>{const el=document.querySelector(".mrow.cur");if(el)el.scrollIntoView({block:"nearest"})},20)}
+function memEdit(id){window.mopen=id;window.medit=id;window._draft=null;const i=(window.mrows||[]).findIndex(x=>x.id===id);if(i>=0)window.mcur=i;render();setTimeout(()=>{const t=$("#med");if(t){t.focus();t.setSelectionRange(t.value.length,t.value.length)}},40)}
+async function memSave(id){const ta=$("#med");if(!ta||!id)return;const tags=($("#metags").value||"").split(",").map(s=>s.trim()).filter(Boolean);const r=await postRaw("item/update",{id,content:ta.value,tags});if(!r||r.error){toast((r&&r.error)||"save failed","err");return}window.medit=null;window._draft=null;toast("saved","ok");render()}
+function memDel(id){window.mhide=window.mhide||{};if(window.mhide[id])return;window.mhide[id]=setTimeout(async()=>{delete window.mhide[id];const r=await postRaw("item/delete",{id});if(!r||r.error){toast((r&&r.error)||"delete failed","err");render();return}window.msel=(window.msel||[]).filter(x=>x!==id);if(window.mopen===id){window.mopen=null;window.medit=null}},5000);
+const t=document.createElement("div");t.className="toast ok";t.append("Deleted. ");const b=document.createElement("button");b.type="button";b.textContent="Undo";b.onclick=()=>{clearTimeout(window.mhide[id]);delete window.mhide[id];t.remove();render()};t.appendChild(b);$("#toasts").appendChild(t);setTimeout(()=>{t.style.opacity=0;t.style.transition="opacity .4s"},4600);setTimeout(()=>t.remove(),5200);render()}
+function memBulkDone(r){if(!r||r.error){toast((r&&r.error)||"bulk failed","err");return}const bad=(r.results||[]).filter(x=>x.error);toast(bad.length?bad.length+" failed: "+bad[0].error:"updated",bad.length?"err":"ok");window.mbulk="";render()}
+function memRow(x,i,detail){const cur=i===window.mcur,open=window.mopen===x.id,on=(window.msel||[]).includes(x.id);let extra="";
+if(open&&detail&&detail.id===x.id){if(window.medit===x.id){const draft=window._draft&&window._draft.id===x.id?window._draft:null;const body=draft?draft.content:(detail.content||detail.statement||detail.text||"");const tags=draft?draft.tags:((detail.tags||[]).join(", "));
+extra=`<div class="medit"><textarea id="med" aria-label="Content">${E(body)}</textarea><div><input id="metags" aria-label="Tags" value="${E(tags)}" placeholder="tags, comma separated"> <button type="button" class="pri" data-m="save" data-id="${E(x.id)}">save</button> <button type="button" data-m="cancel">cancel</button> <span class="mut">esc cancels, cmd or ctrl+enter saves</span></div></div>`}
+else{const body=detail.content||detail.statement||detail.text||JSON.stringify(detail,null,1);extra=`<div class="drawer"><div class="mut">${E(detail.title||"")} ${detail.tags&&detail.tags.length?"· "+E(detail.tags.join(", ")):""}</div><pre>${E(String(body))}</pre></div>`}}
+return `<div class="mrow${cur?" cur":""}${on?" on":""}" data-i="${i}"><input type="checkbox" data-m="sel" data-id="${E(x.id)}" data-i="${i}" ${on?"checked":""} aria-label="Select"><div class="mmeta">${pill(x.kind)} ${x.project?`<span class="mut">${E(x.project)}</span>`:""} ${x.agent?`<span class="mut">${E(x.agent)}</span>`:""} <span class="mut">${E(rel(x.created_at))}</span>${x.conflict?' <b class="failed">conflict</b>':""}${x.authenticated?"":' <span class="mut" title="written without an api key">unverified</span>'}</div><div class="mact"><button type="button" data-m="open" data-id="${E(x.id)}">${open?"close":"expand"}</button> <button type="button" data-m="edit" data-id="${E(x.id)}">edit</button> <button type="button" data-m="del" data-id="${E(x.id)}">delete</button> <button type="button" data-m="graph" data-id="${E(x.id)}">open in graph</button></div><div class="msum">${E(x.summary||"")}</div>${extra}</div>`}
+function bulkExtra(){if(window.mbulk==="tag")return ` <input id="btag" placeholder="tag" aria-label="Tag"> <button type="button" data-bulk="tag-go">Apply</button>`;if(window.mbulk==="move")return ` <select id="bproj" aria-label="Project"><option value="">(no project)</option>${(window.mprojects||[]).map(p=>`<option value="${E(p.name)}">${E(p.name)}</option>`).join("")}</select> <button type="button" data-bulk="move-go">Apply</button>`;return ""}
+document.addEventListener("click",async e=>{const bulk=e.target.closest&&e.target.closest("[data-bulk]");
+if(bulk){const act=bulk.dataset.bulk,ids=memIds();if(act==="clear"){window.msel=[];window.mbulk="";render();return}if(act==="tag"||act==="move"){window.mbulk=window.mbulk===act?"":act;render();return}
+if(act==="delete"){if(!ids.length||!confirm("Delete "+ids.length+" selected?"))return;const r=await postRaw("items/bulk",{ids,action:"delete"});window.msel=(window.msel||[]).filter(id=>!ids.includes(id));memBulkDone(r);return}
+if(act==="tag-go"){const tag=(($("#btag")&&$("#btag").value)||"").trim();if(!tag){toast("tag required","err");return}memBulkDone(await postRaw("items/bulk",{ids,action:"tag",tag}));return}
+if(act==="move-go"){memBulkDone(await postRaw("items/bulk",{ids,action:"move",project:$("#bproj")?$("#bproj").value:""}));return}return}
+const b=e.target.closest&&e.target.closest("[data-m]");if(!b)return;const act=b.dataset.m,id=b.dataset.id||"";
+if(act==="kind"){window.mk=window.mk===b.dataset.k?"":b.dataset.k;render();return}
+if(act==="proj"){window.mp=b.dataset.k||"";render();return}
+if(act==="conf"){window.mc=!window.mc;render();return}
+if(act==="recent"){window.mq="";window._mfocus=true;render();return}
+if(act==="sel"){e.preventDefault();memSel(id,e.shiftKey,+b.dataset.i);return}
+if(act==="open"){window.medit=null;window.mopen=window.mopen===id?null:id;const i=(window.mrows||[]).findIndex(x=>x.id===id);if(i>=0)window.mcur=i;render();return}
+if(act==="edit"){memEdit(id);return}
+if(act==="del"){memDel(id);return}
+if(act==="graph"){window.gs={scope:"node",id};go("Graph");return}
+if(act==="save"){memSave(id);return}
+if(act==="cancel"){window.medit=null;window._draft=null;render();return}
+if(act==="keep")post("conflicts/resolve",{id,keep:b.dataset.keep})});
 function tabs(){$("#tabs").innerHTML=GROUPS.map(([g,ts])=>`<div class="nav-h">${g}</div>`+ts.map(t=>`<a href="#${encodeURI(t)}" class="${t==tab?'on':''}" ${t==tab?'aria-current="page"':""} onclick="go('${t}');return false"><svg viewBox="0 0 24 24">${ICON[t]||""}</svg>${t}${T.indexOf(t)<9?`<kbd>${T.indexOf(t)+1}</kbd>`:""}</a>`).join("")).join("");$("#ttl").textContent=tab;document.title=tab+" · Commons"}
 function go(t){tab=t;location.hash=encodeURI(t);$("#side").classList.remove("open");render()}
 function bars(rows,key,fmt){const mx=Math.max(1e-9,...rows.map(r=>r[key]));return rows.map(r=>`<tr><td>${E(r.label??r.key)}</td><td style="width:55%"><div class="bar" style="width:${100*r[key]/mx}%"></div></td><td>${fmt(r[key])}</td></tr>`).join("")}
@@ -803,25 +943,34 @@ const cost=[...Array(us.days).keys()].map(d=>Object.values(us.series).reduce((a,
 const st=(k,l,extra="")=>`<div class="card stat"><div class="mut">${l}</div><div class="big">${E(o[k])}</div>${extra}</div>`;
 return `<div class="grid"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
 ${st("running_jobs","Running jobs")}${st("agents","Agents")}${st("items","Memories",`<div class="mut" style="font-size:11px">tokens/day</div>${spark(us.tokens,150,26)}`)}${st("open_leftovers","Open leftovers")}${st("conflicts","Conflicts")}${st("entities","Graph entities")}${st("relations","Relations")}</div>
-<div class="cols"><div class="card"><h3>Agents now</h3>${ag.length?`<table>${ag.slice(0,10).map(x=>{const age=x.last_seen?(Date.now()-Date.parse(x.last_seen))/1e3:1e9;const cls=x.claims.length?"busy":age<300?"live":"idle";return `<tr><td><span class="dot ${cls}" title="${cls}"></span><b>${E(x.name)}</b> <span class="mut">${E(x.platform||"")}</span></td><td>${x.claims.length?x.claims.map(c=>pill(c.type)+" "+E(c.title.slice(0,40))).join("<br>"):'<span class="mut">idle</span>'}</td><td class="mut">${x.last_seen?ago(Math.round(age))+" ago":"never"}</td></tr>`}).join("")}</table>`:empty("🤖","No agents yet","<div><code>commons connect --agent claude-code --platform claude-code</code></div>")}</div>
+<div class="cols"><div class="card"><h3>Agents now</h3>${ag.length?`<table>${ag.slice(0,10).map(x=>{const st=agentState(x);const cls=st.text==="never seen"?"offline":(x.claims.length?"busy":st.cls);const doing=st.text==="never seen"?'<span class="mut">offline</span>':(x.claims.length?x.claims.map(c=>pill(c.type)+" "+E(c.title.slice(0,40))).join("<br>"):'<span class="mut">idle</span>');return `<tr><td><span class="dot ${cls}" title="${E(cls)}"></span><b>${E(x.name)}</b> <span class="mut">${E(x.platform||"")}</span></td><td>${doing}</td><td class="mut">${E(st.text)}</td></tr>`}).join("")}</table>`:empty("🤖","No agents yet","<div><code>commons connect --agent claude-code --platform claude-code</code></div>")}</div>
 <div class="card"><h3>Live activity</h3>${act.length?`<ul class="feed">${act.map((e,i)=>`<li style="animation-delay:${i*18}ms"><span class="t">${ago(e.ago)}</span><span>${pill(e.type)} ${E(e.text)} ${e.agent?`<span class="mut">· ${E(e.agent)}</span>`:""}</span></li>`).join("")}</ul>`:empty("✨","Quiet so far","<div>Activity from agents, the librarian and MCP calls streams in here.</div>")}</div></div>
 <div class="card mut">DB ${E(o.db)} · embedder ${E(o.embedder)} · ${o.paused?'<b class="failed">PAUSED: '+E(o.paused)+'</b>':'orchestration running'} · press <kbd>?</kbd> for shortcuts</div>`},
-async Agents(){const a=await api("agents");return `<div class="card"><h3>Live agent activity</h3><table><tr><th>agent</th><th>platform</th><th>last seen</th><th>now doing (claims · lease left)</th><th>last activity</th><th>learned</th></tr>${a.map(x=>`<tr><td><b>${E(x.name)}</b><div class="mut">${E(x.model||"")}</div></td><td>${E(x.platform||x.vendor||"")} ${x.availability?pill(x.availability):""}</td><td>${E(x.last_seen)}</td>
-<td>${x.claims.map(c=>`<div>${pill(c.type)} ${E(c.title.slice(0,60))} <span class="mut">· ${c.lease_left_s}s</span></div>`).join("")||'<span class="mut">idle</span>'}</td>
-<td class="mut">${x.last_activity?E(x.last_activity.kind+": "+x.last_activity.summary.slice(0,80)):""}</td><td class="mut">${Object.entries(x.learned).map(([k,v])=>`${k} ${(v.success_rate*100).toFixed(0)}% (${v.n})`).join("<br>")}</td></tr>`).join("")}</table></div>`},
+async Agents(){const a=await api("agents");return `<div class="card"><h3>Live agent activity</h3><table><tr><th>agent</th><th>platform</th><th>last seen</th><th title="claims and lease left">now doing</th><th>last activity</th><th>learned</th></tr>${a.map(x=>{const st=agentState(x);const cls=st.text==="never seen"?"offline":(x.claims.length?"busy":st.cls);const doing=st.text==="never seen"?'<span class="mut">offline</span>':(x.claims.map(c=>`<div>${pill(c.type)} ${E(c.title.slice(0,60))} <span class="mut">· ${E(c.lease_left_s)}s</span></div>`).join("")||'<span class="mut">idle</span>');return `<tr><td><span class="dot ${cls}"></span><b>${E(x.name)}</b><div class="mut">${E(x.model||"")}</div></td><td>${E(x.platform||x.vendor||"")} ${x.availability?pill(x.availability):""}</td><td class="mut">${E(st.text)}</td><td>${doing}</td><td class="mut">${x.last_activity?E(x.last_activity.kind+": "+x.last_activity.summary.slice(0,80)):""}</td><td class="mut">${Object.entries(x.learned||{}).map(([k,v])=>`${E(k)} ${(v.success_rate*100).toFixed(0)}% (${v.n})`).join("<br>")}</td></tr>`}).join("")}</table></div>`},
 async Orchestration(){const j=await api("jobs");return j.map(x=>`<div class="card"><b>${E(x.title)}</b> ${pill(x.status)} <span class="mut">${E(x.pattern)} · tokens ${x.used.tokens||0} · $${(x.used.cost||0).toFixed(4)}${x.budget&&Object.keys(x.budget).length?" · budget "+E(JSON.stringify(x.budget)):""}</span>
-<button onclick="openJob('${x.job_id}')">open</button> ${x.status=="running"?`<button class="bad" onclick="post('job/cancel',{id:'${x.job_id}'})">cancel</button>`:""}<div id="j_${x.job_id}"></div></div>`).join("")||`<div class="card">${empty("🧩","No jobs yet","<div>Submit one: <code>commons submit \"Build X\"</code> or the <code>submit_task</code> tool.</div>")}</div>`},
-async Sessions(){const [s,l]=await Promise.all([api("sessions"),api("leftovers")]);return `<div class="card"><h3>Leftovers queue (${l.length})</h3><table>${l.map(x=>`<tr><td>${pill(x.task_type)} p${x.priority}</td><td>${E(x.text)}</td><td class="mut">${E(x.created_at)}</td><td><button onclick="post('leftover/resolve',{id:'${x.id}'})">done</button></td></tr>`).join("")}</table></div>
+<button onclick="openJob(${J(x.job_id)})">open</button> ${x.status=="running"?`<button class="bad" onclick="post('job/cancel',{id:${J(x.job_id)}})">cancel</button>`:""}<div id="j_${E(x.job_id)}"></div></div>`).join("")||`<div class="card">${empty("🧩","No jobs yet","<div>Submit one: <code>commons submit \"Build X\"</code> or the <code>submit_task</code> tool.</div>")}</div>`},
+async Sessions(){const [s,l]=await Promise.all([api("sessions"),api("leftovers")]);return `<div class="card"><h3>Leftovers queue (${l.length})</h3><table>${l.map(x=>`<tr><td>${pill(x.task_type)} p${x.priority}</td><td>${E(x.text)}</td><td class="mut">${E(x.created_at)}</td><td><button onclick="post('leftover/resolve',{id:${J(x.id)}})">done</button></td></tr>`).join("")}</table></div>
 <div class="card"><h3>Sessions</h3><table><tr><th>goal</th><th>status</th><th>agent</th><th>project</th><th>updated</th><th>leftovers</th></tr>${s.map(x=>`<tr><td>${E(x.goal)}</td><td>${pill(x.status)}</td><td>${E(x.agent)}</td><td>${E(x.project)}</td><td class="mut">${E(x.updated_at)}</td><td class="mut">${x.leftovers.map(y=>E(y.text)+" ("+y.status+")").join("<br>")}</td></tr>`).join("")}</table></div>`},
 async Usage(){const by=window.ub||"agent";const [u,ser]=await Promise.all([api("usage?by="+by),api("usage_series?days=14")]);return `<div class="card"><h3>Daily cost by agent · 14 days</h3>${stacked(ser.series,ser.days)}</div><div class="card">Group by ${["agent","project","job","model"].map(b=>`<button onclick="ub='${b}';render()">${b}</button>`).join(" ")} <span class="mut">· 24h spend $${u.spent_24h.toFixed(4)}</span>
 <h3>Cost by ${by}</h3><table>${bars(u.rows,"cost",v=>"$"+v.toFixed(4))}</table><h3>Tokens by ${by}</h3><table>${bars(u.rows.map(r=>({...r,t:r.tokens_in+r.tokens_out})),"t",v=>v+" tok")}</table>
 <h3>Daily cost</h3><table>${bars(u.daily.slice().reverse(),"cost",v=>"$"+v.toFixed(4))}</table>
 <h3>Detail</h3><table><tr><th>${by}</th><th>in</th><th>out</th><th>$</th><th>time s</th><th>calls</th></tr>${u.rows.map(r=>`<tr><td>${E(r.label)}</td><td>${r.tokens_in}</td><td>${r.tokens_out}</td><td>${r.cost}</td><td>${r.seconds}</td><td>${r.calls}</td></tr>`).join("")}</table></div>`},
-async Memory(){const q=window.mq||"";const [r,c]=await Promise.all([api("search?q="+encodeURIComponent(q)),api("conflicts")]);return `<div class="card"><input id="q" value="${E(q)}" placeholder="search memory…" size=40 onkeydown="if(event.key=='Enter'){mq=this.value;render()}"> <button onclick="mq=$('#q').value;render()">search</button> <button onclick="mq='';render()">recent</button>
-<table>${r.results.map(x=>`<tr><td><a href="#" onclick="show('${x.id}');return false" class="mut">${x.id}</a></td><td>${pill(x.kind)}</td><td>${E(x.project||"")}/${E(x.agent||"")}${x.conflict?' <b class="failed">⚠conflict</b>':""}${x.authenticated?"":' <span class="mut" title="written without an api key">unverified</span>'}</td><td>${E(x.summary)}</td></tr>`).join("")}</table><pre id="det" hidden></pre></div>
-<div class="card"><h3>Conflicts (${c.length})</h3>${c.map(x=>`<div><b>${E(x.subject)}.${E(x.predicate)}</b>: <button onclick="post('conflicts/resolve',{id:'${x.id}',keep:'${x.a}'})">keep “${E(x.a_item?.value)}” (${E(x.a_item?.agent)})</button> <button onclick="post('conflicts/resolve',{id:'${x.id}',keep:'${x.b}'})">keep “${E(x.b_item?.value)}” (${E(x.b_item?.agent)})</button></div>`).join("")||'<span class="mut">none</span>'}</div>`},
-async Preferences(){const p=await api("prefs");return `<div class="card"><h3>What Commons learned about you</h3><p class="mut">Everything here is injected into agents' task pickups. Edit, confirm or delete anything.</p><table><tr><th>preference</th><th>scope</th><th>confidence</th><th>source</th><th>evidence</th><th></th></tr>${p.map(x=>`<tr><td><input value="${E(x.statement)}" id="p_${x.id}" size=45></td><td>${E(x.scope)}</td><td>${(x.confidence*100).toFixed(0)}% <span class="mut">×${x.observations}</span></td><td class="mut">${E(x.source)}</td><td class="mut">${E((x.evidence||[]).slice(-1)[0]||"").slice(0,90)}</td>
-<td><button onclick="post('prefs/confirm',{id:'${x.id}',statement:$('#p_${x.id}').value})">save/confirm</button> <button class="bad" onclick="post('prefs/forget',{id:'${x.id}'})">forget</button></td></tr>`).join("")}</table><p><button class="bad" onclick="confirm('Delete ALL preferences?')&&post('prefs/forget',{everything:true})">forget everything</button></p></div>`},
+async Memory(){const q=window.mq||"",kind=window.mk||"",proj=window.mp||"";const params=new URLSearchParams({q,limit:"80"});if(kind)params.set("kind",kind);if(proj)params.set("project",proj);if(window.mc)params.set("conflict","1");
+const [r,c0,p0]=await Promise.all([api("search?"+params),api("conflicts"),api("projects")]);if(r&&r.error)throw new Error(r.error);if(c0&&c0.error)throw new Error(c0.error);if(p0&&p0.error)throw new Error(p0.error);const c=Array.isArray(c0)?c0:[],projects=Array.isArray(p0)?p0:[];window.mprojects=projects;
+let rows=(r.results||[]).filter(x=>!(window.mhide||{})[x.id]);
+if(window.mfocus&&!rows.some(x=>x.id===window.mfocus)){try{const d=await api("item?id="+encodeURIComponent(window.mfocus)+"&max_tokens=4000");if(d&&d.id&&!(window.mhide||{})[d.id])rows.unshift({id:d.id,kind:d.kind||"memory",summary:d.summary||d.title||"",project:d.project,agent:d.agent,created_at:d.created_at,conflict:!!d.conflict,authenticated:!!d.authenticated})}catch(err){toast(String(err.message||err),"err")}}
+window.mrows=rows;if(window.mcur==null||window.mcur>=rows.length)window.mcur=rows.length?0:-1;
+let detail=null;if(window.mopen){try{detail=await api("item?id="+encodeURIComponent(window.mopen)+"&max_tokens=20000");if(detail&&detail.error)throw new Error(detail.error)}catch(err){toast(String(err.message||err),"err");window.mopen=null;window.medit=null;detail=null}}
+const chip=(act,k,on,label)=>`<button type="button" class="chip${on?" on":""}" data-m="${act}" data-k="${E(k)}">${E(label)}</button>`;
+const kinds=["memory","decision","fact","handoff","observation"].map(k=>chip("kind",k,kind===k,k)).join("");
+const pchips=chip("proj","",!proj,"all projects")+(projects||[]).map(p=>chip("proj",p.name,proj===p.name,p.name)).join("");
+const list=rows.length?`<div class="mlist">${rows.map((x,i)=>memRow(x,i,detail)).join("")}</div>`:empty("◇","No memories","Try another query, or clear the filters.");
+const sel=(window.msel||[]).filter(id=>rows.some(x=>x.id===id));
+const bulk=sel.length?`<div class="bulk" role="toolbar"><b>${sel.length} selected:</b> <button type="button" data-bulk="tag">Tag</button> <button type="button" data-bulk="move">Move to project</button> <button type="button" class="bad" data-bulk="delete">Delete</button> <button type="button" data-bulk="clear">Clear</button>${bulkExtra()}</div>`:"";
+const conflicts=`<div class="card"><h3>Conflicts (${(c||[]).length})</h3>${(c||[]).length?(c||[]).map(x=>`<div class="mmeta" style="margin:8px 0"><b>${E(x.subject)}.${E(x.predicate)}</b> <button type="button" data-m="keep" data-id="${E(x.id)}" data-keep="${E(x.a)}">keep ${E(x.a_item&&x.a_item.value||"")} (${E(x.a_item&&x.a_item.agent||"")})</button> <button type="button" data-m="keep" data-id="${E(x.id)}" data-keep="${E(x.b)}">keep ${E(x.b_item&&x.b_item.value||"")} (${E(x.b_item&&x.b_item.agent||"")})</button></div>`).join(""):'<span class="mut">none</span>'}</div>`;
+return `<div class="card"><div class="toolbar"><input id="mq" type="search" value="${E(q)}" placeholder="Search memory" autocomplete="off" aria-label="Search memory"> <button type="button" data-m="recent">recent</button></div><div class="seg">${kinds}</div><div class="seg">${pchips} ${chip("conf","1",!!window.mc,"conflicts only")}</div>${list}</div>${bulk}${conflicts}`},
+async Preferences(){const p=await api("prefs");return `<div class="card"><h3>What Commons learned about you</h3><p class="mut">Everything here is injected into agents' task pickups. Edit, confirm or delete anything.</p><table><tr><th>preference</th><th>scope</th><th>confidence</th><th>source</th><th>evidence</th><th></th></tr>${p.map(x=>`<tr><td><input value="${E(x.statement)}" size=45></td><td>${E(x.scope)}</td><td>${(x.confidence*100).toFixed(0)}% <span class="mut">×${x.observations}</span></td><td class="mut">${E(x.source)}</td><td class="mut">${E((x.evidence||[]).slice(-1)[0]||"").slice(0,90)}</td>
+<td><button onclick="post('prefs/confirm',{id:${J(x.id)},statement:this.closest('tr').querySelector('input').value})">save/confirm</button> <button class="bad" onclick="post('prefs/forget',{id:${J(x.id)}})">forget</button></td></tr>`).join("")}</table><p><button class="bad" onclick="confirm('Delete ALL preferences?')&&post('prefs/forget',{everything:true})">forget everything</button></p></div>`},
 async Graph(){const sc=await api("graph_scopes");const g=window.gs||{scope:"",id:""};
 const opt=(scope,v,t)=>`<option value="${scope}|${E(v)}" ${g.scope==scope&&g.id==v?"selected":""}>${E(t)}</option>`;
 const src=g.scope?`/graph.html?scope=${g.scope}&id=${encodeURIComponent(g.id)}&depth=${window.gd||2}`:"/graph.html?items=1";
@@ -834,19 +983,19 @@ ${g.scope=="node"?opt("node",g.id,"node "+g.id):""}</select>
 depth <select onchange="gd=this.value;render()">${[1,2,3].map(d=>`<option ${d==(window.gd||2)?"selected":""}>${d}</option>`).join("")}</select>
 <a href="${src}" target="_blank">open full screen</a> · <button onclick="post('graph/rebuild',{})">rebuild links</button></div><iframe src="${src}"></iframe>`},
 async Knowledge(){const L=await api("kb_list");const b=window.kb||(L[0]&&L[0].bucket)||"misc";const P=await api("kb_page?bucket="+encodeURIComponent(b));const sec=window.ks&&P.pages[window.ks]?window.ks:P.sections[0];
-const md=s=>E(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\[\[(misc\/[\w-]+)\]\]/g,(m,x)=>`<a href="#" onclick="kb='${x}';render();return false">${x}</a>`).replace(/\[((?:mem|dec|fct|hof|chk|ent|prj|ses|agt|tsk|job|sub|lft|prf|rec|lea|usg)_[0-9a-f]+)\]/g,(m,id)=>`<a href="#" class="cite" onclick="cite('${id}');return false">[${id.slice(0,7)}…]</a>`).replace(/\n/g,"<br>");
+const md=s=>E(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\[\[(misc\/[\w-]+)\]\]/g,(m,x)=>`<a href="#" onclick="kb=${J(x)};render();return false">${E(x)}</a>`).replace(/\[((?:mem|dec|fct|hof|chk|ent|prj|ses|agt|tsk|job|sub|lft|prf|rec|lea|usg)_[0-9a-f]+)\]/g,(m,id)=>`<a href="#" class="cite" onclick="cite(${J(id)});return false">[${id.slice(0,7)}…]</a>`).replace(/\n/g,"<br>");
 const pg=P.pages[sec]||{content:"",citations:[]};
-return `<div style="display:grid;grid-template-columns:220px 1fr 320px;gap:12px"><div class="card"><h3>Buckets</h3>${L.map(x=>`<div><a href="#" onclick="kb='${E(x.bucket)}';ks='';render();return false" ${x.bucket==b?'style="font-weight:700"':""}>${E(x.bucket)}</a> <span class="mut">${x.dirty?"·stale":""}</span></div>`).join("")}<p><button onclick="post('kb/refresh',{bucket:'${E(b)}'})">rebuild ${E(b)}</button></p></div>
-<div class="card"><div>${P.sections.map(s=>`<button onclick="ks='${s}';render()" ${s==sec?'style="border-color:var(--acc)"':""}>${E(P.titles[s])}</button>`).join(" ")}</div>
+return `<div style="display:grid;grid-template-columns:220px 1fr 320px;gap:12px"><div class="card"><h3>Buckets</h3>${L.map(x=>`<div><a href="#" onclick="kb=${J(x.bucket)};ks='';render();return false" ${x.bucket==b?'style="font-weight:700"':""}>${E(x.bucket)}</a> <span class="mut">${x.dirty?"·stale":""}</span></div>`).join("")}<p><button onclick="post('kb/refresh',{bucket:${J(b)}})">rebuild ${E(b)}</button></p></div>
+<div class="card"><div>${P.sections.map(s=>`<button onclick="ks=${J(s)};render()" ${s==sec?'style="border-color:var(--acc)"':""}>${E(P.titles[s])}</button>`).join(" ")}</div>
 <h2>${E(P.titles[sec]||"")} <span class="mut" style="font-size:12px">${E(b)} · updated ${E(pg.updated_at||"")} · ${pg.citations.length} sources</span></h2><div class="kb">${md(pg.content)}</div></div>
 <div class="card" id="bl"><h3>Source</h3><p class="mut">Click a citation to see the record, its graph neighbours and where else it is cited.</p></div></div>`}};
-async function cite(id){const b=await api("backlinks?id="+id);const d=await api("item?id="+id).catch(()=>({}));$("#bl").innerHTML=`<h3>${E(b.label[1])}</h3><div class="mut">${E(b.label[0])} · <code>${id}</code></div>
-<p><a href="#" onclick="gs={scope:'node',id:'${id}'};go('Graph');return false">open in graph</a> · <a href="#" onclick="mq='${id}';go('Memory');show('${id}');return false">open in memory</a></p>
-<pre>${E((d.content||d.statement||d.text||JSON.stringify(d,null,1)).slice(0,1200))}</pre><h4>Cited in</h4>${b.kb.map(k=>`<div><a href="#" onclick="kb='${E(k.bucket)}';ks='${k.section}';render();return false">${E(k.bucket)} / ${k.section}</a></div>`).join("")}
-<h4>Links</h4>${b.edges.slice(0,25).map(e=>`<div class="mut">${E(b.nodes[e.src].name.slice(0,30))} —${e.type}→ ${E(b.nodes[e.dst].name.slice(0,30))}</div>`).join("")}`}
+async function cite(id){const b=await api("backlinks?id="+encodeURIComponent(id));const d=await api("item?id="+encodeURIComponent(id)).catch(()=>({}));$("#bl").innerHTML=`<h3>${E(b.label[1])}</h3><div class="mut">${E(b.label[0])} · <code>${E(id)}</code></div>
+<p><a href="#" onclick="gs={scope:'node',id:${J(id)}};go('Graph');return false">open in graph</a> · <a href="#" onclick="mq=${J(id)};go('Memory');show(${J(id)});return false">open in memory</a></p>
+<pre>${E((d.content||d.statement||d.text||JSON.stringify(d,null,1)).slice(0,1200))}</pre><h4>Cited in</h4>${b.kb.map(k=>`<div><a href="#" onclick="kb=${J(k.bucket)};ks=${J(k.section)};render();return false">${E(k.bucket)} / ${E(k.section)}</a></div>`).join("")}
+<h4>Links</h4>${b.edges.slice(0,25).map(e=>`<div class="mut">${E(b.nodes[e.src].name.slice(0,30))} - ${E(e.type)} -> ${E(b.nodes[e.dst].name.slice(0,30))}</div>`).join("")}`}
 Object.assign(V,{
 async Secrets(){const a=await api("audit");return `<div class="card"><h3>Secret references</h3><p class="mut">Values are never stored or displayed.</p><table>${a.refs.map(r=>`<tr><td><code>${E(r.ref)}</code></td><td>${E(r.description)}</td><td class="mut">agents: ${E(r.allowed_agents.join(", ")||"any")} · max ttl ${r.max_ttl}s</td></tr>`).join("")}</table>
-<h3>Leases</h3><table>${a.leases.map(l=>`<tr><td>${l.id}</td><td><code>${E(l.ref)}</code></td><td>${E(l.agent)}</td><td>${E(l.scope)}</td><td class="mut">exp ${E(l.expires_at)}</td><td>${l.active?`<button class="bad" onclick="post('lease/revoke',{id:'${l.id}'})">revoke</button>`:'<span class="mut">'+(l.revoked?"revoked":"expired")+"</span>"}</td></tr>`).join("")}</table>
+<h3>Leases</h3><table>${a.leases.map(l=>`<tr><td>${E(l.id)}</td><td><code>${E(l.ref)}</code></td><td>${E(l.agent)}</td><td>${E(l.scope)}</td><td class="mut">exp ${E(l.expires_at)}</td><td>${l.active?`<button class="bad" onclick="post('lease/revoke',{id:${J(l.id)}})">revoke</button>`:'<span class="mut">'+(l.revoked?"revoked":"expired")+"</span>"}</td></tr>`).join("")}</table>
 <h3>Audit log</h3><table>${a.log.map(l=>`<tr><td class="mut">${E(l.ts)}</td><td>${E(l.action)}</td><td>${E(l.target)}</td><td class="mut">${E(l.detail||"")}</td></tr>`).join("")}</table></div>`},
 async Recurring(){const r=await api("recurring");return `<div class="card"><h3>Recurring schedules</h3><table><tr><th>name</th><th>cron</th><th>next run</th><th>last run</th><th>last job</th><th>task</th></tr>${r.map(x=>`<tr><td>${E(x.name)}</td><td><code>${E(x.cron)}</code></td><td>${E(x.next_run)}</td><td class="mut">${E(x.last_run)}</td><td class="mut">${E(x.last_job||"")}</td><td>${E(x.task.slice(0,120))}</td></tr>`).join("")}</table></div>`}});
 Object.assign(V,{
@@ -855,9 +1004,9 @@ if(window.oc_jump){const j=window.oc_jump;window.oc_jump=null;window.oc_center=1
 const top=await api("tree_children?ref="+root);
 const kids=async(ref)=>(await api("tree_children?ref="+encodeURIComponent(ref))).children;
 async function nodeHtml(c){const open=oc_open[c.path];let sub="";if(open&&c.count){const ch=await kids(c.path);sub=`<ul>${(await Promise.all(ch.map(nodeHtml))).join("")}</ul>`}
-return `<li><div class="oc ${c.kind} ${oc_sel==c.path?"sel":""}" tabindex="0" role="treeitem" aria-expanded="${!!open}" onkeydown="if(event.key=='Enter')ocT('${c.path}')" onclick="ocT('${c.path}')"><span class="ix">${E(c.path.replace(/^\w+\//,""))}</span> ${E(c.label.slice(0,38))}${c.count?` <span class="cnt">${open?"▾":"▸"} ${c.count}</span>`:""}<div class="mut" style="font-size:10px">${E(c.kind)}</div><div class="hc"><b>${E(c.label)}</b><div class="mut">${E(c.kind)} · path <code>${E(c.path)}</code>${c.id?` · <code>${E(c.id.slice(0,16))}</code>`:""}</div>${c.summary?`<div style="margin-top:6px">${E(c.summary)}</div>`:""}${c.count?`<div class="mut" style="margin-top:6px">${c.count} children · click to ${open?"collapse":"expand"}</div>`:""}</div></div>${sub}</li>`}
+return `<li><div class="oc ${c.kind} ${oc_sel==c.path?"sel":""}" tabindex="0" role="treeitem" aria-expanded="${!!open}" onkeydown="if(event.key=='Enter')ocT(${J(c.path)})" onclick="ocT(${J(c.path)})"><span class="ix">${E(c.path.replace(/^\w+\//,""))}</span> ${E(c.label.slice(0,38))}${c.count?` <span class="cnt">${open?"▾":"▸"} ${c.count}</span>`:""}<div class="mut" style="font-size:10px">${E(c.kind)}</div><div class="hc"><b>${E(c.label)}</b><div class="mut">${E(c.kind)} · path <code>${E(c.path)}</code>${c.id?` · <code>${E(c.id.slice(0,16))}</code>`:""}</div>${c.summary?`<div style="margin-top:6px">${E(c.summary)}</div>`:""}${c.count?`<div class="mut" style="margin-top:6px">${c.count} children · click to ${open?"collapse":"expand"}</div>`:""}</div></div>${sub}</li>`}
 const crumbs=(window.oc_sel||"").replace(/^\w+\//,"").split(".").filter(Boolean);
-const bc=[`<a href="#" onclick="oc_sel='';render();return false">${{workspace:"Workspace",agents:"Agents",skills:"Skill library"}[root]}</a>`].concat(crumbs.map((_,i)=>{const p=(root=="workspace"?"":root+"/")+crumbs.slice(0,i+1).join(".");return `<a href="#" onclick="oc_sel='${p}';render();return false">${p}</a>`})).join(" › ");
+const bc=[`<a href="#" onclick="oc_sel='';render();return false">${{workspace:"Workspace",agents:"Agents",skills:"Skill library"}[root]}</a>`].concat(crumbs.map((_,i)=>{const p=(root=="workspace"?"":root+"/")+crumbs.slice(0,i+1).join(".");return `<a href="#" onclick="oc_sel=${J(p)};render();return false">${E(p)}</a>`})).join(" › ");
 let body;if(mode=="outline"){const o=await api("tree_outline?depth=4&ref="+encodeURIComponent(oc_sel||root));body=`<pre class="outline">${E(o.text)}</pre>`}
 else body=`<div class="ocwrap" id="ocw"><div class="zoombar"><button onclick="ocZoom(1.2)" aria-label="Zoom in">＋</button><button onclick="ocZoom(1/1.2)" aria-label="Zoom out">－</button><button onclick="ocFit()">fit</button></div><div class="ocstage" id="ocs"><ul class="orgchart" role="tree"><li><div class="oc root">${E({workspace:"Workspace",agents:"Agents",skills:"Skill library"}[root])} <span class="cnt" style="color:#fff">${top.children.length}</span></div><ul>${(await Promise.all(top.children.map(nodeHtml))).join("")}</ul></li></ul></div><div class="minimap" aria-hidden="true"><div class="mm" id="ocmm"></div><div class="vp" id="ocvp"></div></div></div>`;
 if(!top.children.length)body=empty("🌱","Nothing to organize yet","<div>Projects, jobs, sessions, code and skills appear here as agents work.</div>");
@@ -866,33 +1015,33 @@ return `<div class="card">Hierarchy ${["workspace","agents","skills"].map(r=>`<b
 · <input id="ocq" placeholder="search & jump…" onkeydown="if(event.key=='Enter')ocFind()"> <button onclick="ocFind()">find</button> <button onclick="oc_open={};render()">collapse all</button>
 <div class="mut" style="margin-top:6px">📍 ${bc}</div><div id="ochits"></div></div><div class="card">${body}</div>`},
 async Skills(){const S=await api("skills");const h=window.sh?await api("skill_history?name="+encodeURIComponent(window.sh)):null;
-return `<div style="display:grid;grid-template-columns:1.1fr 1fr;gap:12px"><div class="card"><h3>Skill library (${S.length})</h3><p class="mut">Agents fetch these on demand with skill_get — nothing to install locally.</p><table><tr><th>skill</th><th>active</th><th>uses · success</th><th>tags</th><th></th></tr>${S.map(x=>`<tr><td><b>${E(x.name)}</b><div class="mut">${E((x.description||"").slice(0,90))}</div>${x.forked_from?`<div class="mut">fork of ${E(x.forked_from)}</div>`:""}</td><td>v${x.active_version??"-"} ${x.pending.map(p=>pill(p.status)+" v"+p.version).join(" ")}</td><td>${x.stats.uses} · ${x.stats.success_rate==null?"–":(x.stats.success_rate*100).toFixed(0)+"%"}</td><td class="mut">${E(x.tags.join(", "))}</td><td><button onclick="sh='${E(x.name)}';render()">history</button></td></tr>`).join("")}</table></div>
+return `<div style="display:grid;grid-template-columns:1.1fr 1fr;gap:12px"><div class="card"><h3>Skill library (${S.length})</h3><p class="mut">Agents fetch these on demand with skill_get — nothing to install locally.</p><table><tr><th>skill</th><th>active</th><th>uses · success</th><th>tags</th><th></th></tr>${S.map(x=>`<tr><td><b>${E(x.name)}</b><div class="mut">${E((x.description||"").slice(0,90))}</div>${x.forked_from?`<div class="mut">fork of ${E(x.forked_from)}</div>`:""}</td><td>v${x.active_version??"-"} ${x.pending.map(p=>pill(p.status)+" v"+p.version).join(" ")}</td><td>${x.stats.uses} · ${x.stats.success_rate==null?"–":(x.stats.success_rate*100).toFixed(0)+"%"}</td><td class="mut">${E(x.tags.join(", "))}</td><td><button onclick="sh=${J(x.name)};render()">history</button></td></tr>`).join("")}</table></div>
 <div class="card">${h?`<h3>${E(window.sh)} — history</h3>${h.map(v=>`<div class="card"><b>v${v.version}</b> ${pill(v.status)} <span class="mut">${E(v.author||"")} · ${E(v.created_at)} · ${E(v.changelog||"")}</span>
 ${v.findings&&v.findings.length?`<div class="failed">⚠ ${E(v.findings.map(f=>typeof f=="string"?f:JSON.stringify(f)).join("; "))}</div>`:""}${v.review&&v.review.by?`<div class="mut">review: ${E(v.review.verdict)} by ${E(v.review.by)} ${E(v.review.notes||"")}</div>`:""}
-${["pending","flagged"].includes(v.status)?`<button onclick="post('skill/review',{name:'${E(window.sh)}',version:${v.version},approve:true})">approve</button> <button class="bad" onclick="post('skill/review',{name:'${E(window.sh)}',version:${v.version},approve:false})">reject</button>`:""}
-${v.status=="superseded"||v.status=="approved"?`<button onclick="post('skill/rollback',{name:'${E(window.sh)}',version:${v.version}})">roll back to v${v.version}</button>`:""}
+${["pending","flagged"].includes(v.status)?`<button onclick="post('skill/review',{name:${J(window.sh)},version:${v.version},approve:true})">approve</button> <button class="bad" onclick="post('skill/review',{name:${J(window.sh)},version:${v.version},approve:false})">reject</button>`:""}
+${v.status=="superseded"||v.status=="approved"?`<button onclick="post('skill/rollback',{name:${J(window.sh)},version:${v.version}})">roll back to v${v.version}</button>`:""}
 ${v.diff?`<details><summary class="mut">diff</summary><pre>${E(v.diff)}</pre></details>`:""}</div>`).join("")}`:'<p class="mut">Pick a skill to see versions, diffs, scan findings and reviews.</p>'}</div></div>`},
 async Models(){const m=await api("models_page");return `<div class="card"><h3>Providers</h3><table><tr><th>name</th><th>kind</th><th>key ref (never the value)</th><th>models</th><th>refreshed</th><th>error</th></tr>${m.providers.map(p=>`<tr><td>${E(p.name)}</td><td>${E(p.kind)}</td><td><code>${E(p.key_ref||"–")}</code></td><td>${p.models}</td><td class="mut">${E(p.last_refresh||"")}</td><td class="failed">${E(p.last_error||"")}</td></tr>`).join("")||'<tr><td class="mut">No providers. commons models add-provider openrouter openrouter --key-ref env://OPENROUTER_API_KEY</td></tr>'}</table><button onclick="post('models/refresh',{})">refresh lists · probe new · rebuild routing</button></div>
-<div class="card"><h3>LLM roles</h3><table>${Object.entries(m.roles).map(([r,v])=>`<tr><td>${r}</td><td>${v.model?`<code>${E(v.model)}</code>`:'<span class="mut">heuristic</span>'} ${v.explicit||!v.model?"":'<span class="mut">(via distributor)</span>'}</td></tr>`).join("")}</table></div>
+<div class="card"><h3>LLM roles</h3><table>${Object.entries(m.roles).map(([r,v])=>`<tr><td>${E(r)}</td><td>${v.model?`<code>${E(v.model)}</code>`:'<span class="mut">heuristic</span>'} ${v.explicit||!v.model?"":'<span class="mut">(via distributor)</span>'}</td></tr>`).join("")}</table></div>
 <div class="card"><h3>Routing table</h3><table><tr><th>task type</th><th>agent</th><th>model</th><th>why</th><th>source</th></tr>${m.routing.map(r=>`<tr><td>${pill(r.task_type)}</td><td>${E(r.agent)}</td><td><code>${E(r.model)}</code></td><td class="mut">${E(r.reason)}</td><td class="mut">${E(r.source)}</td></tr>`).join("")}</table></div>
-<div class="card"><h3>Reallocation proposals</h3><table>${m.proposals.map(p=>`<tr><td>${pill(p.task_type)}</td><td><code>${E(p.from_model||"–")}</code> → <code>${E(p.to_model)}</code></td><td class="mut">${E(JSON.stringify(p.evidence).slice(0,140))}</td><td>${p.status=="proposed"?`<button onclick="post('routing/decide',{id:'${p.id}',approve:true})">apply</button> <button class="bad" onclick="post('routing/decide',{id:'${p.id}',approve:false})">reject</button>`:pill(p.status)}</td></tr>`).join("")||'<tr><td class="mut">none</td></tr>'}</table></div>
-<div class="card"><h3>Model registry (${m.models.length})</h3><table><tr><th>model</th><th>ctx</th><th>$/M in·out</th><th>scores</th><th>agents</th></tr>${m.models.slice(0,200).map(x=>`<tr><td><code>${E(x.id)}</code> ${x.is_new?pill("new"):""}</td><td>${x.context||""}</td><td class="mut">${x.cost_in??""} · ${x.cost_out??""}</td><td class="mut">${Object.entries(x.scores||{}).map(([k,v])=>k+" "+(v*100).toFixed(0)+"%").join(" ")}</td><td class="mut">${E((x.agents||[]).join(", "))}</td></tr>`).join("")}</table></div>`},
+<div class="card"><h3>Reallocation proposals</h3><table>${m.proposals.map(p=>`<tr><td>${pill(p.task_type)}</td><td><code>${E(p.from_model||"–")}</code> → <code>${E(p.to_model)}</code></td><td class="mut">${E(JSON.stringify(p.evidence).slice(0,140))}</td><td>${p.status=="proposed"?`<button onclick="post('routing/decide',{id:${J(p.id)},approve:true})">apply</button> <button class="bad" onclick="post('routing/decide',{id:${J(p.id)},approve:false})">reject</button>`:pill(p.status)}</td></tr>`).join("")||'<tr><td class="mut">none</td></tr>'}</table></div>
+<div class="card"><h3>Model registry (${m.models.length})</h3><table><tr><th>model</th><th>ctx</th><th>$/M in·out</th><th>scores</th><th>agents</th></tr>${m.models.slice(0,200).map(x=>`<tr><td><code>${E(x.id)}</code> ${x.is_new?pill("new"):""}</td><td>${x.context||""}</td><td class="mut">${x.cost_in??""} · ${x.cost_out??""}</td><td class="mut">${Object.entries(x.scores||{}).map(([k,v])=>E(k)+" "+(v*100).toFixed(0)+"%").join(" ")}</td><td class="mut">${E((x.agents||[]).join(", "))}</td></tr>`).join("")}</table></div>`},
 async Librarian(){const L=await api("librarian");const fq=window.fq||"";const f=fq?await api("find?q="+encodeURIComponent(fq)):null;
 return `<div class="card"><h3>Librarian</h3><span>mode <b>${E(L.mode)}</b> · auto-approve <b>${L.auto_approve?"on":"off"}</b> <button onclick="post('librarian/config',{auto_approve:${!L.auto_approve}})">turn ${L.auto_approve?"off":"on"}</button> · budget $${L.budget} · ${L.new_since_last_run} new items since last run</span>
 <p><button onclick="post('librarian/run',{})">run now (incremental)</button> <button onclick="post('librarian/run',{full:true})">full pass</button></p>
 ${L.last_run?`<div class="mut">last run ${E(new Date(L.last_run.ts*1000).toLocaleString())}: scanned ${L.last_run.items_scanned}, tagged ${L.last_run.tagged}, assigned ${L.last_run.assigned}, links +${L.last_run.links_added}, summaries ${L.last_run.summaries}, merges ${L.last_run.dedupe.merged.length} (proposed ${L.last_run.dedupe.proposed.length}), index ${L.last_run.indexed} terms</div>`:""}</div>
-<div class="card"><h3>Where to find…</h3><input id="fq" value="${E(fq)}" size=40 placeholder="e.g. billing invoices" onkeydown="if(event.key=='Enter'){fq=this.value;render()}"> ${L.suggested.map(s=>`<button onclick="fq='${E(s)}';render()">${E(s)}</button>`).join(" ")}
-${f?`<table>${f.locations.map(l=>`<tr><td><a href="#" onclick="oc_root='${l.path.includes("/")?l.path.split("/")[0]:"workspace"}';oc_jump='${l.path}';go('Org chart');return false"><code>${E(l.path)}</code></a></td><td>${pill(l.kind)}</td><td>${E(l.label)}</td><td class="mut">${E(l.rid||"")}</td></tr>`).join("")||'<tr><td class="mut">nothing</td></tr>'}</table>`:""}</div>
-<div class="card"><h3>Review queue (${L.proposals.length})</h3><table>${L.proposals.map(p=>`<tr><td>${pill(p.kind)}</td><td>${E(p.target_label.slice(0,70))} <span class="mut">${E(p.target)}</span></td><td class="mut">${E(p.reason)}</td><td>${p.kind=="merge"?`<button onclick="post('librarian/decide',{id:'${p.id}',approve:true})">merge</button>`:`<button onclick="post('librarian/decide',{id:'${p.id}',approve:true})">ack</button>`} <button class="bad" onclick="post('librarian/decide',{id:'${p.id}',approve:false})">dismiss</button></td></tr>`).join("")||'<tr><td class="mut">empty</td></tr>'}</table></div>
-<div class="card"><h3>Activity (every change is undoable)</h3><table>${L.recent.map(e=>`<tr><td class="mut">${E(e.ts)}</td><td>${pill(e.action)}</td><td>${E(e.target)}</td><td class="mut">${E(e.before).slice(0,60)} → ${E(e.after).slice(0,80)}</td><td>${e.status=="applied"&&e.reversible?`<button onclick="post('librarian/undo',{id:'${e.id}'})">undo</button>`:pill(e.status)}</td></tr>`).join("")}</table></div>`}});
+<div class="card"><h3>Where to find…</h3><input id="fq" value="${E(fq)}" size=40 placeholder="e.g. billing invoices" onkeydown="if(event.key=='Enter'){fq=this.value;render()}"> ${L.suggested.map(s=>`<button onclick="fq=${J(s)};render()">${E(s)}</button>`).join(" ")}
+${f?`<table>${f.locations.map(l=>`<tr><td><a href="#" onclick="oc_root=${J(l.path.includes("/")?l.path.split("/")[0]:"workspace")};oc_jump=${J(l.path)};go('Org chart');return false"><code>${E(l.path)}</code></a></td><td>${pill(l.kind)}</td><td>${E(l.label)}</td><td class="mut">${E(l.rid||"")}</td></tr>`).join("")||'<tr><td class="mut">nothing</td></tr>'}</table>`:""}</div>
+<div class="card"><h3>Review queue (${L.proposals.length})</h3><table>${L.proposals.map(p=>`<tr><td>${pill(p.kind)}</td><td>${E(p.target_label.slice(0,70))} <span class="mut">${E(p.target)}</span></td><td class="mut">${E(p.reason)}</td><td>${p.kind=="merge"?`<button onclick="post('librarian/decide',{id:${J(p.id)},approve:true})">merge</button>`:`<button onclick="post('librarian/decide',{id:${J(p.id)},approve:true})">ack</button>`} <button class="bad" onclick="post('librarian/decide',{id:${J(p.id)},approve:false})">dismiss</button></td></tr>`).join("")||'<tr><td class="mut">empty</td></tr>'}</table></div>
+<div class="card"><h3>Activity (every change is undoable)</h3><table>${L.recent.map(e=>`<tr><td class="mut">${E(e.ts)}</td><td>${pill(e.action)}</td><td>${E(e.target)}</td><td class="mut">${E(e.before).slice(0,60)} -> ${E(e.after).slice(0,80)}</td><td>${e.status=="applied"&&e.reversible?`<button onclick="post('librarian/undo',{id:${J(e.id)}})">undo</button>`:pill(e.status)}</td></tr>`).join("")}</table></div>`}});
 Object.assign(V,{
 async "MCP hub"(){const m=await api("mcp");const add=window.mcp_add;
-const catRow=c=>`<tr><td><b>${E(c.id)}</b> ${c.verified?'<span class="pill ok" title="verified against vendor docs">verified</span>':'<span class="pill pending">community</span>'}<div class="mut">${E(c.title)}</div></td><td>${pill(c.transport)}</td><td class="mut">${E(c.auth||"")}</td><td><a href="${E(c.docs)}" target="_blank" rel="noopener">docs ↗</a></td><td><button onclick="mcp_add='${E(c.id)}';render()">Add</button></td></tr>`;
+const catRow=c=>`<tr><td><b>${E(c.id)}</b> ${c.verified?'<span class="pill ok" title="verified against vendor docs">verified</span>':'<span class="pill pending">community</span>'}<div class="mut">${E(c.title)}</div></td><td>${pill(c.transport)}</td><td class="mut">${E(c.auth||"")}</td><td><a href="${E(c.docs)}" target="_blank" rel="noopener">docs ↗</a></td><td><button onclick="mcp_add=${J(c.id)};render()">Add</button></td></tr>`;
 const form=add?(()=>{const c=m.catalog.find(x=>x.id==add);return `<div class="card"><h3>Add ${E(c.title)}</h3>${c.notes?`<p class="mut">${E(c.notes)}</p>`:""}
 ${c.params.map(p=>`<div><label>${E(p)} <input id="mp_${E(p)}" placeholder="${E(p)}"></label></div>`).join("")}${c.secrets.map(x=>`<div><label>${E(x)} secret ref <input id="mr_${E(x)}" value="env://${E(x)}" size="34"></label> <span class="mut">reference only — never paste a raw key</span></div>`).join("")}
-<p><button class="pri" onclick="mcpAdd('${E(c.id)}')">Connect</button> <button onclick="mcp_add=null;render()">cancel</button></p></div>`})():"";
-return form+`<div class="grid">${m.servers.map(x=>`<div class="card stat"><div><span class="dot ${x.status=="up"?"live":x.status=="down"?"":"idle"}" style="${x.status=="down"?"background:var(--bad)":""}"></span><b>${E(x.name)}</b> ${pill(x.transport)}</div><div class="big">${x.tools}<span class="mut" style="font-size:13px"> tools</span></div><div class="mut">${x.calls_24h} calls/24h · restarts ${x.restarts}</div>${x.last_error?`<div class="failed" style="font-size:11px">${E(x.last_error.slice(0,90))}</div>`:""}<p><button onclick="post('mcp/health',{name:'${E(x.name)}'})">health check</button> <button class="bad" onclick="confirm('Remove ${E(x.name)}?')&&post('mcp/remove',{name:'${E(x.name)}'})">remove</button></p></div>`).join("")||`<div class="card" style="grid-column:1/-1">${empty("🔌","No upstream MCP servers yet","<div>Add one from the catalog below, or import your existing configs: <code>commons mcp import</code></div>")}</div>`}</div>
-<div class="card"><h3>Approvals waiting (${m.approvals.length})</h3>${m.approvals.length?`<table>${m.approvals.map(a=>`<tr><td><code>${E(a.server)}__${E(a.tool)}</code></td><td class="mut">${E(a.agent||"")}</td><td><code>${E(a.args.slice(0,140))}</code></td><td><button class="pri" onclick="post('mcp/approve',{id:'${a.id}',approve:true})">approve</button> <button class="bad" onclick="post('mcp/approve',{id:'${a.id}',approve:false})">deny</button></td></tr>`).join("")}</table>`:'<span class="mut">Nothing needs approval.</span>'}</div>
+<p><button class="pri" onclick="mcpAdd(${J(c.id)})">Connect</button> <button onclick="mcp_add=null;render()">cancel</button></p></div>`})():"";
+return form+`<div class="grid">${m.servers.map(x=>`<div class="card stat"><div><span class="dot ${x.status=="up"?"live":x.status=="down"?"":"idle"}" style="${x.status=="down"?"background:var(--bad)":""}"></span><b>${E(x.name)}</b> ${pill(x.transport)}</div><div class="big">${x.tools}<span class="mut" style="font-size:13px"> tools</span></div><div class="mut">${x.calls_24h} calls/24h · restarts ${x.restarts}</div>${x.last_error?`<div class="failed" style="font-size:11px">${E(x.last_error.slice(0,90))}</div>`:""}<p><button onclick="post('mcp/health',{name:${J(x.name)}})">health check</button> <button class="bad" onclick="confirm(${J('Remove '+x.name+'?')})&&post('mcp/remove',{name:${J(x.name)}})">remove</button></p></div>`).join("")||`<div class="card" style="grid-column:1/-1">${empty("🔌","No upstream MCP servers yet","<div>Add one from the catalog below, or import your existing configs: <code>commons mcp import</code></div>")}</div>`}</div>
+<div class="card"><h3>Approvals waiting (${m.approvals.length})</h3>${m.approvals.length?`<table>${m.approvals.map(a=>`<tr><td><code>${E(a.server)}__${E(a.tool)}</code></td><td class="mut">${E(a.agent||"")}</td><td><code>${E(a.args.slice(0,140))}</code></td><td><button class="pri" onclick="post('mcp/approve',{id:${J(a.id)},approve:true})">approve</button> <button class="bad" onclick="post('mcp/approve',{id:${J(a.id)},approve:false})">deny</button></td></tr>`).join("")}</table>`:'<span class="mut">Nothing needs approval.</span>'}</div>
 <div class="cols"><div class="card"><h3>Tools (${m.tools.length})</h3><table>${m.tools.slice(0,150).map(t=>`<tr><td><code>${E(t.server)}__${E(t.name)}</code></td><td>${pill(t.risk)}</td><td class="mut">${E(t.description)}</td></tr>`).join("")||'<tr><td class="mut">—</td></tr>'}</table></div>
 <div class="card"><h3>Policies</h3><table>${m.policies.map(p=>`<tr><td>${pill(p.effect)}</td><td>agent <code>${E(p.agent)}</code></td><td><code>${E(p.server)}__${E(p.tool)}</code></td></tr>`).join("")||'<tr><td class="mut">Defaults: read/write allowed, destructive needs approval.</td></tr>'}</table>
 <p><select id="pe"><option>deny</option><option>approve</option><option>allow</option></select> <input id="pa" placeholder="agent or *" size=8> <input id="ps" placeholder="server" size=8> <input id="pt" placeholder="tool glob" size=10> <button onclick="post('mcp/policy',{effect:$('#pe').value,agent:$('#pa').value,server:$('#ps').value,tool:$('#pt').value})">add rule</button></p></div></div>
@@ -904,7 +1053,7 @@ return `<div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap;align-
 <input id="dq" value="${E(q)}" placeholder="search skills…" onkeydown="if(event.key=='Enter'){dq=this.value;render()}"> <select onchange="dk=this.value;render()">${["","skill","plugin","rules","agents_md","list"].map(k=>`<option ${k==kind?"selected":""} value="${k}">${k||"all kinds"}</option>`).join("")}</select>
 <span class="spacer"></span><span class="mut">${st.entries} entries · last scan ${E(st.last_run?st.last_run.ts:"never")} · token ${st.token_ref?`<code>${E(st.token_ref)}</code>`:'<span class="pill pending">none</span>'}</span> <button onclick="post('discover/run',{})">scan GitHub now</button></div></div>
 <div class="card">${d.rows.length?`<table><tr><th>skill</th><th>★</th><th>Δ 1d / 7d</th><th>forks</th><th>kind</th><th>license</th><th>updated</th><th></th></tr>${d.rows.map(r=>`<tr><td><b>${E(r.name)}</b> <a href="${E(r.url)}" target="_blank" rel="noopener" class="mut">${E(r.id)} ↗</a><div class="mut">${E(r.description.slice(0,110))}</div></td><td><b>${r.stars}</b></td><td>${r.delta_1d>0?`<span class="done">+${r.delta_1d}</span>`:"0"} / ${r.delta_7d>0?`<span class="done">+${r.delta_7d}</span>`:"0"}</td><td>${r.forks}</td><td>${pill(r.kind)}</td><td>${r.license_ok?pill("ok")+" ":`<span class="pill pending" title="not on allow-list">${E(r.license)}</span>`} ${r.license_ok?E(r.license):""}</td><td class="mut">${r.days_since_push<9999?r.days_since_push+"d ago":""}</td>
-<td>${r.imported_skill?pill(r.status):r.path?`<button class="pri" onclick="post('discover/add',{id:'${E(r.id)}',allow_license:${!r.license_ok}&&confirm('License ${E(r.license)} is not on the allow-list. Import anyway after checking terms?')})">Add to pool</button>`:'<span class="mut">repo/list</span>'}</td></tr>`).join("")}</table>`:empty("🔭","No discovered skills yet","<div>Configure a token ref (<code>commons skills configure --token-ref env://GITHUB_TOKEN</code>) and click <b>scan GitHub now</b>. The scheduler refreshes daily.</div>")}</div>
+<td>${r.imported_skill?pill(r.status):r.path?`<button class="pri" onclick="post('discover/add',{id:${J(r.id)},allow_license:${!r.license_ok}&&confirm(${J('License '+(r.license||'')+' is not on the allow-list. Import anyway after checking terms?')})})">Add to pool</button>`:'<span class="mut">repo/list</span>'}</td></tr>`).join("")}</table>`:empty("🔭","No discovered skills yet","<div>Configure a token ref (<code>commons skills configure --token-ref env://GITHUB_TOKEN</code>) and click <b>scan GitHub now</b>. The scheduler refreshes daily.</div>")}</div>
 <div class="card mut">Imports are pinned to a commit, run through the review gate (license allow-list, secret + prompt-injection scan) and never auto-activate. Upstream changes arrive as new pending versions with diffs.</div>`},
 async Import(){const p=window.ip||"";const r=await api("import_scan?paths="+encodeURIComponent(p));
 return `<div class="card"><h3>Import skills installed on this machine</h3><p class="mut">Scans ~/.claude/skills, project .claude/skills, Claude Code plugins, .cursor/rules, AGENTS.md, ~/.codex and custom paths. Duplicates of pool skills are skipped.</p>
@@ -918,7 +1067,7 @@ return `<div class="grid"><div class="card stat hero"><div class="mut">Tokens sa
 <div class="card stat"><div class="mut">Provider cache hits</div><div class="big">${sv.provider_cached_tokens.toLocaleString()}</div><div class="mut">cached input tokens</div></div>
 <div class="card stat"><div class="mut">Dedup</div><div class="big">${sv.dedup_ratio??"–"}×</div><div class="mut">${sv.section_refs} section refs → ${sv.blobs} blobs</div></div>
 <div class="card stat"><div class="mut">Packs</div><div class="big">${c.packs.length}</div></div></div>
-<div class="cols"><div class="card"><h3>Context packs</h3>${c.packs.length?`<table><tr><th>pack</th><th>L0 · L1 · L2 · L3 tokens</th><th>new / reused chars</th><th>loads · saved</th></tr>${c.packs.map(p=>`<tr style="cursor:pointer" onclick="cxs='${p.id}';render()"><td><b>${E(p.name)}</b> ${p.parent?pill("delta"):pill("base")}<div class="mut">${E(p.gist.slice(0,90))}</div><div class="mut" style="font-size:11px">${E(p.agent||"")} · ${E(p.created_at)} · prefix <code>${E(p.prefix_hash)}</code></div></td>
+<div class="cols"><div class="card"><h3>Context packs</h3>${c.packs.length?`<table><tr><th>pack</th><th>L0 · L1 · L2 · L3 tokens</th><th>new / reused chars</th><th>loads · saved</th></tr>${c.packs.map(p=>`<tr style="cursor:pointer" onclick="cxs=${J(p.id)};render()"><td><b>${E(p.name)}</b> ${p.parent?pill("delta"):pill("base")}<div class="mut">${E(p.gist.slice(0,90))}</div><div class="mut" style="font-size:11px">${E(p.agent||"")} · ${E(p.created_at)} · prefix <code>${E(p.prefix_hash)}</code></div></td>
 <td>${["L0","L1","L2","L3"].map(l=>`<span title="${l}">${p.tokens[l]}</span>`).join(" · ")}<div style="display:flex;height:6px;border-radius:9px;overflow:hidden;margin-top:4px;background:var(--line)">${["L0","L1","L2","L3"].map((l,i)=>`<div style="width:${100*p.tokens[l]/Math.max(1,p.full_tokens)}%;background:${PAL[i]}"></div>`).join("")}</div></td><td>${p.new_chars} / <span class="done">${p.reused_chars}</span></td><td>${p.loads} · <b>${p.tokens_saved}</b></td></tr>`).join("")}</table>`:empty("🧳","No context packs yet","<div>Agents call <code>context_save</code> before a handoff and pass the pack id; receivers <code>context_load</code> only the layer they need.</div>")}</div>
 <div class="card">${sel&&c.diff?`<h3>Pack ${E(sel)}</h3><div class="mut">vs parent ${E(c.diff.from||"–")}: +${c.diff.added.length} sections, −${c.diff.removed.length}, ~${c.diff.changed.length} changed</div>${c.diff.changed.map(x=>`<details><summary>${E(x.title)}</summary><pre>${E(x.diff)}</pre></details>`).join("")}<h4>L1 (cache-friendly prefix)</h4><pre>${E(c.l1)}</pre>`:'<p class="mut">Select a pack to see its delta vs the parent and its L1 brief.</p>'}</div></div>`}});
 Object.assign(V,{
@@ -935,7 +1084,7 @@ return `<div class="grid"><div class="card stat"><div class="mut">Pending review
 <p>status <select onchange="rqSet('status',this.value)">${["pending","applied","rejected"].map(x=>`<option ${x==f.status?"selected":""}>${x}</option>`).join("")}</select>
 kind <select onchange="rqSet('kind',this.value)">${kinds.map(x=>`<option value="${x}" ${x==f.kind?"selected":""}>${x||"all"}</option>`).join("")}</select>
 ${f.status=="pending"?`&nbsp; <button class="pri" onclick="retroDecide(true)">Approve selected</button> <button class="bad" onclick="retroDecide(false)">Reject selected</button> <button onclick="retroAll(true)">Approve all shown</button> <button onclick="retroAll(false)">Reject all shown</button>`:""}</p>
-${d.queue.length?`<table><tr><th><input type="checkbox" onchange="document.querySelectorAll('.rqc').forEach(c=>c.checked=this.checked)"></th><th>kind</th><th>conf</th><th>learned</th><th>source</th><th>project</th></tr>${d.queue.map(r=>`<tr><td><input type="checkbox" class="rqc" value="${r.id}"></td><td>${pill(r.kind)}</td><td>${r.confidence.toFixed(2)}</td><td>${E(r.text.slice(0,260))}${r.payload.rationale?`<div class="mut">why: ${E(r.payload.rationale)}</div>`:""}</td><td class="mut">${E(r.source_kind)} · ${E((r.source.title||r.source.path||"").slice(0,40))}${r.source.ts?"<br>"+new Date(r.source.ts*1000).toLocaleDateString():""} · ${E(r.method||"")}</td><td>${E(r.project||"")}</td></tr>`).join("")}</table>`:empty("🕰","Nothing here","Run a dry run first to see what Commons would learn.")}</div>`},
+${d.queue.length?`<table><tr><th><input type="checkbox" onchange="document.querySelectorAll('.rqc').forEach(c=>c.checked=this.checked)"></th><th>kind</th><th>conf</th><th>learned</th><th>source</th><th>project</th></tr>${d.queue.map(r=>`<tr><td><input type="checkbox" class="rqc" value="${E(r.id)}"></td><td>${pill(r.kind)}</td><td>${r.confidence.toFixed(2)}</td><td>${E(r.text.slice(0,260))}${r.payload.rationale?`<div class="mut">why: ${E(r.payload.rationale)}</div>`:""}</td><td class="mut">${E(r.source_kind)} · ${E((r.source.title||r.source.path||"").slice(0,40))}${r.source.ts?"<br>"+new Date(r.source.ts*1000).toLocaleDateString():""} · ${E(r.method||"")}</td><td>${E(r.project||"")}</td></tr>`).join("")}</table>`:empty("🕰","Nothing here","Run a dry run first to see what Commons would learn.")}</div>`},
 async System(){const d=await api("system");const ago=t=>t?Math.round((Date.now()/1000-t)/60)+"m ago":"never";
 return `<div class="grid"><div class="card stat"><div class="mut">Backend</div><div class="big">${E(d.dialect)}</div><div class="mut">${d.encrypted?"encrypted at rest (SQLCipher)":"not encrypted"}</div></div>
 <div class="card stat"><div class="mut">Network</div><div class="big" style="font-size:16px">${E(d.network.provider||"local")}${d.network.public?" "+pill("public"):""}</div><div class="mut">${d.network.url?`<a href="${E(d.network.url)}" target="_blank">${E(d.network.url)}</a> · ${d.network.health?(d.network.health.ok?"auth enforced ✓":"⚠ status "+d.network.health.status):"not probed"}`:"localhost only · <code>commons expose up tailscale</code>"}</div></div>
@@ -944,8 +1093,8 @@ return `<div class="grid"><div class="card stat"><div class="mut">Backend</div><
 <div class="card stat"><div class="mut">Last prune</div><div class="big" style="font-size:16px">${d.background.last_prune?ago(d.background.last_prune.ts):"never"}</div><div class="mut">backup: ${d.background.last_backup?E(d.background.last_backup.path.split("/").pop()):"off"}</div></div></div>
 <div class="cols"><div class="card"><h3>Notifications <button onclick="post('notifications/read',{}).then(render)">mark all read</button></h3>${d.notifications.length?`<table>${d.notifications.map(n=>`<tr><td>${pill(n.level)}</td><td><b>${E(n.title)}</b><div class="mut">${E(n.body.slice(0,220))}</div></td><td class="mut">${ago(n.ts)}</td></tr>`).join("")}</table>`:empty("🔔","Nothing needs you","Stuck or unassignable tasks escalate here.")}
 <h3 style="margin-top:14px">Escalations</h3>${d.escalations.length?`<table>${d.escalations.map(x=>`<tr><td>${pill(x.level)}</td><td><code>${E(x.subtask_id)}</code></td><td class="mut">${E(x.detail)}</td></tr>`).join("")}</table>`:'<p class="mut">none</p>'}</div>
-<div class="card"><h3>Background jobs</h3><table>${Object.entries(d.background.jobs).map(([k,v])=>`<tr><td>${E(k)}</td><td class="mut">every ${v.every}s</td><td>${ago(v.last)}</td><td><button onclick="post('maintenance/run',{job:'${k}'}).then(()=>{toast('${k} ran');render()})">run</button></td></tr>`).join("")}</table></div></div>
-<div class="cols"><div class="card"><h3>Agent trust</h3><table><tr><th>agent</th><th>score</th><th>auth</th><th>success</th><th>conflict loss</th><th>pin</th></tr>${d.trust.map(t=>`<tr><td>${E(t.agent)}</td><td><b>${t.score}</b>${t.manual!=null?" "+pill("pinned"):""}<div style="height:5px;width:${Math.round(t.score*100)}%;background:var(--grad);border-radius:9px"></div></td><td>${t.auth}</td><td>${t.success_rate} (${t.evidence})</td><td>${t.conflict_loss}</td><td><input size=3 placeholder="0-1" onchange="post('trust/set',{agent:'${E(t.agent)}',score:this.value}).then(render)"></td></tr>`).join("")}</table></div>
+<div class="card"><h3>Background jobs</h3><table>${Object.entries(d.background.jobs).map(([k,v])=>`<tr><td>${E(k)}</td><td class="mut">every ${v.every}s</td><td>${ago(v.last)}</td><td><button onclick="post('maintenance/run',{job:${J(k)}}).then(()=>{toast(${J(k+' ran')});render()})">run</button></td></tr>`).join("")}</table></div></div>
+<div class="cols"><div class="card"><h3>Agent trust</h3><table><tr><th>agent</th><th>score</th><th>auth</th><th>success</th><th>conflict loss</th><th>pin</th></tr>${d.trust.map(t=>`<tr><td>${E(t.agent)}</td><td><b>${t.score}</b>${t.manual!=null?" "+pill("pinned"):""}<div style="height:5px;width:${Math.round(t.score*100)}%;background:var(--grad);border-radius:9px"></div></td><td>${t.auth}</td><td>${t.success_rate} (${t.evidence})</td><td>${t.conflict_loss}</td><td><input size=3 placeholder="0-1" onchange="post('trust/set',{agent:${J(t.agent)},score:this.value}).then(render)"></td></tr>`).join("")}</table></div>
 <div class="card"><h3>Project ACLs</h3>${d.acl.length?`<table>${d.acl.map(a=>`<tr><td>${E(a.project)}</td><td>${E(a.agent)}</td><td>${pill(a.role)}</td></tr>`).join("")}</table>`:'<p class="mut">All projects open. <code>commons acl grant PROJECT AGENT --role read|write|admin</code> restricts a project.</p>'}
 <h3 style="margin-top:14px">Routing A/B validation</h3>${d.routing_validation.length?`<table>${d.routing_validation.map(r=>`<tr><td>${E(r.task_type)}</td><td>${E(r.old_model)} → ${E(r.new_model)}</td><td>${pill(r.status)}</td></tr>`).join("")}</table>`:'<p class="mut">No switches being validated.</p>'}</div></div>`}});
 function rqSet(k,v){window.rq=Object.assign(window.rq||{status:"pending",kind:"",source:""},{[k]:v});render()}
@@ -961,21 +1110,29 @@ function ocZoom(f,cx,cy){const w=$("#ocw");if(!w)return;cx=cx??w.clientWidth/2;c
 function ocMini(){const w=$("#ocw"),st=$("#ocs"),mm=$("#ocmm"),vp=$("#ocvp");if(!mm||!st)return;const W=190,H=120,sw=st.scrollWidth,sh=st.scrollHeight,m=Math.min(W/sw,H/sh);
 if(!mm.dataset.done){mm.innerHTML=st.innerHTML;mm.dataset.done=1}mm.style.transform=`scale(${m})`;mm.style.width=sw+"px";
 vp.style.left=Math.max(0,-oc_tf.x/oc_tf.k*m)+"px";vp.style.top=Math.max(0,-oc_tf.y/oc_tf.k*m)+"px";vp.style.width=Math.min(W,w.clientWidth/oc_tf.k*m)+"px";vp.style.height=Math.min(H,w.clientHeight/oc_tf.k*m)+"px"}
-function ocInit(){const w=$("#ocw");if(!w)return;if(oc_tf.fit)ocFit();else ocApply();let drag=null;
+function ocInit(){const w=$("#ocw");if(!w)return;if(oc_tf.fit)ocFit();else ocApply();
+const sel=document.querySelector(".oc.sel");if(sel&&window.oc_center){window.oc_center=0;const r=sel.getBoundingClientRect(),wr=w.getBoundingClientRect();oc_tf.x+=wr.width/2-(r.left-wr.left+r.width/2);oc_tf.y+=wr.height/3-(r.top-wr.top);oc_tf.fit=false;ocApply()}
+if(w.dataset.oc)return;w.dataset.oc="1";let drag=null;
 w.addEventListener("wheel",e=>{e.preventDefault();const r=w.getBoundingClientRect();ocZoom(e.deltaY<0?1.1:1/1.1,e.clientX-r.left,e.clientY-r.top)},{passive:false});
 w.addEventListener("pointerdown",e=>{if(e.target.closest(".oc,button"))return;drag={x:e.clientX-oc_tf.x,y:e.clientY-oc_tf.y};w.classList.add("drag");w.setPointerCapture(e.pointerId)});
 w.addEventListener("pointermove",e=>{if(!drag)return;oc_tf.x=e.clientX-drag.x;oc_tf.y=e.clientY-drag.y;oc_tf.fit=false;ocApply()});
-w.addEventListener("pointerup",()=>{drag=null;w.classList.remove("drag")});
-const sel=document.querySelector(".oc.sel");if(sel&&window.oc_center){window.oc_center=0;const r=sel.getBoundingClientRect(),wr=w.getBoundingClientRect();oc_tf.x+=wr.width/2-(r.left-wr.left+r.width/2);oc_tf.y+=wr.height/3-(r.top-wr.top);oc_tf.fit=false;ocApply()}}
-async function ocFind(){const q=$("#ocq").value;const h=await api("tree_find?root="+(window.oc_root||"workspace")+"&q="+encodeURIComponent(q));$("#ochits").innerHTML=h.map(x=>`<div><a href="#" onclick="oc_jump='${x.path}';render();return false"><code>${E(x.path)}</code> ${E(x.breadcrumbs.join(" › "))}</a></div>`).join("")||'<span class="mut">no match</span>'}
+w.addEventListener("pointerup",()=>{drag=null;w.classList.remove("drag")})}
+async function ocFind(){const q=$("#ocq").value;const h=await api("tree_find?root="+(window.oc_root||"workspace")+"&q="+encodeURIComponent(q));$("#ochits").innerHTML=h.map(x=>`<div><a href="#" onclick="oc_jump=${J(x.path)};render();return false"><code>${E(x.path)}</code> ${E(x.breadcrumbs.join(" › "))}</a></div>`).join("")||'<span class="mut">no match</span>'}
 async function openJob(id){const j=await api("job?id="+id);$("#j_"+id).innerHTML=`<table><tr><th>key</th><th>type</th><th>status</th><th>agent</th><th>gate</th><th>attempts</th><th>result</th></tr>${j.subtasks.map(s=>`<tr><td>${E(s.key)}</td><td>${pill(s.type)}</td><td>${pill(s.status)}</td><td>${E(s.agent)}</td><td>${s.gates.length?"gated by "+s.gates.length:s.gate_of?"gate":""} ${s.verdict?pill(s.verdict):""}</td><td>${s.attempts}</td><td><details><summary class="mut">${E((s.result||"").slice(0,70))}</summary><pre>${E(s.result||"")}</pre></details></td></tr>`).join("")}</table>${j.result?`<h4>Merged result</h4><pre>${E(j.result)}</pre>`:""}`}
-async function show(id){const d=await api("item?id="+id);const el=$("#det");el.hidden=false;el.textContent=JSON.stringify(d,null,1)}
-async function render(){tabs();const o=await api("overview");$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})">⏻ Kill switch</button>`;
-try{const html=await V[tab]();const m=$("#m");if(m.dataset.tab!=tab){m.style.animation="none";m.offsetHeight;m.style.animation=""}m.dataset.tab=tab;m.innerHTML=html;if(tab=="Org chart")ocInit()}catch(e){$("#m").innerHTML='<div class="card failed">'+E(e)+'</div>'}}
+async function show(id){if(typeof id!=="string"||!id)return;window.mopen=id;window.mfocus=id;window.medit=null;if(tab!=="Memory")go("Memory");else render()}
+window.addEventListener("message",ev=>{const d=ev.data;if(!d||typeof d!=="object"||d.type!=="commons:open"||typeof d.id!=="string"||!d.id)return;show(d.id)});
+let _rseq=0;
+async function render(){tabs();const seq=++_rseq;if(window.medit&&$("#med"))window._draft={id:window.medit,content:$("#med").value,tags:($("#metags")&&$("#metags").value)||""};
+try{const o=await api("overview");if(seq!==_rseq)return;$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})">⏻ Kill switch</button>`;
+if(tab==="Memory"&&!$("#mq"))$("#m").innerHTML='<div class="card"><div class="skel"></div><div class="skel w"></div><div class="skel"></div><div class="skel w"></div><div class="skel"></div></div>';
+const html=await V[tab]();if(seq!==_rseq)return;const m=$("#m");if(m.dataset.tab!=tab){m.style.animation="none";m.offsetHeight;m.style.animation=""}m.dataset.tab=tab;m.innerHTML=html;if(tab=="Org chart")ocInit();
+if(tab==="Memory"&&window._mfocus){window._mfocus=false;const el=$("#mq");if(el){el.focus();const n=window._mcaret==null?el.value.length:Math.min(window._mcaret,el.value.length);try{el.setSelectionRange(n,n)}catch(err){}}}}
+catch(e){if(seq!==_rseq)return;toast(String(e&&e.message||e),"err");$("#m").innerHTML='<div class="card failed">'+E(e)+'</div>'}}
 const boot=Date.now();render();
 const LIVE=["Overview","Agents","Orchestration","Usage","Librarian","MCP hub","Context","Sessions"];let lastLive=0,seenN=new Set();
 function liveRender(){if(LIVE.includes(tab)&&!document.querySelector("details[open]")&&!document.querySelector("input:focus,textarea:focus")&&Date.now()-lastLive>1500){lastLive=Date.now();render()}}
-if(window.EventSource){const es=new EventSource("/events");es.addEventListener("change",e=>{const d=JSON.parse(e.data);(d.notifications||[]).forEach(n=>{if(!seenN.has(n.id)){seenN.add(n.id);if(seenN.size>1||Date.now()-boot>3000)toast((n.level==="warn"?"⚠ ":"")+n.title)}});liveRender()});es.onerror=()=>{if(!window._poll){window._poll=setInterval(liveRender,5000)}}}else{setInterval(liveRender,5000)}
+function stopPoll(){if(window._poll){clearInterval(window._poll);window._poll=0}}
+if(window.EventSource){const es=new EventSource("/events");es.onopen=stopPoll;es.onmessage=stopPoll;es.addEventListener("change",e=>{stopPoll();const d=JSON.parse(e.data);(d.notifications||[]).forEach(n=>{if(!seenN.has(n.id)){seenN.add(n.id);if(seenN.size>1||Date.now()-boot>3000)toast((n.level==="warn"?"⚠ ":"")+n.title)}});liveRender()});es.onerror=()=>{if(!window._poll)window._poll=setInterval(liveRender,5000)}}else{setInterval(liveRender,5000)}
 </script></body></html>"""
 
 
