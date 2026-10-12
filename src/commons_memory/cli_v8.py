@@ -131,10 +131,11 @@ def _import(args) -> int:
 
         def known_fn(srcs, cli=cli):
             if cli is None:
-                return I.known(local, srcs)
+                return I.known(local, srcs) | I.queued_srcs(local, srcs)
             got: set = set()
             for i in range(0, len(srcs), 2000):
-                got |= set(json.loads(cli._call("import_items", {"items": [], "check": srcs[i:i + 2000]}))["known"])
+                r = json.loads(cli._call("import_items", {"items": [], "check": srcs[i:i + 2000]}))
+                got |= set(r["known"]) | set(r.get("queued", []))  # queued items wait for a human, not the curator
             return got
 
         from .store import Store

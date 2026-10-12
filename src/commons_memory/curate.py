@@ -67,7 +67,7 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
     from . import importers as I
     from .providers import ProviderLayer
     sink = sink or (lambda xs: I.import_items(s, xs, agent_id=agent_id))
-    known_fn = known_fn or (lambda srcs: I.known(s, srcs))
+    known_fn = known_fn or (lambda srcs: I.known(s, srcs) | I.queued_srcs(s, srcs))  # queued = waiting for a human
     pl = ProviderLayer(s)
     model = model or pl.role_model("curator")
     if not model:

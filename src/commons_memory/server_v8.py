@@ -92,7 +92,8 @@ def register_v8(mcp, store, who):
         from .importers import known
         aid = me(agent, api_key)
         if check:
-            return _js({"known": sorted(known(store, check))})
+            from .importers import queued_srcs
+            return _js({"known": sorted(known(store, check)), "queued": sorted(queued_srcs(store, check))})
         items = items or []
         if len(items) > 500:
             raise CommonsError("import_items takes at most 500 items per call")

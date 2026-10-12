@@ -172,16 +172,21 @@ def known(s: Store, srcs: list[str]) -> set[str]:
     return out
 
 
+def queued_srcs(s: Store, srcs: list[str]) -> set[str]:
+    """srcs waiting in the review queue: a curator must not decide them again, a re-run must not queue them twice."""
+    srcs = [x for x in srcs if x]
+    return {r["key"][7:] for k in range(0, len(srcs), 400) for r in s.q(
+        f"SELECT key FROM meta WHERE value='queued' AND key IN ({','.join('?' * len(srcs[k:k + 400]))})",
+        [f"import:{x}" for x in srcs[k:k + 400]])}
+
+
 def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> dict:
     """Write items idempotently (skip any whose src is already handled). Per-item `status`: keep (default) imports;
     review queues it for a human (retro review queue); drop / merge / duplicate only records the decision so later
     runs skip it. Embeds once at the end, in batches."""
     from .prefs import Preferences
     have = known(s, [i.get("src") for i in items])
-    srcs = [i.get("src") for i in items if i.get("src")]
-    queued_already = {r["key"][7:] for k in range(0, len(srcs), 400) for r in s.q(
-        f"SELECT key FROM meta WHERE value='queued' AND key IN ({','.join('?' * len(srcs[k:k + 400]))})",
-        [f"import:{x}" for x in srcs[k:k + 400]])}
+    queued_already = queued_srcs(s, [i.get("src") for i in items])
     added, skipped, prefs, queued, ledger, errors = 0, 0, 0, 0, 0, []
     s.defer_embed = True
     try:
