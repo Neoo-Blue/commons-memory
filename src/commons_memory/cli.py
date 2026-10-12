@@ -367,7 +367,15 @@ def _main(argv: list[str] | None = None) -> int:
     from .cli_v8 import handle as v8_handle
     from .cli_v8 import handle_nostore
     v8_parsers(sub)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tail = None
+    if "secret-exec" in argv and "--" in argv[argv.index("secret-exec"):]:
+        # argparse's handling of "--" before a nargs="*" positional differs across Python versions; split it ourselves
+        i = argv.index("--", argv.index("secret-exec"))
+        argv, tail = argv[:i], argv[i + 1:]
     args = p.parse_args(argv)
+    if tail is not None:
+        args.command = list(args.command or []) + tail
     if args.cmd in V8_NOSTORE:
         return handle_nostore(args)
 
