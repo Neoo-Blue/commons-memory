@@ -59,6 +59,9 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         from .auth import ANON, PRINCIPAL
         p = PRINCIPAL.get()
         if p and p != ANON:  # authenticated at the HTTP layer (agent key or OAuth token)
+            # header-only clients never pass api_key: keep presence fresh so dashboards and the escalation
+            # ladder (which only reassigns to recently-seen agents) don't treat them as offline
+            store.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), p))
             return p, True
         if require_keys and write:
             raise CommonsError("this server requires an api_key for writes (register_agent first)")
