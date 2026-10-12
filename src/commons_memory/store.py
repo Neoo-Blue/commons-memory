@@ -920,7 +920,17 @@ class Store:
         ids -= self.hidden_ids(list(ids))
         rels = [r for r in rels if r["src"] in ids and r["dst"] in ids]
         nodes = {i: dict(zip(("type", "name"), self.label(i))) for i in ids}
-        return {"nodes": nodes, "edges": rels}
+        idl = list(ids)
+        for b in range(0, len(idl), 500):  # source badges for code entities: path and line
+            ch = idl[b:b + 500]
+            for r in self.q(f"SELECT id, path, line FROM entities WHERE id IN ({','.join('?' * len(ch))}) AND path IS NOT NULL", ch):
+                nodes[r["id"]].update(path=r["path"], **({"line": r["line"]} if r["line"] else {}))
+        out = {"nodes": nodes, "edges": rels}
+        if project:
+            c = self.q("SELECT value FROM meta WHERE key=?", (f"codecommit:{self.find_project(project)}",))
+            if c:
+                out["commit"] = c[0]["value"]
+        return out
 
     # ------------------------------------------------------------------ sessions & handoff
     def session_start(self, goal: str, agent_id: str | None, project: str | None = None, state: dict | None = None) -> dict:

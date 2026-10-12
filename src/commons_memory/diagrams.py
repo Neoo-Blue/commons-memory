@@ -159,3 +159,59 @@ document.getElementById('pngb').onclick=()=>{const img=new Image(),r=svg.getBoun
  const x=c.getContext('2d');x.fillStyle='#0f1115';x.fillRect(0,0,c.width,c.height);x.scale(2,2);x.drawImage(img,0,0);dl(c.toDataURL('image/png'),'diagram.png')};
  img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svgText())};
 </script></body></html>"""
+
+
+# ------------------------------------------------------------------ architecture delta (v0.9)
+def snapshot(s: Store, project: str, keep: int = 10) -> dict:
+    """Record the file-level dependency graph after an index run so `delta` can show how the architecture moved."""
+    from .ids import now
+    pid = s.find_project(project)
+    g = code_graph(s, project)
+    path_of = {n["id"]: n["title"] for n in g["nodes"]}
+    snap = {"ts": now(), "files": sorted(path_of.values()),
+            "edges": sorted({(path_of[e["from"]], path_of[e["to"]], e["kind"]) for e in g["edges"]
+                             if e["from"] in path_of and e["to"] in path_of})}
+    c = s.q("SELECT value FROM meta WHERE key=?", (f"codecommit:{pid}",))
+    snap["commit"] = c[0]["value"] if c else None
+    r = s.q("SELECT value FROM meta WHERE key=?", (f"codesnap:{pid}",))
+    snaps = (json.loads(r[0]["value"]) if r else []) + [snap]
+    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"codesnap:{pid}", json.dumps(snaps[-keep:])))
+    return {"files": len(snap["files"]), "edges": len(snap["edges"]), "snapshots": len(snaps[-keep:])}
+
+
+def delta_graph(s: Store, project: str) -> dict:
+    """What changed between the last two index runs: added/removed files and dependencies (graphview format)."""
+    pid = s.find_project(project)
+    r = s.q("SELECT value FROM meta WHERE key=?", (f"codesnap:{pid}",)) if pid else []
+    snaps = json.loads(r[0]["value"]) if r else []
+    if len(snaps) < 2:
+        raise CommonsError("need two index runs of this project to diff (index again after changes)")
+    a, b = snaps[-2], snaps[-1]
+    fa, fb = set(a["files"]), set(b["files"])
+    ea, eb = {tuple(e[:2]) for e in a["edges"]}, {tuple(e[:2]) for e in b["edges"]}
+    nodes = {}
+    for f in fa | fb:
+        t = "added file" if f not in fa else "removed file" if f not in fb else "file"
+        nodes[f] = {"type": t, "name": f.split("/")[-1], "path": f}
+    edges = [{"src": x, "dst": y, "type": "added dependency" if (x, y) not in ea else "removed dependency"
+              if (x, y) not in eb else "dependency"} for x, y in ea | eb]
+    changed = {f for f, d in nodes.items() if d["type"] != "file"} | \
+        {e["src"] for e in edges if e["type"] != "dependency"} | {e["dst"] for e in edges if e["type"] != "dependency"}
+    near = {e["src"] for e in edges if e["dst"] in changed} | {e["dst"] for e in edges if e["src"] in changed}
+    show = changed | near if changed else set(nodes)  # focus on what moved and its direct neighbours
+    return {"nodes": {k: v for k, v in nodes.items() if k in show},
+            "edges": [e for e in edges if e["src"] in show and e["dst"] in show],
+            "scope": f"delta {a.get('commit') or ''}..{b.get('commit') or ''}".strip(),
+            "summary": {"files_added": len(fb - fa), "files_removed": len(fa - fb),
+                        "deps_added": len(eb - ea), "deps_removed": len(ea - eb)}}
+
+
+def make(s: Store, kind: str, target: str = "") -> str:
+    """kind = code (target project) | job (target job id) | delta (target project)."""
+    if kind == "delta":
+        from .graphview import render
+        g = delta_graph(s, target)
+        sm = g["summary"]
+        return render(g, f"Architecture delta: {target} (+{sm['files_added']}/-{sm['files_removed']} files, "
+                         f"+{sm['deps_added']}/-{sm['deps_removed']} deps)")
+    return code_diagram(s, target or None) if kind == "code" else job_diagram(s, target)

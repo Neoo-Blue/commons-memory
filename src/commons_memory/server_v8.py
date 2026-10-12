@@ -186,10 +186,10 @@ def register_v8(mcp, store, who):
 
     @mcp.tool()
     def diagram(kind: str, target: str = "") -> str:
-        """Write an interactive HTML diagram to Commons Drive: kind=code (target=project) or job (target=job id).
-        Returns the Drive path."""
-        from .diagrams import code_diagram, job_diagram
-        html = code_diagram(store, target or None) if kind == "code" else job_diagram(store, target)
+        """Write an interactive HTML diagram to Commons Drive: kind=code (target=project), job (target=job id) or
+        delta (target=project: files and dependencies added/removed since the previous index). Returns the Drive path."""
+        from .diagrams import make
+        html = make(store, kind, target)
         from .drive import Drive
         path = f"/{target or 'shared'}/diagrams/{kind}-{(target or 'all').replace('/', '_')}.html".replace("//", "/")
         try:

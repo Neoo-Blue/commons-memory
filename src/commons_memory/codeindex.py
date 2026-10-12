@@ -96,6 +96,20 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
         except Exception:
             store.db.execute("ROLLBACK")
             raise
+    import subprocess
+    try:  # pin source badges to the commit that was indexed
+        head = subprocess.run(["git", "-C", str(rootp), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        head = ""
+    if head:
+        store.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"codecommit:{pid}", head))
+        stats["commit"] = head
+    try:  # file-level architecture snapshot for `diagram delta`
+        from .diagrams import snapshot
+        snapshot(store, project)
+    except Exception:  # noqa: BLE001 - a snapshot problem must not fail the index
+        pass
     store.audit(agent_id, "code.index", pid, stats)
     return stats
 

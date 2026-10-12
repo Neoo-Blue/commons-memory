@@ -115,3 +115,28 @@ def test_overview_and_community_views():
     small = gv.overview({"nodes": dict(list(nodes.items())[:30]), "edges": []}, max_nodes=100)
     assert "scope" not in small or small.get("scope") != "overview"  # small graphs are shown as-is
     assert "commons:open" in gv.render(ov) and "community" in gv.render(ov)
+
+
+def test_source_badges_and_architecture_delta(tmp_path):
+    import subprocess
+    from commons_memory.codeindex import index_repo
+    from commons_memory.diagrams import delta_graph, make
+    from commons_memory.store import Store
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "a.py").write_text("import b\n\ndef run():\n    return b.helper()\n")
+    (repo / "b.py").write_text("def helper():\n    return 1\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=False)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], check=False)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "1"], check=False)
+    s = Store(str(tmp_path / "d.db"), embedder="hash")
+    index_repo(s, str(repo), "app")
+    g = s.export_graph("app", include_items=False)
+    fn = next(d for d in g["nodes"].values() if d["type"] == "function" and d["name"].endswith("run"))
+    assert fn["path"] == "a.py" and fn["line"] == 3
+    (repo / "c.py").write_text("import a\n\ndef main():\n    return a.run()\n")
+    index_repo(s, str(repo), "app")
+    d = delta_graph(s, "app")
+    assert d["summary"]["files_added"] == 1 and "c.py" in d["nodes"] and d["nodes"]["c.py"]["type"] == "added file"
+    assert any(e["type"] == "added dependency" for e in d["edges"])
+    assert "Architecture delta" in make(s, "delta", "app")

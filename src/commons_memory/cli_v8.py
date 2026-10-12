@@ -63,7 +63,7 @@ def add_parsers(sub) -> None:
     x.add_argument("--workers", type=int, default=4)
     x.add_argument("--rerank", action="store_true")
     x = sub.add_parser("diagram", help="interactive HTML diagram (code graph or job plan)")
-    x.add_argument("kind", choices=["code", "job"])
+    x.add_argument("kind", choices=["code", "job", "delta"])
     x.add_argument("target", nargs="?", default="", help="project (code) or job id (job)")
     x.add_argument("-o", "--out", default="")
     x = sub.add_parser("fact", help="temporal facts: set / invalidate / history / as-of")
@@ -235,8 +235,8 @@ def handle(args, store) -> int:
         r = store.reindex(limit=args.limit, force=args.force)
         print(json.dumps(r))
     elif c == "diagram":
-        from .diagrams import code_diagram, job_diagram
-        html = code_diagram(store, args.target or None) if args.kind == "code" else job_diagram(store, args.target)
+        from .diagrams import make
+        html = make(store, args.kind, args.target or "")
         out = args.out or f"commons-{args.kind}-{(args.target or 'all').replace('/', '_')}.html"
         open(out, "w").write(html)
         print(out)

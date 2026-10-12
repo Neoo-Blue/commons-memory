@@ -477,6 +477,10 @@ body.presentation #canvas-container { top: 0 !important; }
       <span class="meta-label">Community</span>
       <span id="detail-comm"></span>
     </div>
+    <div class="meta-row" id="detail-src-row" style="display:none">
+      <span class="meta-label">Source</span>
+      <code id="detail-src" style="font-size: 11px; overflow-wrap: anywhere;"></code>
+    </div>
     <div class="detail-actions">
       <button id="btn-focus-node" aria-label="Focus neighborhood">Focus (F)</button>
       <button id="btn-path-mode" aria-label="Find path to another node">Path to...</button>
@@ -594,7 +598,7 @@ body.presentation #canvas-container { top: 0 !important; }
       degree: Number(d.degree ?? 0),
       rank: Number(d.rank ?? 0),
       community: Number(d.community ?? 0),
-      cluster: d.cluster, size: Number(d.size ?? 0), outside: !!d.outside,
+      cluster: d.cluster, size: Number(d.size ?? 0), outside: !!d.outside, path: d.path, line: d.line,
       x: cx + Math.cos(nAngle) * nRadius,
       y: cy + Math.sin(nAngle) * nRadius,
       vx: 0,
@@ -1415,6 +1419,13 @@ body.presentation #canvas-container { top: 0 !important; }
 
     document.getElementById('detail-title').textContent = n.name;
     document.getElementById('detail-subtitle').textContent = n.type + ' (community ' + n.community + ')';
+    const srcRow = document.getElementById('detail-src-row');
+    if (n.path) {  // source badge pinned to the indexed commit
+      document.getElementById('detail-src').textContent = n.path + (n.line ? ':' + n.line : '') + (G.commit ? ' @' + G.commit : '');
+      srcRow.style.display = '';
+    } else {
+      srcRow.style.display = 'none';
+    }
     document.getElementById('detail-id').textContent = n.id;
     document.getElementById('detail-degree').textContent = n.degree;
     document.getElementById('detail-rank').textContent = (n.rank * 100).toFixed(2) + '%';
@@ -2328,7 +2339,7 @@ def overview(g: dict, max_nodes: int = 400, max_clusters: int = 60) -> dict:
         if x is not None and y is not None and x != y:
             agg[tuple(sorted((str(x), str(y))))] += 1
     edges = [{"src": f"cluster:{x}", "dst": f"cluster:{y}", "type": "links", "weight": n} for (x, y), n in agg.items()]
-    return analyze({"nodes": nodes, "edges": edges, "scope": "overview", "total_nodes": len(a["nodes"]),
+    return analyze({"nodes": nodes, "edges": edges, "scope": "overview", "total_nodes": len(a["nodes"]), "commit": g.get("commit"),
                     "root": g.get("root")})
 
 
@@ -2347,8 +2358,9 @@ def community(g: dict, cluster: str, limit: int = 600) -> dict:
     keep = list(inside) + sorted(near - inside, key=lambda n: -a["nodes"][n]["rank"])[: max(0, limit - len(inside))]
     ks = set(keep)
     nodes = {n: dict(a["nodes"][n], **({"outside": True} if n not in inside else {})) for n in keep}
-    return analyze({"nodes": {n: {k: v for k, v in d.items() if k in ("type", "name", "outside")} for n, d in nodes.items()},
-                    "edges": [e for e in a["edges"] if e["src"] in ks and e["dst"] in ks], "scope": f"cluster {cluster}"})
+    return analyze({"nodes": {n: {k: v for k, v in d.items() if k in ("type", "name", "outside", "path", "line")} for n, d in nodes.items()},
+                    "edges": [e for e in a["edges"] if e["src"] in ks and e["dst"] in ks], "scope": f"cluster {cluster}",
+                    "commit": g.get("commit")})
 
 
 def render(g: dict, title: str = "Commons graph") -> str:
