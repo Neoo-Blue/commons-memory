@@ -29,6 +29,9 @@ def add_parsers(sub) -> None:
                                                                      "the rest wait in the review queue")
     x.add_argument("--workers", type=int, default=4, help="parallel curator calls")
     x.add_argument("--limit", type=int, help="only the most recent N items of each source (try a sample first)")
+    x.add_argument("--batch-api", action="store_true", help="curate through the Anthropic Message Batches API "
+                                                            "(half price, results within ~1 h)")
+    x.add_argument("--resume-batch", help="collect the results of an already submitted curator batch")
     x = sub.add_parser("hook", help="(called by agent harness hooks) handle one lifecycle event from stdin; never blocks")
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "generic"])
     x.add_argument("event")
@@ -137,6 +140,7 @@ def _import(args) -> int:
             from .curate import curate
             res = curate(local, items, model=args.model, budget=args.budget, auto_approve=args.auto_approve,
                          workers=args.workers, dry_run=args.dry_run, sink=sink, known_fn=known_fn,
+                         batch_api=args.batch_api, resume_batch=args.resume_batch,
                          log=lambda m: print(f"{src}: {m}", file=sys.stderr, flush=True))
         elif args.dry_run:
             print(f"{src}: {len(items)} items, e.g. {json.dumps(items[0], default=str)[:300] if items else '-'}")

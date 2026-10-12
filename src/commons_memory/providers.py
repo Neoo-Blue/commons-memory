@@ -251,18 +251,10 @@ class ProviderLayer:
         p = self._p(provider)
         prompt, _ = redact(prompt)  # never ship secrets to a model
         kind, base = p["kind"], p["base_url"].rstrip("/")
-        from .routing import provider_params
         eff = getattr(self, "_effort", None)
-        xp = provider_params(kind, model, eff) if eff else {}
         if eff and eff.get("max_tokens"):
             max_tokens = max(max_tokens, int(eff["max_tokens"]))
-        schema = getattr(self, "_schema", None)  # structured output: the provider guarantees JSON matching it
-        if schema and kind == "anthropic":
-            xp = xp | {"output_config": dict(xp.get("output_config") or {}, format={"type": "json_schema", "schema": schema})}
-        elif schema and kind in ("openai", "openrouter", "xai"):
-            xp = xp | {"response_format": {"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": True}}}
-        elif schema and kind == "ollama":
-            xp = xp | {"format": schema}
+        xp = _extras(kind, model, eff, getattr(self, "_schema", None))
         self.last_request_params = xp
         if kind == "mock":
             text = _mock_chat(json.loads(p["config"] or "{}"), model, system, cache_prefix + prompt)
@@ -274,13 +266,8 @@ class ProviderLayer:
                     cached = len(cache_prefix) // 4
                 self.s.x("INSERT OR REPLACE INTO meta VALUES(?, '1')", (k,))
         elif kind == "anthropic":
-            sysblocks = ([{"type": "text", "text": system}] if system else []) + \
-                ([{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}] if cache_prefix else [])
-            body = {"model": model, "max_tokens": max_tokens, "system": sysblocks or None,
-                    "messages": [{"role": "user", "content": prompt}]}
-            if (xp.get("thinking") or {}).get("budget_tokens"):  # budget must fit inside max_tokens
-                body["max_tokens"] = max_tokens + xp["thinking"]["budget_tokens"]
-            r = _http("POST", f"{base}/v1/messages", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}, body | xp)
+            body = _anthropic_body(model, prompt, system, cache_prefix, max_tokens, xp)
+            r = _http("POST", f"{base}/v1/messages", {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}, body)
             text = "".join(c.get("text", "") for c in r.get("content", []))
             u = r.get("usage", {})
             cached = u.get("cache_read_input_tokens", 0) or 0
@@ -314,6 +301,61 @@ class ProviderLayer:
                           model=model_id, cost=cost, job_id=job_id, note=f"llm:{role or 'chat'}", cached_tokens=cached)
         return {"text": text, "tokens_in": tin, "tokens_out": tout, "cost": round(cost, 6), "model": model_id,
                 "cached_tokens": cached}
+
+    # ------------------------------------------------------------------ batches (Anthropic Message Batches: async, 50% off)
+    def batch_submit(self, model_id: str, requests: list[dict]) -> str:
+        """Submit many requests at once ({id, prompt, system, cache_prefix, max_tokens, effort, schema}). Returns the
+        batch id; results usually arrive within the hour at half the per-token price."""
+        provider, _, model = model_id.partition("/")
+        p = self._p(provider)
+        if p["kind"] != "anthropic":
+            raise CommonsError("batch mode needs an anthropic provider")
+        from .routing import effort_spec
+        reqs = []
+        for r in requests:
+            eff = effort_spec(r["effort"]) if isinstance(r.get("effort"), str) else r.get("effort")
+            reqs.append({"custom_id": r["id"], "params": _anthropic_body(
+                model, redact(r["prompt"])[0], r.get("system", ""), r.get("cache_prefix", ""), r.get("max_tokens", 1024),
+                _extras("anthropic", model, eff, r.get("schema")))})
+        out = _http("POST", f"{p['base_url'].rstrip('/')}/v1/messages/batches",
+                    {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}, {"requests": reqs}, timeout=600)
+        return out["id"]
+
+    def batch_results(self, model_id: str, batch_id: str, role: str = "", agent_id: str | None = None) -> dict:
+        """{status, counts} while running; once ended also {results: {custom_id: text | None}, errors, cost}.
+        Usage is recorded once, at the batch discount."""
+        provider, _, model = model_id.partition("/")
+        p = self._p(provider)
+        hdr = {"x-api-key": self._key(p), "anthropic-version": "2023-06-01"}
+        st = _http("GET", f"{p['base_url'].rstrip('/')}/v1/messages/batches/{batch_id}", hdr)
+        out = {"status": st.get("processing_status"), "counts": st.get("request_counts")}
+        if st.get("processing_status") != "ended":
+            return out
+        from . import __version__
+        req = urllib.request.Request(st["results_url"], headers=hdr | {"User-Agent": f"commons-memory/{__version__}"})
+        with urllib.request.urlopen(req, timeout=300) as r:  # noqa: S310 - provider-issued results URL
+            lines = r.read().decode().splitlines()
+        res, errs, tin, tout, cached = {}, {}, 0, 0, 0
+        for ln in lines:
+            if not ln.strip():
+                continue
+            d = json.loads(ln)
+            rr = d.get("result") or {}
+            if rr.get("type") == "succeeded":
+                m = rr["message"]
+                res[d["custom_id"]] = "".join(c.get("text", "") for c in m.get("content", []))
+                u = m.get("usage", {})
+                c = u.get("cache_read_input_tokens", 0) or 0
+                cached += c
+                tin += u.get("input_tokens", 0) + c + (u.get("cache_creation_input_tokens", 0) or 0)
+                tout += u.get("output_tokens", 0)
+            else:
+                res[d["custom_id"]] = None
+                errs[d["custom_id"]] = rr.get("type")
+        cost = estimate_cost(model, int(tin - 0.9 * cached), tout) * 0.5
+        self.usage.report(agent_id or self.s.ensure_agent(f"provider:{provider}"), tokens_in=tin, tokens_out=tout,
+                          model=model_id, cost=cost, note=f"llm:{role or 'batch'}:batch", cached_tokens=cached)
+        return out | {"results": res, "errors": errs, "cost": round(cost, 4), "tokens_in": tin, "tokens_out": tout}
 
     # ------------------------------------------------------------------ roles
     def set_role(self, role: str, model_id: str | None) -> dict:
@@ -540,6 +582,31 @@ class ProviderLayer:
 
 
 # ---------------------------------------------------------------------------- mock provider
+def _extras(kind: str, model: str, eff: dict | None, schema: dict | None) -> dict:
+    """Provider-native request fields for an effort spec and a structured-output schema."""
+    from .routing import provider_params
+    xp = provider_params(kind, model, eff) if eff else {}
+    if schema and kind == "anthropic":
+        xp = xp | {"output_config": dict(xp.get("output_config") or {}, format={"type": "json_schema", "schema": schema})}
+    elif schema and kind in ("openai", "openrouter", "xai"):
+        xp = xp | {"response_format": {"type": "json_schema", "json_schema": {"name": "output", "schema": schema, "strict": True}}}
+    elif schema and kind == "ollama":
+        xp = xp | {"format": schema}
+    return xp
+
+
+def _anthropic_body(model: str, prompt: str, system: str, cache_prefix: str, max_tokens: int, xp: dict) -> dict:
+    sysblocks = ([{"type": "text", "text": system}] if system else []) + \
+        ([{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}] if cache_prefix else [])
+    body = {"model": model, "max_tokens": max_tokens, "system": sysblocks or None,
+            "messages": [{"role": "user", "content": prompt}]} | xp
+    if (xp.get("thinking") or {}).get("budget_tokens"):  # the budget must fit inside max_tokens
+        body["max_tokens"] = max_tokens + xp["thinking"]["budget_tokens"]
+    if body["system"] is None:
+        body.pop("system")
+    return body
+
+
 def _mock_chat(config: dict, model: str, system: str, prompt: str) -> str:
     """Deterministic fake LLM for tests and demos. Quality per model controls probe accuracy."""
     spec = next((m for m in config.get("models", []) if m["model"] == model), {})

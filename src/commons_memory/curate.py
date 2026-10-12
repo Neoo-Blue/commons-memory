@@ -61,7 +61,7 @@ def estimate(items: list[dict], model: str, batch: int = 30) -> dict:
 
 def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int = 30, budget: float | None = None,
            auto_approve: float = 0.6, workers: int = 4, agent_id: str | None = None, dry_run: bool = False,
-           sink=None, known_fn=None, log=lambda m: None) -> dict:
+           sink=None, known_fn=None, log=lambda m: None, batch_api: bool = False, resume_batch: str | None = None) -> dict:
     """`s` provides the model (provider layer, usage accounting). Decisions go to `sink(items_with_status)`, by
     default importers.import_items on `s`; pass a remote sink to curate into another hub."""
     from . import importers as I
@@ -96,21 +96,33 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
            "tokens_out": 0, "batches": 0, "failed_batches": 0, "duplicates_removed": dup}
     stop = threading.Event()
 
+    def prompt_of(chunk: list[dict]) -> str:
+        return json.dumps([{"i": n, "title": it.get("title", "")[:200], "content": (it.get("content") or "")[:REVIEW_CHARS],
+                            "project": it.get("project"), "tags": (it.get("tags") or [])[:6]} for n, it in enumerate(chunk)],
+                          ensure_ascii=False)
+
     def review(chunk: list[dict]) -> None:
         if stop.is_set():
             return
-        payload = [{"i": n, "title": it.get("title", "")[:200], "content": (it.get("content") or "")[:REVIEW_CHARS],
-                    "project": it.get("project"), "tags": (it.get("tags") or [])[:6]} for n, it in enumerate(chunk)]
+        r = {}
         try:
-            r = {}
-            r = pl.chat(model, json.dumps(payload, ensure_ascii=False), system="ROLE: curator.", cache_prefix=SYSTEM,
+            r = pl.chat(model, prompt_of(chunk), system="ROLE: curator.", cache_prefix=SYSTEM,
                         max_tokens=200 * len(chunk) + 2000, role="curator", agent_id=agent_id, effort="minimal",
                         schema=SCHEMA)
-            decisions = {d.get("i"): d for d in _parse(r["text"])}
         except Exception as e:  # noqa: BLE001 - leave the batch for the next run
             with lock:
                 tot["failed_batches"] += 1
-                tot["cost"] += (r or {}).get("cost", 0)  # a reply we couldn't use was still billed
+            log(f"batch failed: {str(e)[:160]}")
+            return
+        apply(chunk, r.get("text"), r)
+
+    def apply(chunk: list[dict], text: str | None, r: dict) -> None:
+        try:
+            decisions = {d.get("i"): d for d in _parse(text or "")}
+        except Exception as e:  # noqa: BLE001 - leave the batch for the next run
+            with lock:
+                tot["failed_batches"] += 1
+                tot["cost"] += r.get("cost", 0)  # a reply we couldn't use was still billed
             log(f"batch failed: {str(e)[:160]}")
             return
         out_items, counts = [], {"kept": 0, "queued": 0, "dropped": 0, "merged": 0}
@@ -165,8 +177,31 @@ def curate(s: Store, items: list[dict], *, model: str | None = None, batch: int 
                 f"dropped {tot['dropped']} merged {tot['merged']}")
 
     chunks = [todo[k:k + batch] for k in range(0, len(todo), batch)]
-    with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        list(ex.map(review, chunks))
+    if batch_api:  # Anthropic Message Batches: one async submission, half price, no rate-limit pressure
+        import time as _t
+        if budget is not None:  # trim to what the budget buys at the batch discount
+            per = (est["est_cost"] * 0.5) / max(1, len(chunks))
+            chunks = chunks[: max(1, int(budget / max(per, 1e-9)))]
+        bid = resume_batch or pl.batch_submit(model, [
+            {"id": f"c{n}", "prompt": prompt_of(c), "system": "ROLE: curator.", "cache_prefix": SYSTEM,
+             "max_tokens": 200 * len(c) + 2000, "effort": "minimal", "schema": SCHEMA} for n, c in enumerate(chunks)])
+        s.x("INSERT OR REPLACE INTO meta VALUES('curate:last_batch', ?)", (bid,))
+        log(f"submitted batch {bid} ({len(chunks)} requests); resume with --resume-batch {bid}")
+        while True:
+            st = pl.batch_results(model, bid, role="curator", agent_id=agent_id)
+            if st["status"] == "ended":
+                break
+            log(f"batch {bid}: {st['status']} {json.dumps(st.get('counts') or {})}")
+            _t.sleep(30)
+        share = {"cost": st.get("cost", 0) / max(1, len(chunks))}
+        for n, c in enumerate(chunks):
+            if st["results"].get(f"c{n}") is None:
+                tot["failed_batches"] += 1
+                continue
+            apply(c, st["results"][f"c{n}"], share)
+    else:
+        with cf.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            list(ex.map(review, chunks))
     tot["cost"] = round(tot["cost"], 4)
     tot["stopped_by_budget"] = stop.is_set()
     tot["unreviewed"] = len(todo) - tot["kept"] - tot["queued"] - tot["dropped"] - tot["merged"]
