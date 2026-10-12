@@ -136,3 +136,14 @@ def test_update_delete_keep_indexes_in_sync(store):
         store.add_item("memory", f"note {i}")
     r = store.search("", limit=5)
     assert r["total"] >= 32 and "more" in r["text"]
+
+
+def test_tokenless_dashboard_refuses_rebinding_hosts(monkeypatch):
+    from commons_memory.dashboard import _host_allowed
+    monkeypatch.delenv("COMMONS_DASHBOARD_HOSTS", raising=False)
+    for ok in ("127.0.0.1:8766", "192.168.50.111:8771", "[::1]:8766", "localhost:8766", "nas.tail1234.ts.net", ""):
+        assert _host_allowed(ok), ok
+    for bad in ("evil.example.com", "rebind.attacker.io:8766", "192.168.50.111.nip.io"):
+        assert not _host_allowed(bad), bad
+    monkeypatch.setenv("COMMONS_DASHBOARD_HOSTS", "nas.home")
+    assert _host_allowed("nas.home:8771")

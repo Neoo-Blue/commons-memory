@@ -7,7 +7,7 @@ All settings are environment variables; CLI flags override them where both exist
 |---|---|---|---|
 | `COMMONS_A2A` | `1` | Mount the A2A (agent-to-agent) server next to `/mcp` on the HTTP transport (`0` disables) | server.py |
 | `COMMONS_A2A_TOKEN` | — | Bearer token used by `commons a2a` client commands | cli.py |
-| `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | server_v5.py |
+| `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | auth.py, server_v5.py |
 | `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
@@ -24,6 +24,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_CF_ACCESS_CERTS` | — | Cloudflare Access certs URL override | expose.py |
 | `COMMONS_CF_ACCESS_TEAM` | — | Cloudflare Access team name (`<team>.cloudflareaccess.com`) | expose.py |
 | `COMMONS_DAILY_COST_CAP` | — | USD/day cap across all orchestrated work; jobs pause when hit | usage.py |
+| `COMMONS_DASHBOARD_HOSTS` | — | Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding | dashboard.py |
 | `COMMONS_DASHBOARD_REQUIRE_TOKEN` | — | Require the dashboard token even on localhost/LAN/tailnet binds (`1`) | dashboard.py |
 | `COMMONS_DASHBOARD_TOKEN` | — | Admin token for the web dashboard (required for non-loopback binds) | dashboard.py |
 | `COMMONS_DB` | — | Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`) | cli.py, store.py |
@@ -80,7 +81,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_PREF_EXTRACTOR` | — | Shell command that extracts preferences from text (one per line) | prefs.py |
 | `COMMONS_PREF_HALF_LIFE_DAYS` | `120` | Half-life for preference confidence decay | prefs.py |
 | `COMMONS_PRICES` | — | Path to a JSON price table (USD per 1M tokens) for cost estimates | usage.py |
-| `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | connect.py, server.py |
+| `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | connect.py, dashboard.py, server.py |
 | `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |

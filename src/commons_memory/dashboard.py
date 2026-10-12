@@ -415,6 +415,10 @@ def make_handler(api: API, token: str | None):
             viewer|admin`). Viewers can read but not POST."""
             users = dashboard_users(api.s)
             if not token and not users:
+                if not _host_allowed(self.headers.get("Host", "")):
+                    self.deny = (f"unrecognised Host {self.headers.get('Host')!r}: open the dashboard by IP or add the "
+                                 "name to COMMONS_DASHBOARD_HOSTS (tokenless dashboards refuse other names: DNS rebinding)")
+                    return False
                 self.role = "admin"
                 return True
             cand = self.headers.get("Authorization", "").removeprefix("Bearer ").strip() or q.get("token", "")
@@ -484,7 +488,7 @@ def make_handler(api: API, token: str | None):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             if not self._authed(q):
-                return self._send(401, {"error": "token required (?token=...)"})
+                return self._send(401, {"error": getattr(self, "deny", None) or "token required (?token=...)"})
             secure = "; Secure" if getattr(self.server, "tls", False) else ""
             extra = {"Set-Cookie": f"commons_token={q['token']}; HttpOnly; SameSite=Strict; Path=/{secure}"} if q.get("token") else None
             try:
@@ -520,7 +524,7 @@ def make_handler(api: API, token: str | None):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             if not self._authed(q):
-                return self._send(401, {"error": "token required"})
+                return self._send(401, {"error": getattr(self, "deny", None) or "token required"})
             if self.headers.get("X-Commons") != "1":
                 return self._send(403, {"error": "missing X-Commons header"})
             if self.role != "admin":
@@ -532,6 +536,28 @@ def make_handler(api: API, token: str | None):
             except (CommonsError, KeyError, ValueError) as e:
                 return self._send(400, {"error": str(e)})
     return H
+
+
+def _host_allowed(host_hdr: str) -> bool:
+    """A tokenless dashboard trusts the network, so it must not answer a page from another site that re-pointed its
+    own DNS name at us (DNS rebinding). Rebinding always arrives under the attacker's hostname, so accept IP
+    literals, localhost, this machine's names, and COMMONS_DASHBOARD_HOSTS / COMMONS_PUBLIC_URL hosts."""
+    import socket
+    h = (host_hdr or "").strip().lower()
+    h = h[1:h.index("]")] if h.startswith("[") and "]" in h else h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    if not h:
+        return True  # HTTP/1.0 clients without Host can't be a browser rebinding attack
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    names = {"localhost", socket.gethostname().lower(), socket.gethostname().lower().split(".")[0] + ".local"}
+    names |= {x.strip().lower() for x in os.environ.get("COMMONS_DASHBOARD_HOSTS", "").split(",") if x.strip()}
+    pub = urlparse(os.environ.get("COMMONS_PUBLIC_URL", "")).hostname
+    if pub:
+        names.add(pub.lower())
+    return h in names or h.endswith(".localhost") or h.endswith(".ts.net")
 
 
 def dashboard_users(s: Store) -> list[dict]:

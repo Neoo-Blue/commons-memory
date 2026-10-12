@@ -107,3 +107,4 @@ COMMONS_MCP_HOST	MCP bind host as seen by the dashboard Connect page (set by `co
 COMMONS_MCP_PORT	MCP port as seen by the dashboard Connect page (set by `commons serve`)
 COMMONS_TOOLS	Which tools MCP clients list: `core` (default, ~20 routine tools plus `tools`/`call` to reach the rest), `all`, or `core,name,...`. Per-agent: `commons agent tools NAME PROFILE`; per-connection: `?tools=` on the MCP URL
 COMMONS_RANK_FUSION	How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k)
+COMMONS_DASHBOARD_HOSTS	Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding
