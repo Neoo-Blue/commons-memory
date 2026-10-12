@@ -59,6 +59,13 @@ class A2AService:
             raise KeyError(tid)
         return dict(r[0])
 
+    def own(self, tid: str, caller: str | None) -> None:
+        """Only the agent that created a task may read, cancel, resubscribe or redirect its push notifications. A
+        foreign task looks exactly like a missing one (no id probing)."""
+        r = self._row(tid)
+        if caller is not None and r.get("caller") not in (None, caller):
+            raise KeyError(tid)
+
     def task(self, tid: str, history_length: int | None = None) -> dict:
         t = self._row(tid)
         st = self.o.status(t["job_id"])
@@ -161,9 +168,14 @@ def build_app(store: Store, base_url: str = "http://127.0.0.1:8765", poll: float
                         t = await asyncio.to_thread(svc.task, t["id"])
                 return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": t})
             if method in ("message/stream", "tasks/resubscribe"):
+                if method == "tasks/resubscribe":
+                    svc.own(params["id"], caller)
                 t = await asyncio.to_thread(svc.send, params, caller) if method == "message/stream" \
                     else await asyncio.to_thread(svc.task, params["id"])
                 return StreamingResponse(stream(t["id"], {"rid": rid, "task": t}), media_type="text/event-stream")
+            if method in ("tasks/get", "tasks/cancel", "tasks/pushNotificationConfig/set",
+                          "tasks/pushNotificationConfig/get"):
+                svc.own(params.get("id") or params.get("taskId"), caller)
             if method == "tasks/get":
                 return JSONResponse({"jsonrpc": "2.0", "id": rid,
                                      "result": await asyncio.to_thread(svc.task, params["id"], params.get("historyLength"))})

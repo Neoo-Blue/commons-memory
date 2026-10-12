@@ -176,3 +176,32 @@ def test_instant_wake_assignments_reach_long_polling_daemon_and_summon(store):
     assert by["daemon-bot"]["ready"] and "instant" in by["daemon-bot"]["wake"]
     assert not by["chat-only"]["ready"] and "commons agent daemon" in by["chat-only"]["fix"]
     th.join(12)
+
+
+def test_concurrent_recv_and_a2a_ownership_and_mount_escape(store, tmp_path, monkeypatch):
+    from commons_memory.drive import check_host_path
+    from commons_memory.messaging import Messaging
+    a = store.register_agent("rx")["id"]
+    for i in range(20):
+        Messaging(store).send(None, a, f"job {i}")
+    got = []
+    ts = [threading.Thread(target=lambda: got.extend(Messaging(store).recv(a, limit=50))) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sorted(m["id"] for m in got) == sorted(set(m["id"] for m in got)) and len(got) == 20  # each exactly once
+    # a symlink inside one mount must not reach another allowlisted root
+    r1, r2 = tmp_path / "m1", tmp_path / "m2"
+    r1.mkdir(), r2.mkdir()
+    (r2 / "secret.txt").write_text("x")
+    (r1 / "link").symlink_to(r2)
+    monkeypatch.setenv("COMMONS_HOST_ROOTS", f"{r1},{r2}")
+    with pytest.raises(CommonsError):
+        check_host_path(str(r1 / "link" / "secret.txt"), base=str(r1))
+    assert check_host_path(str(r2 / "secret.txt"), base=str(r2))
+    from commons_memory.a2a_server import A2AService
+    svc = A2AService(store)
+    owner, other = store.register_agent("a2a-owner")["id"], store.register_agent("a2a-other")["id"]
+    t = svc.send({"message": {"parts": [{"kind": "text", "text": "summarise the release"}]}}, owner)
+    with pytest.raises(KeyError):
+        svc.own(t["id"], other)
+    svc.own(t["id"], owner)

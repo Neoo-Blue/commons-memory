@@ -345,10 +345,13 @@ class Messaging:
         t = now()
         out = []
         for r in rows:
-            self.s.x("UPDATE message_deliveries SET status=?, delivered_at=COALESCE(delivered_at, ?), visible_at=?, "
-                     "attempts=attempts+1, acked_at=? WHERE msg_id=? AND agent_id=?",
-                     ("acked" if ack else "delivered", t, t + lease, t if ack else None, r["id"], aid))
-            out.append(self.fmt(r))
+            with self.s.lock:  # claim it: two concurrent receivers (daemon + chat) must not both get one message
+                won = self.s.db.execute(
+                    "UPDATE message_deliveries SET status=?, delivered_at=COALESCE(delivered_at, ?), visible_at=?, "
+                    "attempts=attempts+1, acked_at=? WHERE msg_id=? AND agent_id=? AND acked_at IS NULL AND visible_at<=?",
+                    ("acked" if ack else "delivered", t, t + lease, t if ack else None, r["id"], aid, t)).rowcount == 1
+            if won:
+                out.append(self.fmt(r))
         return out
 
     def ack(self, agent: str, ids: list) -> dict:
@@ -553,6 +556,8 @@ class Channels:
         elif kind == "email":
             if not (cfg.get("to") and cfg.get("host")):
                 raise CommonsError("email needs to and host (plus user/password_ref for auth)")
+            if not local_owner:  # an agent must not aim SMTP at 127.0.0.1:6379 or the metadata service
+                check_url(f"https://{cfg['host']}:{int(cfg.get('port', 587))}/")
         for k, v in cfg.items():  # secrets must be references, never values
             if k.endswith("_ref") and not str(v).startswith(("env://", "vault://", "vault-dyn://", "op://", "infisical://")):
                 raise CommonsError(f"{k} must be a secret reference (env://, vault://, op://, infisical://)")

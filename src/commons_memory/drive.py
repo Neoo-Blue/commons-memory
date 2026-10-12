@@ -353,14 +353,20 @@ def backend_from_env(s: Store):
     raise CommonsError(f"unknown COMMONS_DRIVE_BACKEND {k}")
 
 
-def check_host_path(p: str) -> Path:
-    """Host paths must be inside COMMONS_HOST_ROOTS (colon/comma-separated). Symlinks are resolved first."""
+def check_host_path(p: str, base: str | None = None) -> Path:
+    """Host paths must be inside COMMONS_HOST_ROOTS (colon/comma-separated). Symlinks are resolved first. With
+    `base` (a mount's root) the path must also stay inside that root: a symlink in one mount must not reach into
+    another allowlisted root."""
     roots = [Path(x).expanduser().resolve() for x in re.split(r"[,:]", os.environ.get("COMMONS_HOST_ROOTS", "")) if x.strip()]
     if not roots:
         raise CommonsError("host filesystem access is off: set COMMONS_HOST_ROOTS to allowlisted directories")
     rp = Path(p).expanduser().resolve()
     if not any(rp == r or r in rp.parents for r in roots):
         raise CommonsError(f"{rp} is outside COMMONS_HOST_ROOTS")
+    if base is not None:
+        b = Path(base).expanduser().resolve()
+        if not (rp == b or b in rp.parents):
+            raise CommonsError(f"{rp} escapes its mount root {b}")
     return rp
 
 
@@ -516,7 +522,7 @@ class Drive:
         path = _norm(path)
         m, rel = self._mount_for(path)
         if m:
-            p = check_host_path(os.path.join(m["root"], rel))
+            p = check_host_path(os.path.join(m["root"], rel), base=m["root"])
             return p.read_bytes(), {"path": path, "mount": m["name"], "mime": mimetypes.guess_type(str(p))[0]}
         project = self._proj(project, "read")
         r = self._row(project, path)
@@ -550,7 +556,7 @@ class Drive:
         prefix = _norm(prefix)
         m, rel = self._mount_for(prefix)
         if m:
-            base = check_host_path(os.path.join(m["root"], rel))
+            base = check_host_path(os.path.join(m["root"], rel), base=m["root"])
             ents = [{"path": f"{prefix.rstrip('/')}/{p.name}", "dir": p.is_dir(), "size": p.stat().st_size if p.is_file() else None}
                     for p in sorted(base.iterdir())] if base.is_dir() else []
             return {"files": ents, "mount": m["name"], "read_only": bool(m["read_only"])}
@@ -708,7 +714,7 @@ class Drive:
     def _host_write(self, m, rel, content) -> dict:
         if m["read_only"]:
             raise CommonsError(f"/mnt/{m['name']} is mounted read-only")
-        p = check_host_path(os.path.join(m["root"], rel))
+        p = check_host_path(os.path.join(m["root"], rel), base=m["root"])
         data = content.encode() if isinstance(content, str) else content
         if _is_text(str(p), data, None) and scan(data.decode()):
             data = redact(data.decode())[0].encode()
