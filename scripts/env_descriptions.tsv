@@ -1,0 +1,90 @@
+# NAME<TAB>description (used by gen_env_reference.py)
+COMMONS_A2A	Mount the A2A (agent-to-agent) server next to `/mcp` on the HTTP transport (`0` disables)
+COMMONS_A2A_TOKEN	Bearer token used by `commons a2a` client commands
+COMMONS_ADMIN_AGENTS	Comma list of agent names with global admin rights (ACLs, trust overrides)
+COMMONS_AGENT	Agent identity for stdio/CLI use when no API key is given
+COMMONS_AGENT_DEFAULT_CAPACITY	Concurrent subtasks per agent when its profile sets no `max_concurrent`
+COMMONS_ALLOW_ANON_READS	HTTP: allow read-only calls without a key (`1`); writes always need a key
+COMMONS_API_KEY	Agent API key for stdio/CLI/worker calls
+COMMONS_BACKGROUND	In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off
+COMMONS_BACKUP	Nightly SQLite backup from the background loop (`1` on)
+COMMONS_BACKUP_DIR	Backup directory (default `~/.commons/backups`)
+COMMONS_BACKUP_KEEP	Number of backups to keep
+COMMONS_BACKUP_KEY	Secret ref used to encrypt backups
+COMMONS_BG_POLL	Background loop tick in seconds
+COMMONS_CF_ACCESS_AS_AUTH	Treat a valid Cloudflare Access identity as an agent principal (`1`)
+COMMONS_CF_ACCESS_AUD	Cloudflare Access application audience tag to verify
+COMMONS_CF_ACCESS_CERTS	Cloudflare Access certs URL override
+COMMONS_CF_ACCESS_TEAM	Cloudflare Access team name (`<team>.cloudflareaccess.com`)
+COMMONS_DAILY_COST_CAP	USD/day cap across all orchestrated work; jobs pause when hit
+COMMONS_DASHBOARD_TOKEN	Admin token for the web dashboard (required for non-loopback binds)
+COMMONS_DB	Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`)
+COMMONS_DB_KEY	Secret ref for SQLCipher database encryption
+COMMONS_DRIVE_BACKEND	Commons Drive storage: `local`, `s3`, `webdav`, `hostfs`, `sftp`, `smb`, `ftp`
+COMMONS_DRIVE_DIR	Local Drive directory (default `~/.commons/drive`)
+COMMONS_DRIVE_MAX_FILE_MB	Largest single Drive file in MB
+COMMONS_DRIVE_QUOTA_MB	Total Drive quota in MB
+COMMONS_DUP_SIM	Similarity above which a new leftover is merged into an existing one
+COMMONS_EMBEDDER	Embeddings: `hash` (no deps), `fastembed`, or a provider model
+COMMONS_ENTROPY_MIN	Shannon-entropy threshold for redacting unknown secret-looking strings
+COMMONS_ENTROPY_REDACT	Redact high-entropy strings on write (`0` off)
+COMMONS_ENV_SECRETS	Allow-list of env var names that `env://` secret refs may resolve
+COMMONS_ESCALATE_AFTER	Seconds a ready subtask may sit unclaimed before the escalation ladder acts
+COMMONS_EVERY_*	Override a background job interval in seconds, e.g. `COMMONS_EVERY_LIBRARIAN=3600`
+COMMONS_EXACT_TOKENS	Use provider count-tokens APIs for exact context-pack sizes (network calls)
+COMMONS_EXPORT_SECRET_REFS	Include secret references (never values) in graph exports (`1`)
+COMMONS_GITHUB_API	GitHub API base for skill discovery
+COMMONS_HOME	Commons home for `commons expose` state (default `~/.commons`)
+COMMONS_HOST	Default bind address for `commons serve`
+COMMONS_HOST_ROOTS	Colon/comma list of host directories the `hostfs` Drive backend may expose
+COMMONS_KB_CLUSTER	Misc-topic clustering for the knowledge base: `auto`, `semantic`, `tags`
+COMMONS_KB_CLUSTER_SIM	Cluster similarity threshold (0.55 with real embeddings, 0.35 with `hash`)
+COMMONS_KB_DEBOUNCE	Seconds between KB rebuilds of a dirty project
+COMMONS_KB_MIN_TRUST	Minimum author trust for a record to be cited in the KB
+COMMONS_KB_SUMMARIZER	Shell command that post-processes each KB section (markdown on stdin/stdout)
+COMMONS_LEASE_SECONDS	Default subtask lease; expired leases are reassigned
+COMMONS_LIBRARIAN_AUTO_APPROVE	Apply librarian proposals without review (`1`)
+COMMONS_LIBRARIAN_BUDGET	USD budget per librarian run when it delegates to an LLM
+COMMONS_LIBRARIAN_DUP	Similarity above which the librarian proposes merging records
+COMMONS_LIBRARIAN_STALE_DAYS	Age after which the librarian flags a record as stale
+COMMONS_MCP_CACHE_TTL	Seconds to cache read-only upstream MCP results
+COMMONS_MCP_CATALOG	Path to the MCP server catalog override
+COMMONS_MCP_IDLE	Seconds before an idle pooled upstream MCP server is stopped
+COMMONS_MCP_PERSISTENT	Keep upstream MCP servers running between calls (`0` = spawn per call)
+COMMONS_NOTIFY_WEBHOOK	Webhook for escalation notifications to a human
+COMMONS_OAUTH_AUDIENCE	Expected `aud` of OAuth access tokens
+COMMONS_OAUTH_CLIENT_ID_REF	Secret ref of the OAuth introspection client id
+COMMONS_OAUTH_CLIENT_SECRET_REF	Secret ref of the OAuth introspection client secret
+COMMONS_OAUTH_INTROSPECT_URL	RFC 7662 token introspection endpoint
+COMMONS_OAUTH_ISSUER	OAuth issuer; enables OAuth bearer tokens alongside agent keys
+COMMONS_OTEL	Export OpenTelemetry traces/metrics (`1`, uses standard `OTEL_*` vars)
+COMMONS_PLANNER_CMD	Shell command that turns a task into a DAG (used by `pattern=llm`)
+COMMONS_PORT	Default port for `commons serve --transport http`
+COMMONS_PREF_EXTRACTOR	Shell command that extracts preferences from text (one per line)
+COMMONS_PREF_HALF_LIFE_DAYS	Half-life for preference confidence decay
+COMMONS_PRICES	Path to a JSON price table (USD per 1M tokens) for cost estimates
+COMMONS_PUBLIC_URL	Externally visible base URL (OAuth metadata, A2A card, wake links)
+COMMONS_RATE_PER_MIN	Per-principal HTTP request limit per minute (excess gets 429)
+COMMONS_REQUIRE_KEYS	HTTP: require an agent key/OAuth token on every request (`0` = local dev only)
+COMMONS_RETAIN_*	Retention days per table for `commons prune`, e.g. `COMMONS_RETAIN_USAGE=90`
+COMMONS_RETRO_AUTO_APPROVE	Import retro-learning findings without review (`1`)
+COMMONS_RETRO_AUTO_MIN_CONF	Minimum confidence for auto-approved retro findings
+COMMONS_RETRO_BUDGET	USD budget for an LLM-assisted retro-learning run
+COMMONS_RETRO_CHUNK_CHARS	Transcript chunk size for retro learning
+COMMONS_RETRO_HOME	Home directory scanned for past AI transcripts (default your home)
+COMMONS_ROUTING_LEARN_N	Outcomes needed before routing trusts a learned agent/model/effort score
+COMMONS_ROUTING_MODE	Execution-target routing: `balanced`, `quality`, `cheap`, `fast`
+COMMONS_ROUTING_VALIDATE_N	A/B samples before a routing proposal is validated
+COMMONS_SKILL_AUTO_APPROVE	Activate clean skill versions without a second agent (single-user setups only)
+COMMONS_SKILL_DISCOVERY	Background skill discovery from public catalogs (`0` off)
+COMMONS_SSE_MAX_SECONDS	Max lifetime of a dashboard/agent SSE stream
+COMMONS_TLS_CERT	TLS certificate (PEM) for HTTP transport and dashboard
+COMMONS_TLS_KEY	TLS private key (PEM)
+COMMONS_TREE_SITTER	Use tree-sitter for JS/TS code indexing (`0` = regex fallback)
+COMMONS_TRUST_WEIGHTING	Weight search/KB ranking by author trust (`0` off)
+COMMONS_WAKE_BACKOFF_SCALE	Multiplier for wake-delivery retry backoff
+COMMONS_WAKE_PER_MIN	Wake deliveries per agent per minute (excess coalesced)
+COMMONS_WAKE_PUSH_WHEN_LIVE	Also push wakes to agents already connected live (`1`)
+COMMONS_WAKE_SYNC	Deliver wakes synchronously (tests/debugging)
+COMMONS_WEBHOOK_ALLOWLIST	Hosts allowed for webhooks/A2A push even if private or non-https (`*.example.com` ok)
+COMMONS_DASHBOARD_REQUIRE_TOKEN	Require the dashboard token even on localhost/LAN/tailnet binds (`1`)

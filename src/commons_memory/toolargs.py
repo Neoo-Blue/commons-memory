@@ -32,6 +32,9 @@ ALIASES: dict[str, list[str]] = {
 }
 
 
+IDENTITY_ARGS = {"api_key", "agent", "apikey"}
+
+
 def _snake(k: str) -> str:
     k = re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", k).replace("-", "_")
     return k.lower()
@@ -52,6 +55,8 @@ def normalize(name: str, params: dict, required: list[str], args: dict) -> dict:
         tgt = next((p for p in props if sk in ALIASES.get(p, []) and p not in out), None)
         if tgt:
             out[tgt] = v
+        elif sk in IDENTITY_ARGS:
+            continue  # clients may pass api_key/agent on every call; read-only tools take identity from the transport
         else:
             raise CommonsError(f"{name}: unknown argument '{k}'. Accepted: {_sig(params, required)}")
     missing = [r for r in required if r not in out or out[r] in (None, "")]
