@@ -436,6 +436,12 @@ def make_handler(api: API, token: str | None):
                     return True
             return False
 
+        def _ctx(self):
+            from .dashboard_v81 import CTX
+            CTX.req = {"host": self.headers.get("Host", ""), "bind": str(self.server.server_address[0]),
+                       "client": str(self.client_address[0]), "role": self.role,
+                       "has_auth": bool(token or dashboard_users(api.s))}
+
         def _events(self):
             """Server-Sent Events: pushes a 'change' event whenever activity happens (jobs, memories, usage, audit,
             notifications), plus a heartbeat. The page re-renders live views on change instead of polling."""
@@ -501,6 +507,7 @@ def make_handler(api: API, token: str | None):
                                                          "X-Content-Type-Options": "nosniff"})
                 if u.path == "/metrics":
                     return self._send(200, metrics(api), "text/plain; version=0.0.4")
+                self._ctx()
                 name = u.path.removeprefix("/api/")
                 fn = getattr(api, name, None) if u.path.startswith("/api/") and name.isidentifier() and name != "post" else None
                 if not fn:
@@ -520,6 +527,7 @@ def make_handler(api: API, token: str | None):
                 return self._send(403, {"error": "read-only dashboard user"})
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                self._ctx()
                 return self._send(200, api.post(u.path, body))
             except (CommonsError, KeyError, ValueError) as e:
                 return self._send(400, {"error": str(e)})
@@ -725,9 +733,9 @@ div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1f
 <div id="pal" role="dialog" aria-modal="true" aria-label="Command palette" onclick="if(event.target.id=='pal')palClose()"><div class="box"><input id="palq" placeholder="Jump to a page, find a place, search memory…" autocomplete="off"><div class="res" id="palr"></div></div></div>
 <div id="toasts" aria-live="assertive"></div>
 <script>
-const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring","Retro learning","System","Mission control","Task breakdown","Routing","Presence","Drive"];
+const T=["Overview","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring","Retro learning","System","Mission control","Task breakdown","Routing","Presence","Drive","Connect"];
 const ICON={Overview:'<path d="M3 12l9-8 9 8M5 10v10h14V10"/>',Agents:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/>',Orchestration:'<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7.5l4 8.5M17 7.5l-4 8.5M7.5 6h9"/>',Sessions:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h5"/>',Usage:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',Memory:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',Knowledge:'<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6"/>',Preferences:'<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',Graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7l7.4.6M7 8.3l1.5 7.3M16.4 10l-5.6 6.4"/>',"Org chart":'<rect x="9" y="2.5" width="6" height="5" rx="1.2"/><rect x="2.5" y="16.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="16.5" width="6" height="5" rx="1.2"/><path d="M12 7.5V12M5.5 16.5V12h13v4.5"/>',Skills:'<path d="M14.7 6.3a4 4 0 015 5L12 19l-5-5 7.7-7.7zM7 14l-4 4 3 3 4-4"/>',Models:'<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1.5v3.5M15 1.5v3.5M9 19v3.5M15 19v3.5M1.5 9H5M1.5 15H5M19 9h3.5M19 15h3.5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',"MCP hub":'<circle cx="12" cy="12" r="3"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7M5 5l4.5 4.5M14.5 14.5L19 19M19 5l-4.5 4.5M9.5 14.5L5 19"/>',Context:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17.5l9 5 9-5" opacity=".5"/>',Discover:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',Import:'<path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/>',Librarian:'<path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8-1 3.2 15.5-3.8 1z"/>',Secrets:'<rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 018 0v3.5"/>',Recurring:'<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',"Retro learning":'<path d="M3 12a9 9 0 103-6.7L3 8M3 3v5h5M12 7v5l3 3"/>',System:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
-const GROUPS=[["Live",["Overview","Mission control","Agents","Presence","Orchestration","Task breakdown","Sessions","Usage"]],["Work",["Routing","Drive"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Skills","Discover","Import","Models","MCP hub"]],["Admin",["Retro learning","Secrets","Recurring","System"]]];
+const GROUPS=[["Live",["Overview","Mission control","Agents","Presence","Orchestration","Task breakdown","Sessions","Usage"]],["Work",["Routing","Drive"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Connect","Skills","Discover","Import","Models","MCP hub"]],["Admin",["Retro learning","Secrets","Recurring","System"]]];
 let [tab,hq]=(decodeURI(location.hash.slice(1))||"Overview").split("?");if(!T.includes(tab))tab="Overview";
 if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get("scope"),id:u.get("id")||""};if(u.get("bucket"))window.kb=u.get("bucket");if(u.get("path"))window.oc_jump=u.get("path");if(u.get("mode"))window.oc_mode=u.get("mode");if(u.get("cite"))setTimeout(()=>cite(u.get("cite")),800)}
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -950,6 +958,9 @@ def _install_v7():
     from . import dashboard_v7 as v7
     v7.install(API)
     js = "Object.assign(ICON," + json.dumps(v7.ICONS) + ");\n" + v7.JS
+    from . import dashboard_v81 as v81
+    v81.install(API)
+    js += "\nICON.Connect=" + json.dumps(v81.ICON) + ";\n" + v81.JS
     PAGE = PAGE.replace("async function render(){", js + "\nasync function render(){", 1)
 
 

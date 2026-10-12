@@ -2,6 +2,41 @@
 
 Moved from the README in v0.7.1.
 
+## Connect page and `commons connect <platform>` (v0.8.1)
+
+The dashboard's **Connect** page is the fastest path. It generates, for the chosen client:
+
+| Block | Example (Cursor) |
+|---|---|
+| config / install | `~/.cursor/mcp.json` with `url` and `Authorization: Bearer <key>` |
+| prompt | the [universal prompt](../PROMPT.md) with URL, agent name, project and key filled in |
+| skill | `pip install commons-memory && commons install-skill cursor --agent NAME` |
+| verify | a bash + curl one-liner: `initialize`, then `tools/call whoami`; prints `OK` or `FAIL` |
+
+Platforms: `claude-code`, `codex`, `cursor`, `gemini`, `chatgpt` (any streamable-HTTP MCP client), `any` (prompt
+plus plain-HTTP fallback), `docker` (self-host). Aliases: `claude`, `codex-cli`, `gemini-cli`, `http`, `generic`,
+`self-host`.
+
+**URL detection.** `COMMONS_PUBLIC_URL` if set. Otherwise, a wildcard MCP bind (`0.0.0.0`) is reached at the host the
+browser used for the dashboard; a loopback bind gives `127.0.0.1`; a specific bind address is used as is. The port is
+the MCP port (`COMMONS_MCP_PORT`, set by `commons serve`). The field is editable.
+
+**Key creation** is allowed for admin users of an authed dashboard, or on a tokenless dashboard bound to a private
+address (loopback, RFC1918, link-local, Tailscale 100.64/10) when the browser is on a private address too. Viewers
+and public tokenless setups get the CLI hint instead. The key is shown once; only its hash is stored. With a project,
+the role (read/write/admin) is granted as a project ACL.
+
+**CLI and API.**
+```sh
+commons connect cursor --name laptop-cursor --new-key --project shop   # human-readable
+commons connect codex --json                                           # same JSON as GET /api/connect?platform=codex
+```
+`GET /api/connect_status?name=NAME` returns `last_seen`/`connected`; the page polls it every 3 s.
+
+**Troubleshooting.** 401: missing/wrong key. Unreachable: network (Tailscale `--accept-routes` or a subnet route
+for LAN addresses, firewall, wrong IP). Unknown tool / schema mismatch: restart the client. Never gets work: run
+`commons worker` or add a wake channel (`commons connect NAME --wake webhook:url=…`).
+
 ## Basics (v0.1)
 
 ## Quickstart

@@ -13,7 +13,7 @@ irm https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.ps1 
 Docker: see [docs/docker.md](docs/docker.md). Prefer to read it first? `curl -fsSLO https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.sh && less install.sh && sh install.sh`. No-script alternatives: `uvx --from git+https://github.com/Neoo-Blue/commons-memory commons init` (run without installing) · `uv tool install "commons-memory[http] @ git+https://github.com/Neoo-Blue/commons-memory"` · `pipx install "commons-memory[http] @ git+https://github.com/Neoo-Blue/commons-memory"`
 
 ## Contents
-[Quickstart](#2-minute-quickstart) · [Feature tour](#feature-tour) · [Architecture](#architecture) · [Connect any AI](#connect-any-ai) · [Multi-agent](#multi-agent-in-5-commands) · [Security](#security-model) · [Networking](#networking) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Comparison](#comparison) · [Roadmap](#roadmap) · [Changelog](CHANGELOG.md)
+[Quickstart](#2-minute-quickstart) · [Feature tour](#feature-tour) · [Architecture](#architecture) · [Connect any AI](#connect-any-ai) · [Screenshots](#screenshots) · [Multi-agent](#multi-agent-in-5-commands) · [Security](#security-model) · [Networking](#networking) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Comparison](#comparison) · [Roadmap](#roadmap) · [Changelog](CHANGELOG.md)
 
 ## 2-minute quickstart
 ```sh
@@ -87,7 +87,27 @@ No MCP? Use HTTP with the same key: GET {{COMMONS_URL_BASE}}/agent/recv and POST
 | Codex / AGENTS.md tools | `commons connect codex --platform codex` |
 | ChatGPT · Grok · Muse · any HTTP MCP client | `commons connect muse --platform generic`, then use the MCP URL `http://<host>:8770/mcp` with header `Authorization: Bearer <key>` |
 
+**Easiest: the dashboard's Connect page** (v0.8.1). Open **Connect** in the dashboard (or ⌘K → "Connect"), pick the
+client (Claude Code, Codex CLI, Cursor, Gemini CLI, ChatGPT/other HTTP MCP clients, any AI, Docker/self-host), press
+**Create agent key**, and copy the ready-made blocks: the install command or JSON/TOML config with URL and key filled
+in, the prompt above filled in, the skill install command, and a one-line verify command that prints `OK`. The page
+detects the reachable MCP URL from the address you opened the dashboard on (editable), shows the agent's *last seen*
+live as it connects, and has a troubleshooting checklist. The same output from a shell:
+`commons connect cursor --name laptop-cursor --new-key` (`--json` for the API shape; `GET /api/connect?platform=…`).
+
 Remote clients need the hub on HTTP (see [Networking](#networking)). More detail is in [docs/connect.md](docs/connect.md).
+
+## Screenshots
+Captured from a demo database (`examples/demo_multi_agent.py`); keys are redacted.
+
+| | |
+|---|---|
+| ![Overview](docs/screenshots/overview.png)<br>**Overview**: totals, spend, live agents | ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: projects, jobs, agent load vs capacity |
+| ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent** (new in 0.8.1): pick a client, create a key, copy, verify | ![Task breakdown](docs/screenshots/task-breakdown.png)<br>**Task breakdown**: the job DAG with routing reasons per subtask |
+| ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph | ![Org chart](docs/screenshots/org-chart.png)<br>**Org chart**: workspace → projects → jobs → agents |
+| ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: auto-built, cited KB per project | ![Skills](docs/screenshots/skills.png)<br>**Skills**: shared pool with versions and review |
+| ![Drive](docs/screenshots/drive.png)<br>**Drive**: versioned shared files | ![Usage](docs/screenshots/usage.png)<br>**Usage**: cost and budgets by agent, model and project |
+| ![Presence](docs/screenshots/presence.png)<br>**Presence**: agent feed, messages and wake channels | |
 
 ## Multi-agent in 5 commands
 ```sh

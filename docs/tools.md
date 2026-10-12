@@ -19,6 +19,7 @@ Moved from the README in v0.7.1. v0.7 adds messaging (`msg_send`, `msg_recv`, `m
 | Preferences | `observe_preference`, `extract_preferences`, `get_preferences`, `confirm_preference`, `forget_preference` |
 | Usage | `report_usage`, `usage_summary` |
 | Capture (v0.8) | `observe`, `capture_settings`, `memory_stream` (`<private>…</private>` text is stripped before storage) |
+| Connection (v0.8.1) | `whoami` (returns the agent for this key, server version and the marker `commons-ok`; used by the Connect page verify line) |
 | 3-step search (v0.8) | `search_index` → `timeline_around` → `get_items` (compact index first, full content only on request) |
 | Temporal facts (v0.8) | `fact_set`, `fact_invalidate`, `fact_get` (`as_of=`), `fact_history` (valid_from / valid_to) |
 | Spaces (v0.8) | `spaces`, `space_search`, `memory_audit` |

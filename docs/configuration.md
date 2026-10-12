@@ -64,8 +64,10 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_LIBRARIAN_STALE_DAYS` | `90` | Age after which the librarian flags a record as stale | librarian.py |
 | `COMMONS_MCP_CACHE_TTL` | `300` | Seconds to cache read-only upstream MCP results | mcphub.py |
 | `COMMONS_MCP_CATALOG` | `computed` | Path to the MCP server catalog override | mcphub.py |
+| `COMMONS_MCP_HOST` | `127.0.0.1` | MCP bind host as seen by the dashboard Connect page (set by `commons serve`; override for split deployments) | cli.py, connect.py |
 | `COMMONS_MCP_IDLE` | `300` | Seconds before an idle pooled upstream MCP server is stopped | mcphub.py |
 | `COMMONS_MCP_PERSISTENT` | `1` | Keep upstream MCP servers running between calls (`0` = spawn per call) | mcphub.py |
+| `COMMONS_MCP_PORT` | `8765` | MCP port as seen by the dashboard Connect page (set by `commons serve`) | connect.py |
 | `COMMONS_NOTIFY_WEBHOOK` | — | Webhook for escalation notifications to a human | escalation.py |
 | `COMMONS_OAUTH_AUDIENCE` | — | Expected `aud` of OAuth access tokens | auth.py |
 | `COMMONS_OAUTH_CLIENT_ID_REF` | — | Secret ref of the OAuth introspection client id | auth.py |
@@ -78,7 +80,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_PREF_EXTRACTOR` | — | Shell command that extracts preferences from text (one per line) | prefs.py |
 | `COMMONS_PREF_HALF_LIFE_DAYS` | `120` | Half-life for preference confidence decay | prefs.py |
 | `COMMONS_PRICES` | — | Path to a JSON price table (USD per 1M tokens) for cost estimates | usage.py |
-| `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | server.py |
+| `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | connect.py, server.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |
 | `COMMONS_REINDEX_BATCH` | `512` | Items re-embedded per background tick after an embedder change | background.py |
@@ -99,11 +101,11 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_SKILL_AUTO_APPROVE` | — | Activate clean skill versions without a second agent (single-user setups only) | server_v4.py, skillpool.py |
 | `COMMONS_SKILL_DISCOVERY` | `1` | Background skill discovery from public catalogs (`0` off) | background.py |
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
-| `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, dashboard.py, server.py |
+| `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |
 | `COMMONS_TREE_SITTER` | `1` | Use tree-sitter for JS/TS code indexing (`0` = regex fallback) | codeindex.py |
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
-| `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py |
+| `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |
 | `COMMONS_WAKE_PUSH_WHEN_LIVE` | `0` | Also push wakes to agents already connected live (`1`) | messaging.py |

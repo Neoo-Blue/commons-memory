@@ -325,6 +325,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v7(mcp, store, who)
     from .server_v8 import register_v8
     register_v8(mcp, store, who)
+    from .server_v81 import register_v81
+    register_v81(mcp, store, who)
     from .toolargs import install as friendly_args
     friendly_args(mcp)
     from .telemetry import instrument_mcp

@@ -57,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _connect_platform(x: str) -> str | None:
+    from .connect import ALIASES, PLATFORMS
+    x = (x or "").lower()
+    x = ALIASES.get(x, x)
+    return x if x in PLATFORMS else None
+
+
 def _main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="commons", description="Unified cross-AI memory hub (MCP).")
     p.add_argument("--db", default=None, help="SQLite path or postgresql:// DSN (default $COMMONS_DB or ~/.commons/commons.db)")
@@ -122,8 +129,16 @@ def _main(argv: list[str] | None = None) -> int:
     sk.add_argument("--dir", default=".", help="project directory (default: cwd)")
     sk.add_argument("--scope", choices=["project", "user"], default="project")
     sk.add_argument("--agent")
-    cn = sub.add_parser("connect", help="register this agent (api key + capability profile) and install its skill")
-    cn.add_argument("agent")
+    cn = sub.add_parser("connect", help="`connect PLATFORM [--name N] [--new-key]` prints copy-ready setup for "
+                        "claude-code|codex|cursor|gemini|chatgpt|any|docker; `connect AGENT_NAME` registers an agent "
+                        "(api key + capability profile) and installs its skill")
+    cn.add_argument("agent", help="a platform (print setup) or an agent name (register)")
+    cn.add_argument("--name", help="PLATFORM mode: agent name to fill in (default: the platform id)")
+    cn.add_argument("--new-key", action="store_true", help="PLATFORM mode: create a key for --name and fill it in (shown once)")
+    cn.add_argument("--url", help="PLATFORM mode: MCP URL override (default: $COMMONS_PUBLIC_URL / exposed URL / local)")
+    cn.add_argument("--project", default="", help="PLATFORM mode: project to name in the prompt (and ACL grant with --new-key)")
+    cn.add_argument("--role", default="write", choices=["read", "write", "admin"], help="PLATFORM mode: role for --new-key")
+    cn.add_argument("--json", action="store_true", help="PLATFORM mode: print the same JSON the dashboard API returns")
     cn.add_argument("--platform", default="generic")
     cn.add_argument("--vendor", default="")
     cn.add_argument("--model", default="")
@@ -389,6 +404,8 @@ def _main(argv: list[str] | None = None) -> int:
             args.tls_cert, args.tls_key = self_signed_cert(host=args.host)
         if args.tls_cert:
             os.environ["COMMONS_TLS_CERT"], os.environ["COMMONS_TLS_KEY"] = args.tls_cert, args.tls_key or ""
+        os.environ.setdefault("COMMONS_MCP_HOST", args.host or "127.0.0.1")
+        os.environ.setdefault("COMMONS_MCP_PORT", str(args.port))
         if args.dashboard:
             from .dashboard import serve_dashboard
             from .store import Store as _S
@@ -614,6 +631,22 @@ def _main(argv: list[str] | None = None) -> int:
                 print(json.dumps(ev), flush=True)
             return 0
         print(json.dumps(r, indent=2))
+    elif args.cmd == "connect" and _connect_platform(args.agent) and args.platform == "generic":
+        from . import connect as C
+        plat = _connect_platform(args.agent)
+        name = args.name or plat
+        key = None
+        if args.new_key:
+            r = C.create_key(store, name, args.role, args.project, plat)
+            key = r["api_key"]
+            print(f"# created key for {name} ({r['id']}, role {args.role}); shown once", file=sys.stderr)
+        url = args.url or os.environ.get("COMMONS_URL")
+        if not url:
+            from .expose import state
+            u = (state(store).get("url") or "").rstrip("/")
+            url = u + "/mcp" if u else C.detect_url("", os.environ.get("COMMONS_MCP_HOST", "127.0.0.1"))
+        b = C.bundle(plat, url, name, key, args.project)
+        print(json.dumps(b, indent=2) if args.json else C.render_text(b))
     elif args.cmd == "connect":
         from .orchestrator import Profiles
         from .skills import install, save_key

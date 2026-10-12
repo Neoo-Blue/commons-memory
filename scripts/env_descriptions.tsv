@@ -103,3 +103,5 @@ COMMONS_RERANK_MAX_TOKENS	Token budget for the LLM reranker prompt
 COMMONS_RERANK_MODEL	Cross-encoder model (default Xenova/ms-marco-MiniLM-L-6-v2)
 COMMONS_RERANK_TOP	How many top hits the reranker reorders
 COMMONS_URL	Commons server base URL for hooks/clients (empty = local DB)
+COMMONS_MCP_HOST	MCP bind host as seen by the dashboard Connect page (set by `commons serve`; override for split deployments)
+COMMONS_MCP_PORT	MCP port as seen by the dashboard Connect page (set by `commons serve`)

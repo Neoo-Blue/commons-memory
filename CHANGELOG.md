@@ -2,6 +2,24 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.8.1: Connect an agent
+- **Dashboard → Connect** (Capabilities group, also in the ⌘K palette). Pick Claude Code, Codex CLI, Cursor, Gemini
+  CLI, ChatGPT/other HTTP MCP clients, any AI, or Docker/self-host, and copy: the exact install command or
+  JSON/TOML config, the universal prompt (URL, agent name, project and key filled in), the skill install command,
+  and a one-line `curl` check that runs `initialize` + the new `whoami` tool and prints `OK`.
+- The MCP URL is detected from the browser's host and the server's bind (`COMMONS_PUBLIC_URL` wins), and is editable.
+- **Create agent key** (name, role read/write/admin, optional project ACL grant): shown once. Only allowed on
+  authed dashboards (admin users) or tokenless dashboards bound to a private address with a private client, per the
+  existing `_private_host` rules. The new agent's *last seen* updates live as it connects.
+- Troubleshooting checklist: 401 (key), unreachable (Tailscale `--accept-routes`/subnet routes, firewall, wrong
+  IP), stale tool schema (restart the client), and wake channels/pollers so the agent receives work.
+- **CLI**: `commons connect <platform> [--name N] [--new-key] [--role] [--project] [--url] [--json]` prints the same
+  output. `commons connect <agent-name>` (anything that is not a platform id, or with `--platform`) keeps the old
+  register-and-install behaviour. **JSON API**: `GET /api/connect`, `GET /api/connect_status?name=`,
+  `POST /api/connect/key`.
+- New MCP tool `whoami`. New env vars `COMMONS_MCP_HOST`/`COMMONS_MCP_PORT` (set by `commons serve`).
+- README screenshots gallery (docs/screenshots/), captured from demo data.
+
 ## v0.8.0: retrieval quality and proof, plus zero-effort capture
 - **Better default embedder.** `COMMONS_EMBEDDER=auto` uses fastembed (bge-small, with query instructions) when it
   is installed. Installers and the Docker image now include it, and the image bakes the model in. Otherwise it uses
@@ -31,6 +49,15 @@ All notable changes, newest first. The README describes the current release only
   `.tmp` path). The v0.8 MCP tools and CLI commands are listed in [docs/tools.md](docs/tools.md).
 - **Benchmark caveats.** Retrieval recall only (no end-to-end QA), CPU only, untuned weights, isolated per-question
   stores; the ranking signals cost about 3.6 points of LoCoMo turn R@1. Details in benchmarks/README.md.
+
+## v0.7.2: production Docker image
+- Multi-stage, non-root image with tini, a healthcheck and a `/data` volume; `*_FILE` env vars for Docker secrets;
+  waits for Postgres; amd64 and arm64; published to GHCR by the CI workflow.
+- Compose profiles for Postgres/pgvector, Tailscale, cloudflared and ngrok, plus `.env.example`. See
+  [docs/docker.md](docs/docker.md).
+- The dashboard runs tokenless on private binds (loopback, LAN, tailnet); `COMMONS_DASHBOARD_REQUIRE_TOKEN=1` forces
+  a token anyway.
+- Fix: a race in `ensure_agent` on a fresh database.
 
 ## v0.7.1 — README consolidation, one-line installers, universal prompt
 - README rewritten around a 2-minute quickstart. Version history moved here, and deep docs moved to `docs/`.
