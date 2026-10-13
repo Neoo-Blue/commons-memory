@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.12.1: Discover shows each skill once
+- Mirror copies of the same skill inside one repo (one folder per AI tool) collapse into a single chip; an imported copy
+  wins.
+
 ## v0.12.0: every AI knows the routine by heart
 - **`commons instructions install all`** writes the Commons master instructions into each installed AI's
   always-loaded instructions: Claude Code (`CLAUDE.md` plus an always-relevant `commons` skill), Codex (`AGENTS.md`),
