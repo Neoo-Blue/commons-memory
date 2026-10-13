@@ -34,3 +34,11 @@ def test_handoff_commit_is_checked_on_github_through_the_vault(store, monkeypatc
     monkeypatch.setattr(V, "call", fake_call)
     assert ST.git_verify(store, "Neoo-Blue/commons-memory", "main", "abc1234") == "verified on GitHub (on main)"
     assert calls[0].endswith("/repos/Neoo-Blue/commons-memory/commits/abc1234")
+
+
+def test_an_open_work_claim_without_a_card_counts_as_working(store):
+    a = store.ensure_agent("legacy")
+    store.x("INSERT INTO work_claims(id,agent_id,what,status,started_at) VALUES('w1',?,'Add a show to Sonarr','active',1)", (a,))
+    store.x("UPDATE agents SET last_seen=1 WHERE id=?", (a,))
+    card = next(t for t in ST.team(store) if t["agent"] == "legacy")
+    assert card["state"] == "working" and card["working_on"] == "Add a show to Sonarr"

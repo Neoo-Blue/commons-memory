@@ -41,7 +41,8 @@ def team(s: Store) -> list[dict]:
         work = s.q("SELECT what FROM work_claims WHERE agent_id=? AND status='active' ORDER BY started_at DESC LIMIT 1",
                    (a["id"],))
         row = dict(st[0]) if st else {}
-        out.append({"agent": a["name"], "state": row.get("state") or "idle", "headline": row.get("headline") or "",
+        state = row.get("state") or ("working" if work else "idle")  # an open work claim means working
+        out.append({"agent": a["name"], "state": state, "headline": row.get("headline") or "",
                     "bullets": json.loads(row.get("bullets") or "[]"), "since": iso(row["updated_at"]) if row else None,
                     "live": p["wake_mode"] in ("instant", "long-poll", "push"), "wake_mode": p["wake_mode"],
                     "working_on": work[0]["what"] if work else None})

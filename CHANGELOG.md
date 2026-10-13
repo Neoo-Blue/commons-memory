@@ -2,6 +2,9 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.16.1: Team now shows work in progress
+- An agent with an open work claim but no status card yet shows as working (it showed idle).
+
 ## v0.16.0: approvals on your phone, a live team view, and a doctor
 - **Phone approvals.** Every "Needs you" question, vault approvals included, is pushed to your phone through ntfy
   with Yes / No buttons. A tap answers it through a one-time signed link to the dashboard (no login on the phone; the
