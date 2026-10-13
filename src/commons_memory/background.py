@@ -34,11 +34,13 @@ def _due(s: Store, name: str, force: bool = False) -> bool:
     every = _every(name)
     if every <= 0:
         return False
-    r = s.q("SELECT value FROM meta WHERE key=?", (f"bg_last:{name}",))
-    last = float(r[0]["value"]) if r else 0.0
-    if force or now() - last >= every:
-        s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"bg_last:{name}", str(now())))
-        return True
+    key = f"bg_last:{name}"
+    s.x("INSERT OR IGNORE INTO meta VALUES(?, '0')", (key,))
+    r = s.q("SELECT value FROM meta WHERE key=?", (key,))
+    last = r[0]["value"] if r else "0"
+    if force or now() - float(last) >= every:  # compare-and-swap: of two loops (or processes) only one claims the run
+        with s.lock:
+            return s.db.execute("UPDATE meta SET value=? WHERE key=? AND value=?", (str(now()), key, last)).rowcount == 1
     return False
 
 
@@ -166,13 +168,14 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
     return out
 
 
-_started: dict[int, threading.Thread] = {}
+_started: dict[str, threading.Thread] = {}
 
 
 def start_background(s: Store, mode: str | None = None) -> threading.Thread | None:
     mode = mode or os.environ.get("COMMONS_BACKGROUND", "light")
-    if mode in ("0", "off", "none") or id(s) in _started:
-        return _started.get(id(s))
+    key = _dbkey(s)  # one loop per database: `serve --dashboard` builds two Store objects on the same file
+    if mode in ("0", "off", "none") or key in _started:
+        return _started.get(key)
     jobs = tuple(INTERVALS) if mode == "full" else LIGHT
     stop = threading.Event()
 
@@ -187,12 +190,16 @@ def start_background(s: Store, mode: str | None = None) -> threading.Thread | No
     t = threading.Thread(target=loop, name="commons-background", daemon=True)
     t.stop = stop  # type: ignore[attr-defined]
     t.start()
-    _started[id(s)] = t
+    _started[key] = t
     return t
 
 
+def _dbkey(s: Store) -> str:
+    return s.path if s.dialect == "postgres" or s.path == ":memory:" else os.path.realpath(s.path)
+
+
 def stop_background(s: Store) -> None:
-    t = _started.pop(id(s), None)
+    t = _started.pop(_dbkey(s), None)
     if t:
         t.stop.set()  # type: ignore[attr-defined]
         t.join(timeout=5)

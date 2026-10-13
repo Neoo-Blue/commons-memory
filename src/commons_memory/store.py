@@ -104,7 +104,8 @@ class Store:
             self.db = _sqlite_connect(self.path)
         self.lock = threading.RLock()
         self._tl = threading.local()  # per-thread flags: one agent's bulk import must not change another's writes
-        self._reindexing = threading.Lock()
+        key = self.path if is_pg(self.path) or self.path == ":memory:" else os.path.realpath(self.path)
+        self._reindexing = _REINDEX_LOCKS.setdefault(key, threading.Lock())  # shared by every Store on this database
         self._readers = self.dialect == "sqlite" and self.path != ":memory:" and \
             os.environ.get("COMMONS_SQLITE_READERS", "0") == "1"
         self.db.executescript(SCHEMA)
@@ -1240,6 +1241,9 @@ def _render_packet(p: dict) -> str:
 
 def _vecstr(v) -> str:
     return "[" + ",".join(f"{x:.6g}" for x in v) + "]"
+
+
+_REINDEX_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _sqlite_connect(path: str):

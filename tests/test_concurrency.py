@@ -6,6 +6,7 @@ races share a connection and the store RLock. A worker process opens its own Sto
 SQLite cannot get the WAL write lock. Orchestrator and inbox tests share one Store, matching server threads.
 """
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -521,3 +522,21 @@ def test_presence_heartbeat_upsert_one_row_per_agent(tmp_path):
         assert heartbeat(store, aid, status="settled", client="final")["id"] == aid
     for s in conns[1:]:
         s.db.close()
+
+
+def test_one_background_loop_and_one_claim_per_database(tmp_path):
+    """`serve --dashboard` opens two Store objects on one file: they must share one maintenance loop, one reindex lock,
+    and a due job must be claimed once (two loops both embedding the same rows made a 12k backlog crawl)."""
+    from commons_memory import background as bg
+    a = make_store(tmp_path, "bg.db")
+    b = Store(a.path, embedder="hash")
+    assert a._reindexing is b._reindexing
+    ta = bg.start_background(a, mode="light")
+    try:
+        assert bg.start_background(b, mode="light") is ta
+        os.environ["COMMONS_EVERY_TIERS"] = "3600"
+        a.x("DELETE FROM meta WHERE key='bg_last:tiers'")
+        assert [bg._due(a, "tiers"), bg._due(b, "tiers")] == [True, False]
+    finally:
+        os.environ.pop("COMMONS_EVERY_TIERS", None)
+        bg.stop_background(a)
