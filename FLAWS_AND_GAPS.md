@@ -114,6 +114,7 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 ### Fixed since v0.9
 - Archify parity (v0.18): sequence diagrams (a job between agents, or a function's call path), workflow (job plan), lifecycle state machines with transition counts from history, source links pinned to the indexed commit, and an architecture diff between any two snapshots.
 - `add_item` is one transaction (v0.18): a crash can no longer leave a memory without its index, vector or graph links.
+- Search with operator-like or odd queries (`and or not`, `& | ! <-> :*`, quotes, `C++ & C#`, 300-char words, accents, CJK) never errors on SQLite FTS5 or Postgres tsquery, and operator words still find their memory (`tests/test_search_operators.py`, both backends).
 
 ### Still open after v0.9
 | Risk / gap | Why |
@@ -126,7 +127,6 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). |
 | Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |
 | Unlisted tools | Some clients only call listed tools; they reach the others through `call`. |
-| Postgres tsquery with operator-like words | Reported by review; the full suite now passes on Postgres 17, but this case has no dedicated test. |
 
 ## Part 2: Still open, and why
 
