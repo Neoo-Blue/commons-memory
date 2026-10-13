@@ -18,6 +18,8 @@ DEFAULTS = {
     "quota_routing": (True, "Route work only to agents with usage headroom, keeping your reserve"),
     "reserve_pct": (20, "Share of each usage window kept for you, %"),
     "schedule_takeover": (True, "Another agent covers a scheduled run its owner missed"),
+    "github_watch": ([], "GitHub repos (owner/name) to watch: a failed CI run, a new issue or a new PR becomes a job for "
+                         "the best live agent (uses the vault's GitHub key; works behind NAT)"),
     "phone_ntfy": ("", "Phone approvals: your ntfy topic URL (e.g. https://ntfy.sh/<long-random-topic>); every Needs-you "
                        "question arrives with Yes / No buttons"),
     "dashboard_url": ("", "This dashboard's address as your phone reaches it (LAN or tailnet), for the Yes / No buttons"),
@@ -50,7 +52,14 @@ def put(s: Store, key: str, value) -> dict:
             raise CommonsError(f"{key} must be an http(s) URL")
     elif isinstance(d, list):
         value = [v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip()]
-        bad = [v for v in value if not (v in ("typesafe", "ask") or v.startswith(("role:", "agent:")) or "/" in v)]
+        if key == "github_watch":
+            import re
+            bad = [v for v in value if not re.fullmatch(r"[\w.-]+/[\w.-]+", v)]
+            if bad:
+                raise CommonsError(f"repos are owner/name; not {bad}")
+            bad = []
+        else:
+            bad = [v for v in value if not (v in ("typesafe", "ask") or v.startswith(("role:", "agent:")) or "/" in v)]
         if bad:
             raise CommonsError(f"judge entries are typesafe, ask, role:NAME, agent:NAME, agent:any or provider/model; not {bad}")
     s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"setting:{key}", json.dumps(value)))

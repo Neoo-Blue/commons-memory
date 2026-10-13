@@ -230,7 +230,21 @@ def build_app(store: Store) -> Starlette:
                                     b.get("harness", "generic"), b.get("project"))
         return JSONResponse(r)
 
-    routes = [Route("/agent/hook", hook, methods=["POST"]), Route("/agent/wake/ack", wack, methods=["POST"]),
+    async def inhook(req: Request):  # outside events: GitHub webhooks or {title, body}; the URL token is the auth
+        from .events import inbound
+        try:
+            b = await req.json()
+        except Exception:  # noqa: BLE001
+            b = {}
+        try:
+            r = await asyncio.to_thread(inbound, store, req.path_params["token"], b if isinstance(b, dict) else {},
+                                        req.headers.get("x-github-event", ""))
+        except CommonsError as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
+        return JSONResponse(r)
+
+    routes = [Route("/hooks/{token}", inhook, methods=["POST"]),
+              Route("/agent/hook", hook, methods=["POST"]), Route("/agent/wake/ack", wack, methods=["POST"]),
               Route("/agent/wake/replay", wreplay)]
     for prefix in ("/bus", "/agent"):
         routes += [Route(f"{prefix}/send", send, methods=["POST"]), Route(f"{prefix}/recv", recv),
@@ -243,7 +257,7 @@ def build_app(store: Store) -> Starlette:
 def mount(inner, agent_app):
     async def app(scope, receive, send):
         p = scope.get("path", "") if scope["type"] in ("http", "websocket") else ""
-        if p.startswith(("/bus/", "/agent/")):
+        if p.startswith(("/bus/", "/agent/", "/hooks/")):
             return await agent_app(scope, receive, send)
         return await inner(scope, receive, send)
     return app

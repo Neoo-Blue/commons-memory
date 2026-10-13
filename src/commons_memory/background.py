@@ -22,9 +22,9 @@ from .store import Store
 INTERVALS = {  # seconds (env COMMONS_EVERY_<NAME> overrides)
     "recurring": 30, "reap": 30, "escalate": 60, "kb": 5, "librarian": 600, "models": 3600, "routing_validate": 3600,
     "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3, "reindex": 60, "tiers": 3600,
-    "quota_wake": 60, "schedules": 60, "release": 300,
+    "quota_wake": 60, "schedules": 60, "release": 300, "events": 300,
 }
-LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex", "tiers", "quota_wake", "schedules", "release")
+LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex", "tiers", "quota_wake", "schedules", "release", "events")
 
 
 def _every(name: str) -> float:
@@ -117,6 +117,11 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
         from .releases import announce
         return announce(s)
     run("release", release)
+
+    def events():  # outside events (GitHub) become jobs for the best live agent
+        from .events import watch_github
+        return watch_github(s) or None
+    run("events", events)
 
     def schedules():  # take over scheduled runs an owner missed or can't deliver
         from . import settings as _st

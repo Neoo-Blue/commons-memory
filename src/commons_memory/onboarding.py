@@ -102,6 +102,8 @@ def status(s: Store) -> dict:
         {"step": "Features reviewed", "done": bool(s.q("SELECT 1 FROM meta WHERE key LIKE 'setting:%'")),
          "detail": "all are on by default; save once to confirm"},
     ]
-    return {"steps": steps, "done": sum(x["done"] for x in steps), "total": len(steps), "judges": judges,
+    from .events import hook_token
+    return {"hook_path": f"/hooks/{hook_token(s)}", "github_watch": settings.get(s, "github_watch"),
+            "steps": steps, "done": sum(x["done"] for x in steps), "total": len(steps), "judges": judges,
             "providers": providers, "credentials": user_creds, "settings": settings.listing(s), "agents": agents,
             "decisions": V.decisions(s, 15)}

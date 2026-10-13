@@ -224,7 +224,7 @@ class AuthMiddleware:
                     "authorization_servers": [self.oauth.issuer] if self.oauth.issuer else [],
                     "resource_documentation": "https://github.com/Neoo-Blue/commons-memory#security-model"}
             return await self._send_json(send, 200, meta)
-        if path == "/bus/health":
+        if path == "/bus/health" or path.startswith("/hooks/"):  # /hooks checks its own URL token
             return await self.app(scope, receive, send)
         if path.startswith("/.well-known/agent"):  # A2A agent card is public discovery metadata
             return await self.app(scope, receive, send)
