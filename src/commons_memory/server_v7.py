@@ -46,9 +46,13 @@ def register_v7(mcp, store, who):
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
                  project: str = "", agent: str = "", api_key: str = "") -> str:
         """Send a direct (to=agent name) or broadcast (to='*') message. type: message|task|question|review|fyi.
-        Wakes the recipient via its channels."""
-        return _js(msg.send(me(agent, api_key), to, body, mtype=type, subject=subject, thread=thread or None,
-                            reply_to=reply_to or None, project=project or None))
+        Wakes the recipient via its channels. The reply says whether the recipient is live (woken now) and, if not,
+        which agents are: send work that can't wait to one of those instead."""
+        from .messaging import recipient_status
+        sender = me(agent, api_key)
+        res = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None, reply_to=reply_to or None,
+                       project=project or None)
+        return _js(res | recipient_status(store, to, sender))
 
     @mcp.tool()
     def msg_recv(wait: float = 0, limit: int = 20, ack: bool = False, types: list[str] | None = None,

@@ -476,6 +476,27 @@ def board(s: Store) -> list[dict]:
 
 
 SUMMON_SKIP = ("cli", "user", "librarian", "commons")
+LIVE_MODES = ("instant", "long-poll", "push")
+
+
+def recipient_status(s: Store, to: str, sender: str | None) -> dict:
+    """For a direct message: is the recipient woken right now, and if not, who is? (A chat-only agent reads mail
+    only when its user next opens it, so a request sent there can sit for hours.)"""
+    if not to or to == "*":
+        return {}
+    a = s.get_agent(to)
+    if not a:
+        return {}
+    p = presence(s, a["id"])
+    if p["wake_mode"] in LIVE_MODES:
+        return {"recipient_live": True, "wake_mode": p["wake_mode"]}
+    others = [x["agent"] for x in board(s) if x["wake_mode"] in LIVE_MODES and x["id"] not in (a["id"], sender)
+              and x["agent"] not in SUMMON_SKIP]
+    ago = f"{int((now() - p['last_seen']) / 60)} min ago" if p.get("last_seen") else "never"
+    return {"recipient_live": False, "wake_mode": p["wake_mode"],
+            "note": f"{p['agent']} isn't running now (last seen {ago}); it reads this only when it next checks in. "
+                    + (f"Live now: {', '.join(others)}. Send work that can't wait to one of them." if others
+                       else "No agent is live right now.")}
 
 
 def summon(s: Store, sender: str | None, agents: list[str] | None = None, reason: str = "", wait: float = 10,

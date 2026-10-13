@@ -288,3 +288,14 @@ def test_every_agent_gets_the_playbook_once_without_being_told(store):
     first = playbook_once(store, a)
     assert "start_work" in first and INSTRUCTIONS in first
     assert playbook_once(store, a) == ""                                           # not on every call
+
+
+def test_message_to_an_agent_that_isnt_running_says_who_is(store):
+    from commons_memory.messaging import Messaging, recipient_status
+    a, chat = store.ensure_agent("asker2"), store.ensure_agent("chatbot2")
+    Messaging(store).send(a, "chatbot2", "please check plex")
+    st = recipient_status(store, "chatbot2", a)
+    assert st["recipient_live"] is False and "isn't running now" in st["note"]
+    store.x("INSERT INTO wake_channels(id,agent_id,kind,config,secret,enabled,created_at,failures) "
+            "VALUES('w1',?,'webhook','{}','',1,0,0)", (chat,))
+    assert recipient_status(store, "chatbot2", a)["recipient_live"] is True
