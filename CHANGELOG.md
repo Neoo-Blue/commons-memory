@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.24.2: Commons knows which models each agent can run, and tells you when a new one appears
+- **What went wrong.** Google launched Gemini 4 Argon for Antigravity, and the owner asked whether Commons had picked
+  it up. It couldn't have: Commons only knew each subscription agent's usage windows, never the models behind it.
+- **Live model catalogs.** `commons quota sync` (the 10-minute job that already reports usage) now also reads each
+  agent's own model list from its CLI (`agy models` for Antigravity, `grok models` for Grok Build; add more under
+  `_models` in ~/.commons/quota-map.json) and reports it with `quota_report(models=...)`. Commons records them as
+  `<agent>/<model>`, marks ones the agent no longer offers as unavailable, and the first time a model appears it is
+  flagged NEW and you get a notification ("New model for antigravity: Gemini 4 Argon (High)").
+- **For agents:** quota_report takes `models` (ids or {id, name}) for the models you can run right now.
+
 ## v0.24.1: make the hub yours in one step, and lock the dashboard if you want
 - **What went wrong.** v0.24 asked for a setup code that only the hub's log showed. The owner couldn't find it, and
   nobody should have to dig through container logs to start using a tool.

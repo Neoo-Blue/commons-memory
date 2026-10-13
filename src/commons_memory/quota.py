@@ -208,6 +208,39 @@ DEFAULT_MAP = {
 }
 
 
+# Commons agent -> the local command that lists the models it can run right now (override: "_models" in quota-map.json)
+MODEL_CMDS = {"antigravity": ["agy", "models"], "grok-build": ["grok", "models"]}
+
+
+def local_models(cmds: dict | None = None) -> dict[str, list[dict]]:
+    """Each agent's live model catalog from its own CLI: `agy models` (slug<TAB>name) or `grok models` (bullets).
+    An agent whose CLI is missing or fails is left out, so the hub keeps what it last knew."""
+    import os
+    import re
+    import shutil
+    import subprocess
+    path = os.environ.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin")  # launchd's PATH is bare
+    out = {}
+    for agent, cmd in (cmds or MODEL_CMDS).items():
+        exe = shutil.which(cmd[0], path=path)
+        if not exe:
+            continue
+        try:
+            r = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        ms = []
+        for line in r.stdout.splitlines():
+            if "\t" in line:
+                mid, name = line.split("\t", 1)
+                ms.append({"id": mid.strip(), "name": name.strip()})
+            elif m := re.match(r"\s*[*-]\s+(\S+)", line):
+                ms.append({"id": m.group(1), "name": m.group(1)})
+        if r.returncode == 0 and ms:
+            out[agent] = ms
+    return out
+
+
 def from_aiusage(db_path: str | None = None, mapping: dict | None = None) -> dict[str, list[dict]]:
     """Latest window per provider from the aiusage database, grouped by Commons agent name."""
     import sqlite3

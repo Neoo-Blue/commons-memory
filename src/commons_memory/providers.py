@@ -179,27 +179,50 @@ class ProviderLayer:
                 self.s.x("UPDATE providers SET last_error=? WHERE name=?", (str(e)[:300], name))
                 continue
             for m in models:
-                mid = f"{name}/{m['model']}"
                 seen += 1
-                exists = self.s.q("SELECT 1 FROM models WHERE id=?", (mid,))
-                if exists:
-                    self.s.x("UPDATE models SET last_seen=?, context=COALESCE(?,context), cost_in=COALESCE(?,cost_in), "
-                             "cost_out=COALESCE(?,cost_out), status='available' WHERE id=?",
-                             (now(), m.get("context"), m.get("cost_in"), m.get("cost_out"), mid))
-                else:
-                    self.s.x("INSERT INTO models VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                             (mid, name, m["model"], m.get("context"), m.get("cost_in"), m.get("cost_out"),
-                              json.dumps(m.get("capabilities") or []), m.get("speed"), now(), now(),
-                              1 if self._has_baseline(name) else 0, "available", json.dumps(m)))
-                    if self._has_baseline(name):
-                        new.append(mid)
-                    ent = self.s.upsert_entity("model", mid)
-                    self.s.relate(ent, self.s.upsert_entity("provider", name), "served_by")
+                if self._upsert_model(name, m):
+                    new.append(f"{name}/{m['model']}")
             self.s.x("UPDATE providers SET last_refresh=?, last_error=NULL WHERE name=?", (now(), name))
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?, '1')", (f"baseline:{name}",))
         if new:
             self.s.audit(None, "models.new", ",".join(new))
         return {"providers": names, "models_seen": seen, "new_models": new}
+
+    def _upsert_model(self, name: str, m: dict) -> bool:
+        """Record one model of a provider (or an agent's own catalog); True when it is NEW since the first listing."""
+        mid = f"{name}/{m['model']}"
+        if self.s.q("SELECT 1 FROM models WHERE id=?", (mid,)):
+            self.s.x("UPDATE models SET last_seen=?, context=COALESCE(?,context), cost_in=COALESCE(?,cost_in), "
+                     "cost_out=COALESCE(?,cost_out), status='available' WHERE id=?",
+                     (now(), m.get("context"), m.get("cost_in"), m.get("cost_out"), mid))
+            return False
+        fresh = self._has_baseline(name)
+        self.s.x("INSERT INTO models VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (mid, name, m["model"], m.get("context"), m.get("cost_in"), m.get("cost_out"),
+                  json.dumps(m.get("capabilities") or []), m.get("speed"), now(), now(), 1 if fresh else 0, "available",
+                  json.dumps(m)))
+        self.s.relate(self.s.upsert_entity("model", mid), self.s.upsert_entity("provider", name), "served_by")
+        return fresh
+
+    def sync_agent_models(self, agent_id: str, models: list) -> dict:
+        """An agent's own catalog (what its CLI or subscription offers, e.g. `agy models`): recorded as
+        <agent>/<model>, models it no longer lists marked unavailable, and a new one announced to the owner."""
+        name = self.s.label(agent_id)[1]
+        ms = [{"model": m, "name": m} if isinstance(m, str) else {"model": m["id"], "name": m.get("name") or m["id"]}
+              for m in models if m]
+        new = [m for m in ms if self._upsert_model(name, m)]
+        ids = [f"{name}/{m['model']}" for m in ms]
+        self.s.x(f"UPDATE models SET status='unavailable' WHERE provider=? AND id NOT IN ({','.join('?' * len(ids))})",
+                 (name, *ids))
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?, '1')", (f"baseline:{name}",))
+        self.set_agent_models(agent_id, ids)
+        if new:
+            from .escalation import notify
+            labels = ", ".join(m["name"] for m in new)
+            notify(self.s, f"New model for {name}: {labels}", f"{name} can now use {labels}; Commons routes to it "
+                   "like any of its models.", level="info")
+            self.s.audit(agent_id, "models.new", ",".join(f"{name}/{m['model']}" for m in new))
+        return {"agent": name, "models": len(ids), "new": [m["name"] for m in new]}
 
     def _has_baseline(self, provider: str) -> bool:
         """The first refresh of a provider establishes the baseline; only later additions count as NEW."""

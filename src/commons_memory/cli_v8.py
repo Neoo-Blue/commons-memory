@@ -253,11 +253,22 @@ def handle_nostore(args) -> int:
             print(json.dumps(json.loads(cli._call("call", {"tool": "quota_status", "args": {}})), indent=2))
             return 0
         mapping = json.load(open(args.map)) if args.map else None
+        mp = Path.home() / ".commons" / "quota-map.json"
+        cmds = (mapping or (json.loads(mp.read_text()) if mp.exists() else {})).get("_models")
+        wins_by, models_by = Q.from_aiusage(args.aiusage_db, mapping), Q.local_models(cmds)
         sent = {}
-        for agent, wins in Q.from_aiusage(args.aiusage_db, mapping).items():
+        for agent in sorted(set(wins_by) | set(models_by)):
             # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
-            cli._call("call", {"tool": "quota_report", "args": {"windows": wins, "for_agent": agent}})
-            sent[agent] = [w["window"] for w in wins]
+            a = {"windows": wins_by.get(agent, []), "for_agent": agent}
+            if agent in models_by:
+                a["models"] = models_by[agent]
+            try:
+                r = json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}")
+            except Exception:  # noqa: BLE001 - a hub older than v0.24.2 has no models argument: send the windows
+                a.pop("models", None)
+                r = json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}") if a["windows"] else {}
+            sent[agent] = [w["window"] for w in a["windows"]] + ([f"{len(a['models'])} models"] if "models" in a else []) \
+                + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])]
         print(json.dumps({"synced": sent}))
         return 0
     if c == "import":
