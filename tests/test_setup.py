@@ -1,3 +1,4 @@
+import pytest
 import io
 import json
 import sys
@@ -34,3 +35,29 @@ def test_setup_supports_opencode(tmp_path, monkeypatch, capsys):
     assert "turn() every turn" in capsys.readouterr().out
     from commons_memory.connect import bundle
     assert bundle("opencode", "http://hub:8770", "oc-agent")["blocks"][0]["id"] == "setup"
+
+
+@pytest.mark.parametrize("client,path,section,urlkey", [
+    ("windsurf", ".codeium/windsurf/mcp_config.json", "mcpServers", "serverUrl"),
+    ("copilot", ".copilot/mcp-config.json", "servers", "url"),
+    ("amp", ".config/amp/settings.json", "amp.mcpServers", "url"),
+    ("factory", ".factory/mcp.json", "mcpServers", "url"),
+    ("qwen", ".qwen/settings.json", "mcpServers", "httpUrl"),
+    ("crush", ".config/crush/crush.json", "mcp", "url"),
+])
+def test_more_clients_get_their_documented_mcp_shape(tmp_path, monkeypatch, client, path, section, urlkey):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert SU.mcp(client, "http://hub:8770/mcp", "cmk_k").startswith("wrote")
+    cfg = json.loads((tmp_path / path).read_text())
+    entry = cfg[section]["commons"]
+    assert entry[urlkey] == "http://hub:8770/mcp" and entry["headers"]["Authorization"] == "Bearer cmk_k"
+
+
+def test_jsonc_config_is_never_rewritten(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    f = tmp_path / ".config" / "zed" / "settings.json"
+    f.parent.mkdir(parents=True)
+    f.write_text('{\n  // my theme\n  "theme": "One Dark"\n}\n')
+    out = SU.mcp("zed", "http://hub:8770/mcp", "cmk_secret_k")
+    assert out.startswith("skipped") and "context_servers" in out and "cmk_secret_k" not in out
+    assert "// my theme" in f.read_text()

@@ -12,13 +12,13 @@ CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space
 def add_parsers(sub) -> None:
     from .setup import LABELS
     dr = sub.add_parser("doctor", help="check this AI's whole Commons connection; --repair fixes what is broken")
-    dr.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor | opencode")
+    dr.add_argument("--client", required=True, help="claude-code, codex, gemini, cursor, opencode, copilot, cline, kilo, amp, factory, qwen, crush, goose, windsurf, zed, roo, warp")
     dr.add_argument("--agent", required=True)
     dr.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
     dr.add_argument("--repair", action="store_true")
     st = sub.add_parser("setup", help="connect an AI to Commons completely in one go (MCP, instructions, hooks, "
                                       "instant wake, memory hand-over, verify); every step on unless --no-<step>")
-    st.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor | opencode")
+    st.add_argument("--client", required=True, help="claude-code, codex, gemini, cursor, opencode, copilot, cline, kilo, amp, factory, qwen, crush, goose, windsurf, zed, roo, warp")
     st.add_argument("--agent", required=True, help="this AI's Commons agent name")
     st.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
     for k, v in LABELS.items():

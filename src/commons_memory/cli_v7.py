@@ -15,7 +15,11 @@ DAEMON_PRESETS = {"claude": "claude -p --output-format text --permission-prompts
                   "codex": "codex exec --skip-git-repo-check --sandbox workspace-write -",
                   "gemini": "gemini --output-format text",
                   "cursor": "agent -p --output-format text --trust",
-                  "opencode": "sh -c 'opencode run \"$(cat)\"'"}
+                  "opencode": "sh -c 'opencode run \"$(cat)\"'",
+                  "copilot": "sh -c 'copilot -p \"$(cat)\"'", "cline": "sh -c 'cline --auto-approve true \"$(cat)\"'",
+                  "kilo": "sh -c 'kilo run --auto \"$(cat)\"'", "amp": "sh -c 'amp -x \"$(cat)\"'",
+                  "factory": "sh -c 'droid exec \"$(cat)\"'", "qwen": "sh -c 'qwen -p \"$(cat)\"'",
+                  "crush": "sh -c 'crush run \"$(cat)\"'", "goose": "sh -c 'goose run -t \"$(cat)\"'"}
 
 CMDS = {"project-rename", "msg", "presence", "wake", "agent", "bus", "route", "drive", "sched", "mission", "breakdown"}
 

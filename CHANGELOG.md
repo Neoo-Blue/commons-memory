@@ -2,6 +2,18 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.17.0: outside events become work, and 17 AI clients set up in one command
+- **GitHub watcher.** List repos on Setup: a failed CI run, a new issue or a new PR becomes a job for the best live
+  agent. It pulls through the vault's GitHub key, so it works behind NAT with nothing exposed, and its first look at a
+  repo only marks what is already there.
+- **Inbound webhook** at `/hooks/<token>` on the MCP port: GitHub webhook payloads, or `{"title", "body"}` from
+  anything that can reach the hub, become jobs. The token in the URL is the only credential it accepts.
+- **`commons setup` covers 17 clients**: Claude Code, Codex, Gemini CLI, Cursor, OpenCode, GitHub Copilot, Cline,
+  Kilo Code, Amp, Factory Droid, Qwen Code, Crush and Goose (with instant wake through their headless modes), plus
+  Windsurf, Zed, Roo Code and Warp (no headless mode to wake). Each uses its documented config shape and global rules
+  file. A config file with comments is never rewritten; setup prints the block to add instead, and Goose's YAML is
+  printed, not edited.
+
 ## v0.16.1: Team now shows work in progress
 - An agent with an open work claim but no status card yet shows as working (it showed idle).
 

@@ -95,7 +95,7 @@ It asks for the agent's key once (hidden, saved 0600), then does every step, eac
 - verifies the connection.
 
 Add `--no-<step>` to leave one out. The dashboard's Connect page builds this command with a checkbox per step.
-Clients: `claude-code`, `codex`, `gemini`, `cursor`, `opencode`.
+Clients: `claude-code`, `codex`, `gemini`, `cursor`, `opencode`, `copilot`, `cline`, `kilo`, `amp`, `factory`, `qwen`, `crush`, `goose`, `windsurf`, `zed`, `roo`, `warp`.
 
 **Hosted chat apps** (claude.ai, ChatGPT, Grok, Muse) can't run commands: paste [PROMPT.md](PROMPT.md) into their
 custom instructions. It is generated from the same master instructions, so it never goes stale, and Commons hands

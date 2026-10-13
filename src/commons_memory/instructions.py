@@ -25,9 +25,18 @@ TARGETS = {
     "grok": ["~/.grok/AGENTS.md"],
     "cursor": ["~/.cursor/rules/commons.mdc"],
     "opencode": ["~/.config/opencode/AGENTS.md"],
+    "windsurf": ["~/.codeium/windsurf/memories/global_rules.md"],
+    "zed": ["~/.config/zed/AGENTS.md"],
+    "cline": ["~/Documents/Cline/Rules/commons.md"],
+    "roo": ["~/.roo/rules/commons.md"],
+    "kilo": ["~/.config/kilo/AGENTS.md"],
+    "crush": ["~/.config/crush/CRUSH.md"],
 }
 HOMES = {"claude-code": "~/.claude", "codex": "~/.codex", "gemini": "~/.gemini", "antigravity": "~/.gemini",
-         "grok": "~/.grok", "cursor": "~/.cursor", "opencode": "~/.config/opencode"}
+         "grok": "~/.grok", "cursor": "~/.cursor", "opencode": "~/.config/opencode", "windsurf": "~/.codeium/windsurf",
+         "zed": "~/.config/zed", "cline": "~/Documents/Cline", "roo": "~/.roo", "kilo": "~/.config/kilo",
+         "crush": "~/.config/crush"}
+WHOLE = ("SKILL.md", ".mdc", "/Rules/commons.md", "/rules/commons.md")  # files that are entirely Commons' own
 SKILL_DESC = ("Commons, the shared memory, task and credential hub for all of the user's AIs. Use at the start of EVERY "
               "task and before answering anything about the user's projects, homelab, past work, credentials or other "
               "agents: check Commons first (pickup, search), claim the work with start_work, never redo another "
@@ -49,6 +58,8 @@ def _render(path: str, text: str) -> str:
         return f"---\nname: commons\ndescription: {SKILL_DESC}\n---\n\n{text}\n"
     if path.endswith(".mdc"):
         return f"---\ndescription: Commons hub routine\nalwaysApply: true\n---\n\n{text}\n"
+    if path.endswith(("/Rules/commons.md", "/rules/commons.md")):
+        return text + "\n"
     return f"{BEGIN}\n{text}\n{END}"
 
 
@@ -95,7 +106,7 @@ def install(harness: str = "all", url: str | None = None, agent: str | None = No
             if path in done:
                 continue
             done.add(path)
-            whole = p.endswith(("SKILL.md", ".mdc"))
+            whole = p.endswith(WHOLE)
             status = _apply(path, None if uninstall else _render(p, text), whole)
             out.append({"ai": h, "file": str(path), "status": status})
     return out
@@ -113,11 +124,11 @@ def refresh() -> list[str]:
                 continue
             seen.add(path)
             text = path.read_text()
-            if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(("SKILL.md", ".mdc"))):
+            if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(WHOLE)):
                 continue
             head = re.search(r"connected to Commons( at (\S+))?( as agent `([^`]+)`)?", text)
             url, agent = (head.group(2), head.group(4)) if head else (None, None)
-            whole = p.endswith(("SKILL.md", ".mdc"))
+            whole = p.endswith(WHOLE)
             if whole and "Commons" not in text:
                 continue
             _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole)

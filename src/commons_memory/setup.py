@@ -17,7 +17,43 @@ STEPS = ["mcp", "instructions", "hooks", "wake", "import", "verify"]
 LABELS = {"mcp": "connect it to Commons (MCP)", "instructions": "teach it the Commons routine (always-loaded instructions + skill)",
           "hooks": "auto-capture every message and tool call", "wake": "instant wake when work arrives",
           "import": "hand over its existing memories", "verify": "verify the connection"}
-CLIENTS = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor", "opencode": "opencode"}
+# client -> instant-wake preset (None: the client has no headless mode to wake)
+CLIENTS = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor", "opencode": "opencode",
+           "copilot": "copilot", "cline": "cline", "kilo": "kilo", "amp": "amp", "factory": "factory", "qwen": "qwen",
+           "crush": "crush", "goose": "goose", "windsurf": None, "zed": None, "roo": None, "warp": None}
+
+
+def _vscode_global(ext: str) -> str:
+    import platform
+    base = "~/Library/Application Support/Code/User" if platform.system() == "Darwin" else "~/.config/Code/User"
+    return f"{base}/globalStorage/{ext}/settings"
+
+
+# client -> (global MCP config file, section, entry) for remote streamable-HTTP servers, from each client's docs
+JSON_MCP = {
+    "cursor": ("~/.cursor/mcp.json", "mcpServers", lambda u, a: {"url": u, "headers": {"Authorization": a}}),
+    "gemini": ("~/.gemini/settings.json", "mcpServers", lambda u, a: {"httpUrl": u, "headers": {"Authorization": a}}),
+    "opencode": ("~/.config/opencode/opencode.json", "mcp",
+                 lambda u, a: {"type": "remote", "url": u, "enabled": True, "headers": {"Authorization": a}}),
+    "windsurf": ("~/.codeium/windsurf/mcp_config.json", "mcpServers",
+                 lambda u, a: {"serverUrl": u, "headers": {"Authorization": a}}),
+    "zed": ("~/.config/zed/settings.json", "context_servers", lambda u, a: {"url": u, "headers": {"Authorization": a}}),
+    "copilot": ("~/.copilot/mcp-config.json", "servers",
+                lambda u, a: {"type": "http", "url": u, "headers": {"Authorization": a}}),
+    "cline": (_vscode_global("saoudrizwan.claude-dev") + "/cline_mcp_settings.json", "mcpServers",
+              lambda u, a: {"type": "streamableHttp", "url": u, "headers": {"Authorization": a}}),
+    "roo": (_vscode_global("rooveterinaryinc.roo-cline") + "/mcp_settings.json", "mcpServers",
+            lambda u, a: {"type": "streamable-http", "url": u, "headers": {"Authorization": a}}),
+    "kilo": ("~/.config/kilo/kilo.json", "mcp",
+             lambda u, a: {"type": "remote", "url": u, "headers": {"Authorization": a}, "enabled": True}),
+    "amp": ("~/.config/amp/settings.json", "amp.mcpServers", lambda u, a: {"url": u, "headers": {"Authorization": a}}),
+    "factory": ("~/.factory/mcp.json", "mcpServers",
+                lambda u, a: {"type": "http", "url": u, "headers": {"Authorization": a}}),
+    "warp": ("~/.warp/.mcp.json", "mcpServers", lambda u, a: {"url": u, "headers": {"Authorization": a}}),
+    "qwen": ("~/.qwen/settings.json", "mcpServers", lambda u, a: {"httpUrl": u, "headers": {"Authorization": a}}),
+    "crush": ("~/.config/crush/crush.json", "mcp",
+              lambda u, a: {"type": "http", "url": u, "headers": {"Authorization": a}}),
+}
 
 
 def _key(agent: str) -> tuple[str, Path]:
@@ -35,7 +71,11 @@ def _key(agent: str) -> tuple[str, Path]:
 
 def _merge_json(path: str, key: str, value: dict, section: str = "mcpServers") -> str:
     p = Path(os.path.expanduser(path))
-    cfg = json.loads(p.read_text()) if p.exists() and p.read_text().strip() else {}
+    try:
+        cfg = json.loads(p.read_text()) if p.exists() and p.read_text().strip() else {}
+    except ValueError:  # JSONC with comments: don't risk mangling the user's file
+        return (f"skipped: {p} has comments, so add this under \"{section}\" by hand: "
+                + json.dumps({key: {**value, **({"headers": {"Authorization": "Bearer <your key>"}} if "headers" in value else {})}}))
     cfg.setdefault(section, {})[key] = value
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cfg, indent=2) + "\n")
@@ -51,13 +91,12 @@ def mcp(client: str, url: str, key: str) -> str:
         r = subprocess.run(["claude", "mcp", "add", "--transport", "http", "--scope", "user", "commons", url,
                             "--header", f"Authorization: {auth}"], capture_output=True, text=True)
         return "added to Claude Code (user scope)" if r.returncode == 0 else f"failed: {(r.stderr or r.stdout)[-200:]}"
-    if client == "cursor":
-        return _merge_json("~/.cursor/mcp.json", "commons", {"url": url, "headers": {"Authorization": auth}})
-    if client == "opencode":
-        return _merge_json("~/.config/opencode/opencode.json", "commons",
-                           {"type": "remote", "url": url, "enabled": True, "headers": {"Authorization": auth}}, "mcp")
-    if client == "gemini":
-        return _merge_json("~/.gemini/settings.json", "commons", {"httpUrl": url, "headers": {"Authorization": auth}})
+    if client in JSON_MCP:
+        path, section, entry = JSON_MCP[client]
+        return _merge_json(path, "commons", entry(url, auth), section)
+    if client == "goose":  # YAML config: print the block rather than edit the user's file
+        return ("add this to ~/.config/goose/config.yaml under extensions:\n  commons:\n    enabled: true\n"
+                f"    type: streamable_http\n    uri: {url}\n    headers:\n      Authorization: \"Bearer <your key>\"")
     if client == "codex":
         p = Path.home() / ".codex" / "config.toml"
         text = p.read_text() if p.exists() else ""
@@ -107,6 +146,8 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
     step("hooks", hooks)
 
     def wake():
+        if not CLIENTS[client]:
+            return "this AI has no headless mode to wake; it picks up work when you open it"
         r = subprocess.run([commons, "agent", "daemon", "--agent", agent, "--preset", CLIENTS[client], "--url", base,
                             "--api-key-file", str(keyfile), "--install"], capture_output=True, text=True)
         return (r.stdout.strip().splitlines() or ["installed"])[-1][:200] if r.returncode == 0 else f"failed: {r.stderr[-200:]}"
@@ -162,9 +203,9 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
             add("key accepted", me.get("status") == "commons-ok", f"signed in as {me.get('agent')}", "key")
         except Exception as e:  # noqa: BLE001
             add("key accepted", False, str(e)[:120], "key")
-    cfg = {"claude-code": Path.home() / ".claude.json", "cursor": Path.home() / ".cursor" / "mcp.json",
-           "gemini": Path.home() / ".gemini" / "settings.json", "codex": Path.home() / ".codex" / "config.toml",
-           "opencode": Path.home() / ".config" / "opencode" / "opencode.json"}[client]
+    cfg = {"claude-code": Path.home() / ".claude.json", "codex": Path.home() / ".codex" / "config.toml",
+           "goose": Path.home() / ".config" / "goose" / "config.yaml",
+           **{k: Path(os.path.expanduser(v[0])) for k, v in JSON_MCP.items()}}[client]
     add("MCP server registered", cfg.exists() and base in cfg.read_text(), str(cfg), "mcp")
     from .server import INSTRUCTIONS
     files = [Path(os.path.expanduser(p)) for p in I.TARGETS[client]]
@@ -176,7 +217,9 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
         add("capture hooks installed", hp.exists() and "commons" in hp.read_text() and " hook " in hp.read_text(),
             str(hp), "hooks")
     name = f"commons-agent-{agent}"
-    if platform.system() == "Darwin":
+    if not CLIENTS[client]:
+        pass  # no headless mode, nothing to wake
+    elif platform.system() == "Darwin":
         r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
         add("instant wake running", f"dev.commons.{name}" in r.stdout, f"launchd dev.commons.{name}", "wake")
     elif shutil.which("systemctl"):
