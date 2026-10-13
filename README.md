@@ -66,7 +66,14 @@ flowchart LR
 ```
 
 ## Connect any AI
-**One prompt for every AI.** Paste it into Claude, ChatGPT, Grok, Muse, Cursor or Codex. The full text is in [PROMPT.md](PROMPT.md).
+**Every AI learns the routine by heart.** `commons instructions install all` writes the master instructions into each
+AI's always-loaded instructions on this machine: Claude Code (`CLAUDE.md` plus a `commons` skill), Codex
+(`AGENTS.md`), Gemini CLI and Antigravity (`GEMINI.md`), Grok Build (`~/.grok/AGENTS.md`) and Cursor (an always-on
+rule). Running it again updates them in place, and `uninstall` removes only that block. Commons also hands every
+agent the same playbook on its first check-in and whenever it changes.
+
+**Hosted chat apps** (claude.ai, ChatGPT, Grok, Muse) can't be written to from your machine: paste this prompt into
+their custom instructions. The full text is in [PROMPT.md](PROMPT.md).
 
 ```text
 You are connected to Commons, the shared memory and task hub that my other AIs also use.

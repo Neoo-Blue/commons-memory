@@ -314,3 +314,18 @@ def test_mail_only_agents_get_the_playbook_and_handoffs_show_what_commons_knows(
     sent = tool("msg_send", to="helper2", agent="poller", type="task",
                 body="please check which files AltMount recently imported via its api health endpoint")
     assert "api/health" in sent.get("commons_knows", "") and "do it yourself" in sent["hint"]
+
+
+def test_a_task_handed_to_an_idle_agent_becomes_a_job_for_a_live_one(store):
+    from commons_memory.orchestrator import Orchestrator
+    o = Orchestrator(store)
+    asker, idle, live = _agents(store, o, "asker3", "idlebot", "livebot")
+    store.x("INSERT INTO wake_channels(id,agent_id,kind,config,secret,enabled,created_at,failures) "
+            "VALUES('wl',?,'webhook','{}','',1,0,0)", (live,))
+    d = o.delegate(asker, "idlebot", "Add the movie to Radarr and run a search", "Radarr add")
+    assert d["rerouted"] and d["assigned_to"] == "livebot"
+    assert store.q("SELECT status FROM jobs WHERE id=?", (d["job_id"],))[0]["status"] == "running"   # visible as running
+    assert o.claim(live, d["subtask_id"])
+    o.complete(d["subtask_id"], live, "Added (tmdb 12345), search found no WEB-DL yet")
+    from commons_memory.messaging import Messaging
+    assert "no WEB-DL yet" in json.dumps(Messaging(store).recv(asker))                              # result comes back

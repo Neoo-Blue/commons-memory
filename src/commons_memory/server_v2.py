@@ -27,12 +27,14 @@ def register_v2(mcp, store, who):
     @mcp.tool()
     def set_profile(expertise: dict | None = None, strengths: list[str] | None = None, cost: float | None = None,
                     speed: float | None = None, availability: str = "", limits: dict | None = None,
-                    max_concurrent: int | None = None, platform: str = "", agent: str = "", api_key: str = "") -> str:
+                    max_concurrent: int | None = None, platform: str = "", reach: list[str] | None = None,
+                    agent: str = "", api_key: str = "") -> str:
         """Declare your capability profile. expertise: {task_type: 0..1} for research|plan|code|review|debate|judge|
-        red_team|test|summarize|vote|general. cost/speed 1..5. availability: online|offline|paused. Used for routing."""
+        red_team|test|summarize|vote|general. cost/speed 1..5. availability: online|offline|paused. reach: what you
+        can access (e.g. "LAN 192.168.50.0/24 via tailnet", "ssh pve", "web search", "GitHub CLI"). Used for routing."""
         return _js(orch.profiles.set(me(agent, api_key), expertise=expertise, strengths=strengths, cost=cost, speed=speed,
                                      availability=availability or None, limits=limits, max_concurrent=max_concurrent,
-                                     platform=platform or None))
+                                     platform=platform or None, reach=reach))
 
     @mcp.tool()
     def get_profile(agent_name: str) -> str:
@@ -110,7 +112,8 @@ def register_v2(mcp, store, who):
         """Start-of-session check-in: ready subtasks, inbox, leftovers ranked by your expertise, plus user preferences."""
         from .server import playbook_once
         aid = me(agent, api_key, write=False)
-        return playbook_once(store, aid) + orch.pickup(aid, project or None, max_tokens)["text"]
+        from .handover import nudge
+        return playbook_once(store, aid) + nudge(store, aid) + orch.pickup(aid, project or None, max_tokens)["text"]
 
     @mcp.tool()
     def add_leftover(text: str, task_type: str = "general", priority: int = 1, project: str = "", source_id: str = "",

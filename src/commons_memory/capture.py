@@ -100,6 +100,9 @@ _RULES = [
 ]
 
 
+NOT_PROSE = re.compile(r"^\s*([-+@|>#$*{}\[\]]|```|\d+[:|]|[\w.]+\(|(def|class|import|from|return|if|for)\b)")
+
+
 def classify(text: str) -> str | None:
     for kind, rx in _RULES:
         if rx.search(text or ""):
@@ -118,6 +121,8 @@ def heuristic_observations(raw: list[dict], transcript: str = "") -> list[dict]:
     for chunk in [transcript] + [r.get("text", "") for r in raw if r.get("kind") in ("prompt",)]:
         sentences += [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", chunk or "") if 25 <= len(s.strip()) <= 400]
     for s in sentences:
+        if NOT_PROSE.match(s) or s.count("`") >= 4:
+            continue  # diff, code, table, quote or shell lines in the transcript are not decisions
         k = classify(s)
         if k and s.lower() not in seen:
             seen.add(s.lower())

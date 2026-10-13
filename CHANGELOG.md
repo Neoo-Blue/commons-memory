@@ -2,6 +2,28 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.12.0: every AI knows the routine by heart
+- **`commons instructions install all`** writes the Commons master instructions into each installed AI's
+  always-loaded instructions: Claude Code (`CLAUDE.md` plus an always-relevant `commons` skill), Codex (`AGENTS.md`),
+  Gemini CLI and Antigravity (`GEMINI.md`), Grok Build (`~/.grok/AGENTS.md`), Cursor (an `alwaysApply` rule). The
+  block is marked, so installing again updates it in place and `uninstall` removes only it; originals are backed up.
+- **The playbook reaches agents that only poll their mail:** `msg_recv` delivers it once per version, as `pickup`
+  and `turn` already did.
+- **Agents hand everything over.** `handover_status()` lists what Commons still lacks from an agent (profile and what
+  it can reach, memories, keys and passwords, scheduled tasks, usage windows, current work, live activity), with the
+  tool for each; `pickup()` names the missing items until it's complete. `vault_deposit` lets an agent hand over a key
+  it holds (encrypted, never replacing another's); `set_profile(reach=[...])` records what it can access.
+- **A task handed to another agent is tracked work.** `msg_send(type="task")` creates a job that shows as running, goes
+  to the recipient if it is live and otherwise to the best live agent, and reports its result back to the sender.
+  Every finished job now tells its submitter.
+- **Discover groups by repo**: one row per repository with each of its skills, rules and agent files as a chip,
+  instead of the same repo repeated on many rows.
+- **Cleaner capture**: diff, code, table and shell lines in a transcript are no longer recorded as decisions.
+- **The vault's decision agent sees what the user said** to the requesting agent in the last two hours (captured
+  verbatim), so a write the user asked for in chat counts as user-backed.
+- **Hand-offs show what Commons already knows.** A direct `msg_send` returns the relevant memory (`commons_knows`)
+  so the sender can often do the work itself instead of waiting on another agent.
+
 ## v0.11.1: Basic auth in the vault
 - The vault can attach a key as HTTP Basic auth (`--auth basic:USER`, the stored value is the password), for web UIs
   and WebDAV.

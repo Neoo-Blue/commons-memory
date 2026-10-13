@@ -46,13 +46,23 @@ def register_v7(mcp, store, who):
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
                  project: str = "", agent: str = "", api_key: str = "") -> str:
         """Send a direct (to=agent name) or broadcast (to='*') message. type: message|task|question|review|fyi.
-        Wakes the recipient via its channels. The reply says whether the recipient is live (woken now) and, if not,
-        which agents are: send work that can't wait to one of those instead."""
+        type=task to one agent becomes a tracked job: it goes to that agent if it is live, otherwise to the best live
+        agent, shows as a running job, and its result comes back to you in msg_recv. Other types say whether the
+        recipient is live. Either way, the reply shows what Commons already knows about it (do it yourself if you can)."""
         from .messaging import recipient_status
         sender = me(agent, api_key)
-        res = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None, reply_to=reply_to or None,
-                       project=project or None)
-        out = res | recipient_status(store, to, sender)
+        if type == "task" and to != "*" and store.get_agent(to):  # a hand-off is tracked work, not just mail
+            from .orchestrator import Orchestrator
+            d = Orchestrator(store).delegate(sender, to, body, subject, project or None)
+            out = {"delegated": d}
+            if not d["rerouted"]:
+                out |= msg.send(sender, to, body + f"\n\n(Tracked as job {d['job_id']}: claim_subtask "
+                                f"{d['subtask_id']}, then complete_subtask with the result.)", mtype=type,
+                                subject=subject, thread=thread or None, reply_to=reply_to or None,
+                                project=project or None)
+        else:
+            out = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None,
+                           reply_to=reply_to or None, project=project or None) | recipient_status(store, to, sender)
         if to != "*":  # handing work off? show what Commons already knows, so the sender can often just do it
             from .capture import Capture
             known = Capture(store).recall(f"{subject} {body}"[:2000], project or None, max_tokens=400)

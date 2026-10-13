@@ -238,6 +238,31 @@ def register_v8(mcp, store, who):
         return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
 
     @mcp.tool()
+    def vault_deposit(name: str, value: str, service: str, base_urls: list[str], auth: str = "bearer",
+                      extra_headers: list[str] | None = None, description: str = "", risk: str = "normal",
+                      agent: str = "", api_key: str = "") -> str:
+        """Hand over an API key, token or password you hold so Commons keeps it (encrypted) and other agents can use it
+        through use_credential without seeing it. base_urls = where it may be sent; auth = bearer | basic:USER |
+        header:NAME | header:NAME:PREFIX | query:PARAM; risk = low | normal | high (high: every write asks the user).
+        You can add new keys and update your own, not replace another's."""
+        from . import vault as V
+        return _js(V.deposit(store, me(agent, api_key), name, value, service, base_urls, auth, extra_headers,
+                             description, risk))
+
+    @mcp.tool()
+    def handover_status(agent: str = "", api_key: str = "") -> str:
+        """What Commons still needs from you (profile and reach, memories, keys, scheduled tasks, usage windows,
+        current work, live activity), with the tool for each. Hand everything over, and anything new as you get it."""
+        from . import handover as H
+        return _js(H.status(store, me(agent, api_key)))
+
+    @mcp.tool()
+    def handover_report(item: str, status: str = "none", note: str = "", agent: str = "", api_key: str = "") -> str:
+        """Declare a hand-over item you have nothing for (status=none, e.g. no scheduled tasks), or done."""
+        from . import handover as H
+        return _js(H.report(store, me(agent, api_key), item, status, note))
+
+    @mcp.tool()
     def forget(id: str, agent: str = "", api_key: str = "") -> str:
         """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
         removed by the user from the dashboard."""

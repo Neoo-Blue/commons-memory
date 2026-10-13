@@ -41,13 +41,14 @@ class Profiles:
     def set(self, agent_id: str, *, expertise: dict[str, float] | None = None, strengths: list[str] | None = None,
             cost: float | None = None, speed: float | None = None, availability: str | None = None,
             limits: dict | None = None, max_concurrent: int | None = None, platform: str | None = None,
-            notes: str | None = None) -> dict:
+            notes: str | None = None, reach: list[str] | None = None) -> dict:
         a = self.s.get_agent(agent_id)
         if not a:
             raise CommonsError(f"unknown agent {agent_id}")
         prof = json.loads(a.get("profile") or "{}")
         upd = {"expertise": expertise, "strengths": strengths, "cost": cost, "speed": speed,
-               "availability": availability, "limits": limits, "max_concurrent": max_concurrent, "notes": notes}
+               "availability": availability, "limits": limits, "max_concurrent": max_concurrent, "notes": notes,
+               "reach": reach}
         for k, v in upd.items():
             if v is not None:
                 prof[k] = ({**prof.get("expertise", {}), **v} if k == "expertise" else v)
@@ -751,6 +752,40 @@ class Orchestrator:
                                project=self.s.project_name(job["project_id"]), agent_id=job["submitted_by"],
                                tags=["job-result"], related_ids=[job_id])
         self.s.relate(job_id, item["id"], "produced")
+        if job["submitted_by"]:  # the asker hears back without polling
+            try:
+                from .messaging import Messaging
+                Messaging(self.s).send(None, self.s.label(job["submitted_by"])[1],
+                                       f"Done: {job['title']} (job {job_id})\n\n{merged[:6000]}", mtype="message",
+                                       subject=f"done: {job['title'][:60]}", meta={"job": job_id})
+            except Exception:  # noqa: BLE001 - the result is stored either way
+                pass
+
+    def delegate(self, sender: str, recipient: str, body: str, title: str = "", project: str | None = None) -> dict:
+        """A task one agent hands another becomes a tracked job (it shows as running, has a lease, and is reassigned if
+        it stalls). It goes to the recipient when the recipient is live; otherwise to the best live agent, so it never
+        waits on an agent that only runs when its user opens it."""
+        from .messaging import LIVE_MODES, presence
+        rec = self.s.get_agent(recipient)
+        title = (title or body.split("\n", 1)[0])[:120]
+        job = self.submit(body, pattern="parallel", project=project, agent_id=sender, title=title,
+                          dag=[{"key": "only", "type": "general", "title": title, "body": body, "deps": []}])
+        sid = self.s.q("SELECT id FROM subtasks WHERE job_id=?", (job["job_id"],))[0]["id"]
+        live = lambda aid: presence(self.s, aid)["wake_mode"] in LIVE_MODES  # noqa: E731
+        to = rec["id"] if rec and live(rec["id"]) else None
+        if not to:
+            for _sc, a in self.profiles.rank("general", {sender, rec["id"] if rec else ""}):
+                if live(a["id"]):
+                    to = a["id"]
+                    break
+        to = to or (rec["id"] if rec else None)
+        self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (to, sid))
+        self._wake_ready(job["job_id"])
+        who = self.s.label(to)[1] if to else None
+        return {"job_id": job["job_id"], "subtask_id": sid, "assigned_to": who,
+                "rerouted": bool(rec and to != rec["id"]),
+                "note": (f"{recipient} isn't running, so Commons gave this to {who}, which is live now. "
+                         if rec and to != rec["id"] else "") + "You'll get the result in msg_recv when it's done."}
 
     def status(self, job_id: str, brief: bool = False) -> dict:
         r = self.s.q("SELECT * FROM jobs WHERE id=?", (job_id,))

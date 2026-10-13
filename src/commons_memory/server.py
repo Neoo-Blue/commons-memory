@@ -25,6 +25,11 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
 0) Chat app with no hooks (claude.ai, Grok, ChatGPT)? Call turn(user_message, reply=<your previous reply>) at the
    start of EVERY turn: it stores the exchange word for word and returns what Commons already knows.
 1) Check in: pickup() and msg_recv(). Follow the preferences they return.
+   First connection, and whenever you gain something new: hand over EVERYTHING you have. handover_status() lists
+   what Commons still needs from you: your profile and reach (set_profile), every memory (remember/import_items),
+   every key and password (vault_deposit; encrypted, used only through the decision agent), every scheduled task
+   (schedule_report), your usage windows (quota_report) and your current work (start_work). Keep it current with
+   hooks (commons hooks install) or turn() every turn. Commons should never be missing what you know.
 2) Before answering from scratch or saying you don't know: search(query) (one-line hits; expand(id) for detail),
    why(topic) for past decisions, resume() for handoffs. Don't redo finished work.
 3) Before starting ANY task, including one the user gives you directly: start_work(what, project, paths).

@@ -47,6 +47,32 @@ QUESTIONS = {
 
 def migrate(db) -> None:
     db.executescript(SCHEMA)
+    from .facts import add_columns
+    add_columns(db, [("vault_creds", "deposited_by", "TEXT")])
+
+
+def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
+    """bearer | basic:USER | header:NAME | header:NAME:PREFIX | query:PARAM"""
+    kind, _, rest = (spec or "bearer").partition(":")
+    name, _, prefix = rest.partition(":")
+    auth = {"bearer": True} if kind == "bearer" else {"query": name} if kind == "query" else \
+        {"basic": name} if kind == "basic" else {"header": name, **({"prefix": prefix} if prefix else {})}
+    if extra_headers:
+        auth["extra_headers"] = dict(h.split(":", 1) for h in extra_headers)
+    return auth
+
+
+def deposit(s: Store, agent_id: str, name: str, value: str, service: str, base_urls: list[str], auth: str = "bearer",
+            extra_headers: list[str] | None = None, description: str = "", risk: str = "normal") -> dict:
+    """An agent hands over a key it holds. It can add new ones and update its own, never replace anyone else's."""
+    r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
+    if r and r[0]["deposited_by"] != agent_id:
+        raise CommonsError(f"{name} is already in the vault (from {s.label(r[0]['deposited_by'])[1] if r[0]['deposited_by'] else 'the admin'}); "
+                           "pick another name if this is a different key")
+    out = add(s, name, value, service, base_urls, parse_auth(auth, extra_headers), description, risk)
+    s.x("UPDATE vault_creds SET deposited_by=? WHERE name=?", (agent_id, name))
+    s.audit(agent_id, "vault.deposit", name, {"service": service})
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ storage
@@ -122,6 +148,9 @@ def _context(s: Store, agent_id: str) -> str:
                                          "ORDER BY updated_at DESC LIMIT 12")]
     work = [r["what"][:160] for r in s.q("SELECT what FROM work_claims WHERE agent_id=? AND status='active' "
                                          "ORDER BY started_at DESC LIMIT 5", (agent_id,))]
+    said = [r["content"][:200] for r in s.q("SELECT content FROM items WHERE agent_id=? AND tags LIKE ? AND created_at>? "
+                                            "ORDER BY created_at DESC LIMIT 6", (agent_id, '%"user"%', now() - 7200))]
+    asks = said + asks  # what the user said to this agent in the last two hours (captured verbatim), then the board
     return ("User's recent requests:\n" + "\n".join(f"- {a}" for a in asks or ["(none recorded)"])
             + "\nThis agent's current work:\n" + "\n".join(f"- {w}" for w in work or ["(none declared)"]))
 

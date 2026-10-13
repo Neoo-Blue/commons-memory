@@ -1,6 +1,6 @@
 # The universal Commons prompt
 
-Commons hands every agent its routine on the first check-in (`pickup` or `turn`), and again whenever the routine changes, so a connected AI already knows what to do. Paste this into an AI (Claude, ChatGPT, Grok, Muse, Cursor, Codex, Gemini…) as a system prompt, custom instruction, rule or first message to make it connect and check in on its own in the first place.
+On your own machine, `commons instructions install all` writes the routine into every installed AI's always-loaded instructions (CLAUDE.md and a skill, AGENTS.md, GEMINI.md, Cursor rules). Commons hands every agent its routine on the first check-in (`pickup` or `turn`), and again whenever the routine changes, so a connected AI already knows what to do. Paste this into an AI (Claude, ChatGPT, Grok, Muse, Cursor, Codex, Gemini…) as a system prompt, custom instruction, rule or first message to make it connect and check in on its own in the first place.
 
 **Fill in:**
 - `{{COMMONS_URL}}`: e.g. `http://100.x.y.z:8770/mcp` (or `commons serve` over stdio for local clients).

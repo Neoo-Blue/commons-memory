@@ -122,3 +122,34 @@ def test_basic_auth_header(store, svc, monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=30: captured.setdefault("h", req.headers) and real(req, timeout=timeout))
     V.call(store, dict(store.q("SELECT * FROM vault_creds WHERE name='dsh'")[0]), "GET", base + "/x")
     assert captured["h"]["Authorization"] == "Basic " + base64.b64encode(b"aerkin:pw-123456").decode()
+
+
+def test_agents_hand_over_keys_but_never_replace_anothers(store, svc):
+    base, _ = svc
+    a, b = store.ensure_agent("muse"), store.ensure_agent("grok")
+    r = V.deposit(store, a, "seerr", "seerr-key-123456", "seerr", [base], "header:X-Api-Key")
+    assert r["stored"] and V._value(store, "seerr") == "seerr-key-123456"
+    V.deposit(store, a, "seerr", "seerr-key-rotated", "seerr", [base], "header:X-Api-Key")      # its own: update ok
+    with pytest.raises(CommonsError, match="already in the vault"):
+        V.deposit(store, b, "seerr", "attacker-key", "seerr", ["http://evil.example/"], "bearer")
+    assert V._value(store, "seerr") == "seerr-key-rotated"
+
+
+def test_handover_checklist_tracks_what_commons_still_needs(store, svc):
+    from commons_memory import handover as H
+    from commons_memory.orchestrator import Orchestrator
+    base, _ = svc
+    a = store.ensure_agent("newcomer")
+    st = H.status(store, a)
+    assert not st["complete"] and {m["item"] for m in st["missing"]} == set(H.ITEMS)
+    assert "HAND-OVER INCOMPLETE" in H.nudge(store, a)
+    Orchestrator(store).profiles.set(a, expertise={"research": 0.8}, reach=["LAN via tailnet"])
+    store.add_item("memory", "The user's NAS is a Synology DS923+", agent_id=a)
+    V.deposit(store, a, "windy", "windy-key-1234567", "windy", [base], "header:x-windy-api-key")
+    for item in ("schedules", "quota", "work"):
+        H.report(store, a, item, "none", "nothing of this kind")
+    from commons_memory.capture import Capture
+    Capture(store).event(a, "prompt", {"session_id": "h1", "prompt": "what changed on the NAS today"}, harness="mcp")
+    st = H.status(store, a)
+    assert st["complete"], st["missing"]
+    assert H.nudge(store, a) == ""

@@ -5,11 +5,17 @@ import json
 import os
 import sys
 
-NOSTORE = {"hook", "hooks", "bench", "import", "quota"}
+NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
+    i = sub.add_parser("instructions", help="write the Commons master instructions into each AI's always-loaded "
+                                            "instructions (CLAUDE.md + skill, AGENTS.md, GEMINI.md, Cursor rules)")
+    i.add_argument("action", choices=["install", "uninstall", "show"])
+    i.add_argument("ai", nargs="?", default="all", help="claude-code | codex | gemini | antigravity | grok | cursor | all")
+    i.add_argument("--url", default=os.environ.get("COMMONS_URL"), help="hub MCP url to mention (default $COMMONS_URL)")
+    i.add_argument("--agent", help="agent name to mention (omit with 'all': each AI's MCP config identifies it)")
     v = sub.add_parser("vault", help="the credential vault: store keys (value on stdin, encrypted), list, remove, "
                                      "and see the decision agent's log")
     v.add_argument("action", choices=["set", "list", "rm", "decisions"])
@@ -181,6 +187,14 @@ def _import(args) -> int:
 
 def handle_nostore(args) -> int:
     c = args.cmd
+    if c == "instructions":
+        from . import instructions as I
+        if args.action == "show":
+            print(I.master(args.url, args.agent))
+        else:
+            for r in I.install(args.ai, args.url, args.agent, uninstall=args.action == "uninstall"):
+                print(json.dumps(r))
+        return 0
     if c == "quota":
         from . import quota as Q
         from .worker import McpClient
@@ -275,12 +289,7 @@ def handle(args, store) -> int:
         elif args.action == "rm":
             print(json.dumps(V.remove(store, args.name)))
         else:
-            kind, _, rest = args.auth.partition(":")
-            name, _, prefix = rest.partition(":")
-            auth = {"bearer": True} if kind == "bearer" else {"query": name} if kind == "query" else \
-                {"basic": name} if kind == "basic" else {"header": name, **({"prefix": prefix} if prefix else {})}
-            if args.extra_header:
-                auth["extra_headers"] = dict(h.split(":", 1) for h in args.extra_header)
+            auth = V.parse_auth(args.auth, args.extra_header)
             print(json.dumps(V.add(store, args.name, sys.stdin.read(), args.service or args.name, args.base_url, auth,
                                    args.description, args.risk)))
         return 0
