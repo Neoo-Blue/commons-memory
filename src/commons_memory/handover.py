@@ -23,6 +23,8 @@ ITEMS = {
     "schedules": "schedule_report for every task you run on a schedule (cron, how it runs, the acceptance bar)",
     "quota": "quota_report with your usage windows (5-hour, weekly), if your client has limits",
     "work": "start_work for anything you are working on now",
+    "skills": "skill_publish every reusable skill you have (every AI then sees it), and list the ones tied to your "
+              "environment with set_profile(skills=[...]) so others can ask you via skill_help",
     "activity": "keep Commons current while you work: `commons hooks install <your CLI>` on your machine, or call "
                 "turn(user_message, reply) every turn in a chat app",
 }
@@ -45,6 +47,7 @@ def _have(s: Store, agent_id: str) -> dict:
         "quota": one("SELECT COUNT(*) n FROM agent_quota WHERE agent_id=?", agent_id),
         "work": one("SELECT COUNT(*) n FROM work_claims WHERE agent_id=?", agent_id),
         "activity": one("SELECT COUNT(*) n FROM observations WHERE agent_id=? AND ts>?", agent_id, now() - 86400),
+        "skills": one("SELECT COUNT(*) n FROM skills WHERE author_agent=?", agent_id) or len(prof.get("skills") or []),
     }
 
 

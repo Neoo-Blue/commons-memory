@@ -28,13 +28,14 @@ def register_v2(mcp, store, who):
     def set_profile(expertise: dict | None = None, strengths: list[str] | None = None, cost: float | None = None,
                     speed: float | None = None, availability: str = "", limits: dict | None = None,
                     max_concurrent: int | None = None, platform: str = "", reach: list[str] | None = None,
-                    agent: str = "", api_key: str = "") -> str:
+                    skills: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
         """Declare your capability profile. expertise: {task_type: 0..1} for research|plan|code|review|debate|judge|
         red_team|test|summarize|vote|general. cost/speed 1..5. availability: online|offline|paused. reach: what you
-        can access (e.g. "LAN 192.168.50.0/24 via tailnet", "ssh pve", "web search", "GitHub CLI"). Used for routing."""
+        can access (e.g. "LAN 192.168.50.0/24 via tailnet", "ssh pve", "web search", "GitHub CLI"). skills: your local
+        skills that can't go in the pool (tied to your environment), so others can ask you via skill_help."""
         return _js(orch.profiles.set(me(agent, api_key), expertise=expertise, strengths=strengths, cost=cost, speed=speed,
                                      availability=availability or None, limits=limits, max_concurrent=max_concurrent,
-                                     platform=platform or None, reach=reach))
+                                     platform=platform or None, reach=reach, skills=skills))
 
     @mcp.tool()
     def get_profile(agent_name: str) -> str:

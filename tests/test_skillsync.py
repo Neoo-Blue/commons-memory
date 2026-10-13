@@ -43,3 +43,32 @@ def test_a_changed_description_rewrites_the_pointer_and_hash_descriptions_are_qu
     assert 'description: "# heading"' in (d / "x" / "SKILL.md").read_text()      # quoted: not a YAML comment
     SS.write([{"name": "x", "description": "Bind services to the tailnet IP", "version": 1}], [str(d)])
     assert "Bind services to the tailnet IP" in (d / "x" / "SKILL.md").read_text()  # same version, new text
+
+
+def test_any_agent_uses_a_pool_skill_directly_and_asks_for_help_when_it_cant(store):
+    import asyncio
+    import json
+    from commons_memory.server import build_server
+    from commons_memory.skillpool import SkillPool
+    from commons_memory.orchestrator import Orchestrator
+    author, user, helper = store.ensure_agent("author2"), store.ensure_agent("chat-agent"), store.ensure_agent("shell-agent")
+    SkillPool(store).publish("restart-plex", "---\nname: restart-plex\ndescription: Restart Plex safely\n---\n"
+                             "1. ssh pve\n2. docker restart plex", agent_id=author)
+    store.x("UPDATE skills SET active_version=1 WHERE name='restart-plex'")
+    SkillPool(store).rate("restart-plex", True, agent_id=helper)                  # shell-agent has run it successfully
+    Orchestrator(store).profiles.set(helper, expertise={"general": 0.9}, max_concurrent=3)
+    mcp = build_server(store)
+    call = lambda n, **a: asyncio.run(mcp._tool_manager.get_tool(n).fn(**a))  # noqa: E731
+    got = json.loads(call("skill", name="restart-plex", agent="chat-agent"))
+    assert "docker restart plex" in got["content"] and "skill_help" in got["how"]   # usable with nothing installed
+    assert "restart-plex" in call("skill", query="plex", agent="chat-agent")
+    h = json.loads(call("skill_help", name="restart-plex", task="Plex is frozen, restart it",
+                        why="I have no shell", agent="chat-agent"))
+    assert h["helper"] in ("shell-agent", "author2") and h["candidates"][0] == "shell-agent"
+    body = store.q("SELECT body FROM subtasks WHERE id=?", (h["subtask_id"],))[0]["body"]
+    assert "I have no shell" in body and "skill(name='restart-plex')" in body
+    Orchestrator(store).profiles.set(helper, skills=["local-only-tool"])
+    nip = json.loads(call("skill", name="local-only-tool", agent="chat-agent"))
+    assert nip["local_to"] == ["shell-agent"]                                      # not in the pool, but someone has it
+    prompt = asyncio.run(mcp.get_prompt("skill", {"name": "restart-plex"}))
+    assert "docker restart plex" in json.dumps(prompt.model_dump())

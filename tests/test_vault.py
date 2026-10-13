@@ -165,7 +165,7 @@ def test_handover_checklist_tracks_what_commons_still_needs(store, svc):
     Orchestrator(store).profiles.set(a, expertise={"research": 0.8}, reach=["LAN via tailnet"])
     store.add_item("memory", "The user's NAS is a Synology DS923+", agent_id=a)
     V.deposit(store, a, "windy", "windy-key-1234567", "windy", [base], "header:x-windy-api-key")
-    for item in ("schedules", "quota", "work"):
+    for item in ("schedules", "quota", "work", "skills"):
         H.report(store, a, item, "none", "nothing of this kind")
     from commons_memory.capture import Capture
     Capture(store).event(a, "prompt", {"session_id": "h1", "prompt": "what changed on the NAS today"}, harness="mcp")

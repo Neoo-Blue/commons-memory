@@ -41,14 +41,14 @@ class Profiles:
     def set(self, agent_id: str, *, expertise: dict[str, float] | None = None, strengths: list[str] | None = None,
             cost: float | None = None, speed: float | None = None, availability: str | None = None,
             limits: dict | None = None, max_concurrent: int | None = None, platform: str | None = None,
-            notes: str | None = None, reach: list[str] | None = None) -> dict:
+            notes: str | None = None, reach: list[str] | None = None, skills: list[str] | None = None) -> dict:
         a = self.s.get_agent(agent_id)
         if not a:
             raise CommonsError(f"unknown agent {agent_id}")
         prof = json.loads(a.get("profile") or "{}")
         upd = {"expertise": expertise, "strengths": strengths, "cost": cost, "speed": speed,
                "availability": availability, "limits": limits, "max_concurrent": max_concurrent, "notes": notes,
-               "reach": reach}
+               "reach": reach, "skills": skills}
         for k, v in upd.items():
             if v is not None:
                 prof[k] = ({**prof.get("expertise", {}), **v} if k == "expertise" else v)

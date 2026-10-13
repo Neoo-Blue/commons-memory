@@ -40,6 +40,25 @@ def register_prompts(mcp, store, who) -> None:
         return (f"Save this to Commons with remember(content={json.dumps(fact)}) and confirm the id. If it is a "
                 "decision, use record_decision(what, why) instead.")
 
+    @mcp.prompt(name="skill", description="Load a skill from the Commons pool and follow it (nothing to install)")
+    def skill_prompt(name: str) -> str:
+        from .skillpool import SkillPool
+        try:
+            sk = SkillPool(store).get(name, include_files=True)
+        except Exception as e:  # noqa: BLE001
+            return (f"The skill {name!r} isn't available from the Commons pool ({e}). If another agent has it, ask "
+                    f"them with skill_help(name={json.dumps(name)}, task=<what you need>).")
+        files = sk.get("files") or {}
+        extra = "".join(f"\n\n--- file: {k} ---\n{v}" for k, v in files.items()) if isinstance(files, dict) else ""
+        return (f"Follow this skill from the Commons pool (version {sk['version']}). If you can't run part of it, use "
+                f"skill_help(name={json.dumps(name)}, task=...).\n\n{sk['content']}{extra}")
+
+    @mcp.resource("commons-hub://skill/{name}", name="skill", description="A skill from the Commons pool",
+                  mime_type="text/markdown")
+    def skill_res(name: str) -> str:
+        from .skillpool import SkillPool
+        return SkillPool(store).get(name)["content"]
+
     @mcp.resource("commons-hub://playbook", name="playbook", description="The routine every agent follows",
                   mime_type="text/plain")
     def playbook() -> str:

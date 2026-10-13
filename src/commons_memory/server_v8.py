@@ -242,6 +242,36 @@ def register_v8(mcp, store, who):
         return _js(V.reveal(store, me(agent, api_key), name, justification))
 
     @mcp.tool()
+    def skill(name: str = "", query: str = "", include_files: bool = True, agent: str = "", api_key: str = "") -> str:
+        """Use a skill straight from Commons, nothing to install: skill(name) returns its full instructions (and its
+        files) to follow now; skill(query=...) finds skills. Can't run it (a tool, access or environment you lack)?
+        skill_help(name, task, why) gets an agent that can to do it for you."""
+        from .skillpool import SkillPool
+        aid = me(agent, api_key)
+        if not name:
+            r = SkillPool(store).list(query, max_tokens=600)
+            return r.get("text") or _js(r)
+        try:
+            sk = SkillPool(store).get(name, include_files=include_files, agent_id=aid)
+        except CommonsError:
+            from .skillhelp import declared
+            who_has = [store.label(a)[1] for a in declared(store, name)]
+            if who_has:
+                return _js({"not_in_pool": name, "local_to": who_has,
+                            "do": f"skill_help(name='{name}', task=...) and one of them runs it for you"})
+            raise
+        return _js(sk | {"how": "Follow these instructions now. After using it: skill_rate(name, success). If you "
+                                "can't run it, skill_help(name, task, why)."})
+
+    @mcp.tool()
+    def skill_help(name: str, task: str, why: str = "", agent: str = "", api_key: str = "") -> str:
+        """Ask for help with a skill you can't run (missing tool, access or environment, or a skill only another agent
+        has): Commons hands the task to an agent that has used or holds it, live ones first, and the result comes back
+        to you in msg_recv."""
+        from .skillhelp import ask
+        return _js(ask(store, me(agent, api_key), name, task, why))
+
+    @mcp.tool()
     def status_update(state: str, headline: str, bullets: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
         """Your status card on the dashboard: state = working | blocked | done | needs_you | idle, headline <= 90 chars,
         up to 5 short bullets. start_work, finish_work and Needs-you questions set it for you."""
