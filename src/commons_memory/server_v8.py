@@ -199,9 +199,11 @@ def register_v8(mcp, store, who):
         """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
         removed by the user from the dashboard."""
         aid = me(agent, api_key)
-        r = store.q("SELECT agent_id FROM items WHERE id=?", (id,))
+        r = store.q("SELECT agent_id, tags FROM items WHERE id=?", (id,))
         if not r:
             raise CommonsError(f"unknown id {id}")
+        if "conversation" in json.loads(r[0]["tags"] or "[]"):
+            raise CommonsError("conversation records (what the user and agents said) can only be removed by the user")
         if r[0]["agent_id"] != aid:
             raise CommonsError("you can only forget memories you wrote; ask the user to remove this one in the dashboard")
         return _js(store.delete_item(id, agent_id=aid))

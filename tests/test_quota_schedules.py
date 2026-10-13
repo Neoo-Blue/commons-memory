@@ -216,3 +216,45 @@ def test_no_missed_run_takeover_for_an_owner_that_never_reports(store):
     SC.register(store, owner, "mailer", "0 9 * * *", "Send the digest email", tz="UTC")
     store.x("UPDATE recurring SET created_at=? WHERE name='mailer'", (time.time() - 5 * 86400,))
     assert SC.watch(store, time.time() + 86400) == []   # it may well have run; a takeover could send it twice
+
+
+def test_review_fixes_hooks_forget_drive_keepwork(store, tmp_path, monkeypatch):
+    import json as _j
+    from commons_memory.capture import Capture, run_hook
+    from commons_memory.drive import Drive
+    a = store.ensure_agent("gem")
+    # Gemini/Cursor hand over the raw last reply (no transcript): it is still kept verbatim
+    monkeypatch.delenv("COMMONS_URL", raising=False)
+    run_hook("gemini", "AfterAgent", _j.dumps({"session_id": "g1", "prompt_response": "Deployed build 42 to staging.",
+                                               "cwd": str(tmp_path)}), store_factory=lambda: store)
+    assert store.q("SELECT 1 FROM items WHERE content='Deployed build 42 to staging.'")
+    # a Claude Code reply holding a "user: ..." line is stored whole
+    tr = tmp_path / "t.jsonl"
+    reply = "Set the owner:\nuser: appuser\ngroup: staff"
+    tr.write_text("{}\n" + _j.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": reply}]}}) + "\n")
+    run_hook("claude-code", "Stop", _j.dumps({"session_id": "c9", "transcript_path": str(tr), "cwd": str(tmp_path)}),
+             store_factory=lambda: store)
+    assert store.q("SELECT 1 FROM items WHERE content=?", (reply,))
+    # agents can't forget what the user said
+    from commons_memory.server import build_server
+    Capture(store).event(a, "prompt", {"session_id": "f1", "prompt": "never delete my words please"}, harness="mcp")
+    uid = store.q("SELECT id FROM items WHERE content='never delete my words please'")[0]["id"]
+    srv = build_server(store)
+    tool = srv._tool_manager.get_tool("forget").fn
+    try:
+        import asyncio
+        asyncio.run(tool(id=uid, agent="gem"))
+        raise AssertionError("forget deleted a conversation record")
+    except Exception as e:  # noqa: BLE001
+        assert "only be removed by the user" in str(e)
+    # an empty text file in the Drive is fine
+    Drive(store).write("proj/__init__.py", b"", agent_id=a)
+    # keep-working stays spent after its max instead of restarting
+    o = Orchestrator(store)
+    (w,) = _agents(store, o, "kw")
+    _job(o)
+    cap, stop = Capture(store), {"session_id": "k1", "keep_working": 2}
+    assert cap.event(w, "stop", stop, harness="claude-code").get("block")
+    assert cap.event(w, "stop", stop, harness="claude-code").get("block")
+    assert not cap.event(w, "stop", stop, harness="claude-code").get("block")
+    assert not cap.event(w, "stop", stop, harness="claude-code").get("block")   # still spent, not a fresh 2 rounds

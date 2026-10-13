@@ -490,8 +490,8 @@ class Drive:
         if old:
             self.s.x("UPDATE items SET superseded_by=? WHERE id=?", (fid, old))
         iid = None
-        if _is_text(path, data, mime) and len(data) <= 1_000_000:
-            txt = data.decode()
+        txt = data.decode() if _is_text(path, data, mime) and len(data) <= 1_000_000 else ""
+        if txt.strip():  # an empty file (__init__.py, .gitkeep) has nothing to search
             iid = self.s.add_item("document", txt[:200_000], title=f"{project or 'shared'}:{path}", project=project or None,
                                   agent_id=agent_id, tags=["drive"], meta={"drive_file": fid, "path": path})["id"]
         self.s.x("UPDATE drive_files SET item_id=? WHERE id=?", (iid, fid))

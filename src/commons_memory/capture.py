@@ -199,12 +199,14 @@ class Capture:
             return {"ok": True}
         # stop / session_end / precompact
         if st["prompts"]:
-            for reply in ([payload["reply"]] if payload.get("reply") else replies(payload.get("transcript_tail", ""))):
+            got = [payload["reply"]] if payload.get("reply") else payload.get("replies")
+            for reply in (got if isinstance(got, list) else replies(payload.get("transcript_tail", ""))):
                 self.verbatim(agent_id, project, skey, harness, "assistant", reply)
         out = {"ok": True} | self.flush(agent_id, pid, skey, harness, strip_private(payload.get("transcript_tail", "")),
                                         final=event != "stop", reason=event)
         if event == "stop" and payload.get("keep_working"):
-            reason = self.keep_working(agent_id, skey)
+            mx = payload["keep_working"] if isinstance(payload["keep_working"], int) and payload["keep_working"] > 1 else None
+            reason = self.keep_working(agent_id, skey, mx)
             if reason:
                 out["block"] = reason
         return out
@@ -221,7 +223,7 @@ class Capture:
                                agent_id=agent_id, session_id=skey, tags=["conversation", role],
                                meta={"source": f"hook:{harness}", "role": role}, check_conflicts=False)["id"]
 
-    def keep_working(self, agent_id: str, skey: str) -> str:
+    def keep_working(self, agent_id: str, skey: str, max_rounds: int | None = None) -> str:
         """Opt-in (COMMONS_HOOK_KEEP_WORKING=1 on the client): when work is waiting for this agent and its quota allows,
         tell the harness not to stop yet. Bounded per session (COMMONS_HOOK_KEEP_WORKING_MAX rounds, default 5)."""
         from . import quota as Q
@@ -231,8 +233,10 @@ class Capture:
         n, ts = (json.loads(row[0]["value"]) if row else [0, 0])
         if now() - ts > 1800:
             n = 0
+        if n >= (max_rounds or int(os.environ.get("COMMONS_HOOK_KEEP_WORKING_MAX", "5"))):
+            return ""  # spent: no more forced rounds in this session until 30 minutes pass without one
         work = Orchestrator(self.s).claimable(agent_id, 5)
-        if not work or n >= int(os.environ.get("COMMONS_HOOK_KEEP_WORKING_MAX", "5")) or not Q.can_take(self.s, agent_id)[0]:
+        if not work or not Q.can_take(self.s, agent_id)[0]:
             self.s.x("DELETE FROM meta WHERE key=?", (key,))
             return ""
         self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps([n + 1, now()])))
@@ -398,17 +402,17 @@ def replies(tail: str) -> list[str]:
     return [parts[i + 1].strip() for i in range(1, len(parts) - 1, 2) if parts[i] == "assistant" and parts[i + 1].strip()]
 
 
-def transcript_tail(path: str | None, max_chars: int = 12000) -> str:
-    """Last messages of a JSONL transcript (Claude Code / Codex), text only, private sections stripped."""
+def transcript_messages(path: str | None) -> list[tuple[str, str]]:
+    """(role, text) of the last user/assistant messages in a JSONL transcript."""
     if not path or not os.path.isfile(path):
-        return ""
+        return []
     try:
         with open(path, "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 400_000))
             lines = f.read().decode("utf-8", "replace").splitlines()[1:]
     except OSError:
-        return ""
+        return []
     out = []
     for ln in lines:
         try:
@@ -421,8 +425,8 @@ def transcript_tail(path: str | None, max_chars: int = 12000) -> str:
         if isinstance(c, list):
             c = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") in ("text", "input_text", "output_text"))
         if role in ("user", "assistant") and isinstance(c, str) and c.strip():
-            out.append(f"{role}: {c.strip()}")
-    return strip_private("\n".join(out))[-max_chars:]
+            out.append((role, c.strip()))
+    return out
 
 
 def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> str:
@@ -438,12 +442,14 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         if isinstance(payload.get(k), str):
             payload[k] = strip_private(payload[k])
     if event in ("stop", "session_end", "precompact"):
-        payload["transcript_tail"] = transcript_tail(payload.get("transcript_path")) or strip_private(
-            payload.get("last_assistant_message") or payload.get("prompt_response") or "")
+        msgs = transcript_messages(payload.get("transcript_path"))[-40:]
+        raw = strip_private(payload.get("last_assistant_message") or payload.get("prompt_response") or "")
+        payload["transcript_tail"] = strip_private("\n".join(f"{r}: {c}" for r, c in msgs))[-12000:] or raw
+        payload["replies"] = [strip_private(c) for r, c in msgs if r == "assistant"] or ([raw] if raw.strip() else [])
     payload.pop("transcript_path", None)
     payload.setdefault("project", project_from_cwd(payload.get("cwd") or os.getcwd()))
     if event == "stop" and os.environ.get("COMMONS_HOOK_KEEP_WORKING") == "1":
-        payload["keep_working"] = True
+        payload["keep_working"] = int(os.environ.get("COMMONS_HOOK_KEEP_WORKING_MAX", "5"))
     url = os.environ.get("COMMONS_URL", "").rstrip("/")
     timeout = float(os.environ.get("COMMONS_HOOK_TIMEOUT", "2"))
     if url:
