@@ -61,10 +61,19 @@ loop: **check in** (`pickup`, `resume`) → **pull context** (`search`/`expand`/
 | `debate` | N debaters (distinct agents) → judge | judge's synthesis is stored as a decision |
 | `consensus` | N voters → automatic tally | majority of `VERDICT: approve` |
 | `parallel` | plan → parts (each gated by review) → merge/summary | each part |
-| explicit / LLM | `dag=[{key,type,deps,gates,agent}]` (agent pins a node, retries included) or `pattern="llm"` with `COMMONS_PLANNER_CMD` | as declared |
+| `auto` (default) | the plan chain splits it (below) | as the planner declares |
+| explicit | `dag=[{key,type,deps,gates,agent}]` (agent pins a node, retries included) | as declared |
 
-- **Allocation**: expertise × learned success rate (Beta-smoothed per agent and task type) − load − cost + speed;
-  availability and `max_concurrent` respected; siblings in debates and votes spread across agents.
+- **Planning** (`plan_chain`, Setup page): the model set for the planner role → any provider/model with a key
+  (default `anthropic/claude-haiku-5-5`) → `agent`: the best live agent at planning writes the plan as the job's first
+  step, and its JSON answer becomes the parts → `rules`: the keyword patterns above. Planners see who is live, what
+  each agent is good at and its usage left. A big `msg_send(type=task)` is planned the same way, favouring the
+  recipient. An agent holding a subtask too big for one sitting calls `split_subtask(subtask_id, parts)`: the parts
+  are routed like any step and the subtask comes back to it to merge their results.
+- **Allocation**: expertise × learned success rate (Beta-smoothed per agent and task type) − load − cost + speed
+  (declared, and learned from how fast each agent finishes each kind of work), + usage left (after your reserve and
+  the cost of one task; room that would reset unused soon counts a little more), then model quality, price and
+  liveness; availability and `max_concurrent` respected; siblings in debates and votes spread across agents.
 - **Execution**: atomic claims (no duplicate work), leases + `heartbeat`, expired leases → retry on another agent,
   `max_attempts`, rejected gates → rework with the reviewer's feedback appended, the author's score drops.
 - **Budgets**: `budget={"tokens","cost","seconds"}` per job (claims stop → `budget_exceeded`), `COMMONS_DAILY_COST_CAP`

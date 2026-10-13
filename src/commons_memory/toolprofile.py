@@ -18,7 +18,7 @@ import json
 import os
 
 CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "summon", "resume", "search", "expand", "why",
-        "remember", "record_decision", "observe_preference", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
+        "remember", "record_decision", "observe_preference", "submit_task", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
         "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "credentials", "use_credential", "skill", "skill_help",
         "tools", "call"]  # one-time or occasional tools (set_profile, vault_deposit, vault_generate, handover_status,
 # whats_new, status_update, subtask_pause, context_load, ...) stay one call() away; pickup tells agents when they apply

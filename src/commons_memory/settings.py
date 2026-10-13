@@ -13,6 +13,11 @@ DEFAULTS = {
                     "(the model set for that role), agent:any or agent:NAME (a live connected agent judges, on its own "
                     "subscription; never the one asking), ask (you decide). Entries that can't answer are skipped; "
                     "you are always the last stop."),
+    "plan_chain": (["role:planner", "anthropic/claude-haiku-5-5", "agent", "rules"],
+                   "Who splits big jobs into parts, tried in order: role:planner (the model set for that role), any "
+                   "provider/model you have a key for, agent (the best live agent plans, on its own subscription), "
+                   "rules (keyword splitting, always works). Every planner sees who is live, what each agent is good "
+                   "at and how much usage it has left."),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
     "dup_warnings": (True, "Warn agents when someone else is doing, or already did, the same work"),
     "quota_routing": (True, "Route work only to agents with usage headroom, keeping your reserve"),
@@ -58,6 +63,10 @@ def put(s: Store, key: str, value) -> dict:
             if bad:
                 raise CommonsError(f"repos are owner/name; not {bad}")
             bad = []
+        elif key == "plan_chain":
+            bad = [v for v in value if not (v in ("agent", "rules") or v.startswith("role:") or "/" in v)]
+            if bad:
+                raise CommonsError(f"plan entries are role:NAME, provider/model, agent or rules; not {bad}")
         else:
             bad = [v for v in value if not (v in ("typesafe", "ask") or v.startswith(("role:", "agent:")) or "/" in v)]
         if bad:

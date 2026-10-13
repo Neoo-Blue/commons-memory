@@ -109,6 +109,12 @@ class Profiles:
         quality -= 0.1 * load
         cost = float(prof.get("cost", 3) or 3)           # 1 (cheap) .. 5 (expensive)
         speed = float(prof.get("speed", 3) or 3)         # 1 (slow) .. 5 (fast)
+        t = self.s.q("SELECT AVG(seconds) a, COUNT(seconds) n FROM outcomes WHERE agent_id=? AND task_type=? AND "
+                     "success=1 AND seconds>0", (agent["id"], task_type))[0]
+        if t["n"] >= 3:  # learned efficiency: faster than the team's average on this kind of work
+            team = self.s.q("SELECT AVG(seconds) a FROM outcomes WHERE task_type=? AND success=1 AND seconds>0",
+                            (task_type,))[0]["a"]
+            quality += 0.1 * max(-1.0, min(1.0, (team - t["a"]) / team)) if team else 0
         return quality - 0.03 * cost + 0.02 * speed
 
     def rank(self, task_type: str, exclude: list[str] | None = None) -> list[tuple[float, dict]]:
@@ -213,32 +219,19 @@ class Orchestrator:
     def submit(self, task: str, *, pattern: str = "auto", project: str | None = None, agent_id: str | None = None,
                n: int = 3, budget: dict | None = None, dag: list[dict] | None = None, title: str = "",
                recurring_id: str | None = None, leftovers: list[dict] | None = None,
-               context_pack: str | None = None, dedupe: bool = False) -> dict:
+               context_pack: str | None = None, dedupe: bool = False, prefer: str | None = None) -> dict:
+        """prefer: an agent id the router favours for this job's parts (the agent a big hand-off was addressed to)."""
         task, _ = redact(task)
         if not dag and pattern in ("auto", "llm"):
-            dag = self._llm_plan(task)
-            if dag:
-                pattern = "llm"
-        dag = dag or plan(task, pattern if pattern != "llm" else "auto", n)
+            dag, how = self._plan(task, prefer)
+            pattern = how or pattern
+        dag = dag or plan(task, pattern if pattern not in ("llm", "agent-plan") else "auto", n)
         if leftovers:
             for i, lo in enumerate(leftovers):
                 dag.append({"key": f"leftover{i + 1}", "type": lo.get("task_type") or "general",
                             "title": f"Leftover: {lo['text'][:100]}", "body": lo["text"], "deps": [],
                             "priority": lo.get("priority", 1), "leftover_id": lo["id"]})
-        keys = {d["key"] for d in dag}
-        pins, soft = {}, {}  # agent: chosen by the submitter, retries stay; assign: first try only (delegate)
-        for d in dag:
-            for field, into in (("agent", pins), ("assign", soft)):
-                if d.get(field):
-                    a = self.s.get_agent(d[field])
-                    if not a:
-                        raise CommonsError(f"subtask {d['key']}: unknown agent {d[field]}")
-                    into[d["key"]] = a["id"]
-        for d in dag:
-            for k in d.get("deps", []) + d.get("gates", []):
-                if k not in keys:
-                    raise CommonsError(f"subtask {d['key']} references unknown key {k}")
-        _check_acyclic(dag)
+        chosen = self._check(dag)
         if self.paused():
             raise CommonsError(f"orchestration paused: {self.paused()} (resume with set_paused(false))")
         if dedupe and not recurring_id:
@@ -253,33 +246,14 @@ class Orchestrator:
             cp = ContextStore(self.s)._pack(context_pack)["id"]
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (f"job_ctx:{jid}", cp))
             self.s.relate(jid, cp, "uses_context")
+        if prefer:
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"prefer:{jid}", prefer))
         pid = self.s.project_id(project)
         budget = budget or {}
         self.s.x("INSERT INTO jobs(id,title,body,pattern,project_id,submitted_by,status,budget,used,result,recurring_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (jid, title or task.strip().splitlines()[0][:120], task, pattern, pid, agent_id, "running",
                   _j(budget), _j({"tokens": 0, "seconds": 0.0, "cost": 0.0}), None, recurring_id, now(), now()))
-        ids = {d["key"]: new_id("sub") for d in dag}
-        gate_of = {g: d["key"] for d in dag for g in d.get("gates", [])}
-        per = {k: (v / max(1, len(dag))) for k, v in budget.items() if isinstance(v, (int, float))}
-        for d in dag:
-            self.s.x("INSERT INTO subtasks(id,job_id,key,type,title,body,deps,gates,gate_of,status,priority,budget,"
-                     "max_attempts,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (ids[d["key"]], jid, d["key"], d.get("type", "general"), d.get("title", d["key"]),
-                      d.get("body", ""), _j([ids[k] for k in d.get("deps", [])]),
-                      _j([ids[k] for k in d.get("gates", [])]),
-                      ids[gate_of[d["key"]]] if d["key"] in gate_of else None, "pending", d.get("priority", 0),
-                      _j(d.get("budget", per)), d.get("max_attempts", 3), now(), now()))
-            self.s.relate(ids[d["key"]], jid, "part_of")
-            chosen = pins.get(d["key"]) or soft.get(d["key"])
-            if chosen:  # set before allocate() runs, so the first wake goes to this agent
-                self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (chosen, ids[d["key"]]))
-                self.s.relate(ids[d["key"]], chosen, "assigned_to")
-                if d["key"] in pins:
-                    self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{ids[d['key']]}", chosen))
-            if d.get("leftover_id"):
-                self.s.x("UPDATE leftovers SET status='carried', carried_to=?, updated_at=? WHERE id=?",
-                         (ids[d["key"]], now(), d["leftover_id"]))
-                self.s.relate(ids[d["key"]], d["leftover_id"], "carries")
+        self._insert(jid, dag, chosen, {k: (v / max(1, len(dag))) for k, v in budget.items() if isinstance(v, (int, float))})
         if pid:
             self.s.relate(jid, pid, "in_project")
         self.allocate(jid)
@@ -288,26 +262,145 @@ class Orchestrator:
         link_job(self.s, jid)
         return self.status(jid)
 
-    def _llm_plan(self, task: str) -> list[dict] | None:
-        """Ask the configured planner/distributor model for a DAG; None -> heuristic planner."""
+    def _check(self, dag: list[dict]) -> dict:
+        """Validate a DAG before anything is written; returns the agents chosen per key: {key: (agent_id, pinned)}.
+        agent: chosen by the submitter, retries stay; assign: first try only (delegate, agent planners)."""
+        keys = {d["key"] for d in dag}
+        by_key = {d["key"]: d for d in dag}
+        for d in dag:  # a review/test always waits for the work it checks, or it would approve work not yet done
+            for g in d.get("gates", []):
+                if g in by_key and d["key"] not in by_key[g].setdefault("deps", []):
+                    by_key[g]["deps"] = by_key[g]["deps"] + [d["key"]]
+        chosen = {}
+        for d in dag:
+            for field in ("assign", "agent"):
+                if d.get(field):
+                    a = self.s.get_agent(d[field])
+                    if not a:
+                        raise CommonsError(f"subtask {d['key']}: unknown agent {d[field]}")
+                    chosen[d["key"]] = (a["id"], field == "agent")
+            for k in d.get("deps", []) + d.get("gates", []):
+                if k not in keys:
+                    raise CommonsError(f"subtask {d['key']} references unknown key {k}")
+        _check_acyclic(dag)
+        return chosen
+
+    def _insert(self, jid: str, dag: list[dict], chosen: dict, per: dict, prefix: str = "") -> dict:
+        """Write a checked DAG into job jid (keys get `prefix`, so parts added later never collide). Returns key -> id."""
+        ids = {d["key"]: new_id("sub") for d in dag}
+        gate_of = {g: d["key"] for d in dag for g in d.get("gates", [])}
+        for d in dag:
+            self.s.x("INSERT INTO subtasks(id,job_id,key,type,title,body,deps,gates,gate_of,status,priority,budget,"
+                     "max_attempts,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (ids[d["key"]], jid, prefix + d["key"], d.get("type", "general"), d.get("title", d["key"]),
+                      d.get("body", ""), _j([ids[k] for k in d.get("deps", [])]),
+                      _j([ids[k] for k in d.get("gates", [])]),
+                      ids[gate_of[d["key"]]] if d["key"] in gate_of else None, "pending", d.get("priority", 0),
+                      _j(d.get("budget", per)), d.get("max_attempts", 3), now(), now()))
+            self.s.relate(ids[d["key"]], jid, "part_of")
+            if d["key"] in chosen:  # set before allocate() runs, so the first wake goes to this agent
+                who, pinned = chosen[d["key"]]
+                self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (who, ids[d["key"]]))
+                self.s.relate(ids[d["key"]], who, "assigned_to")
+                if pinned:
+                    self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{ids[d['key']]}", who))
+            if d.get("plans"):  # an agent writes this job's plan: its result becomes the parts
+                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"planfor:{ids[d['key']]}", jid))
+            if d.get("leftover_id"):
+                self.s.x("UPDATE leftovers SET status='carried', carried_to=?, updated_at=? WHERE id=?",
+                         (ids[d["key"]], now(), d["leftover_id"]))
+                self.s.relate(ids[d["key"]], d["leftover_id"], "carries")
+        return ids
+
+    def _plan(self, task: str, prefer: str | None = None) -> tuple[list[dict] | None, str | None]:
+        """Walk the plan chain: a model plans now, or a live agent plans as the job's first step, or (None, None) and
+        the caller uses the keyword rules."""
+        from . import planning as P
+        from . import settings as _st
         from .providers import ProviderLayer
         pl = ProviderLayer(self.s)
-        if not pl.role_model("planner"):
-            return None
-        agents = [{"agent": c["agent"], "model": c["model"]} for rows in pl.candidates().values() for c in rows[:2]]
-        out = pl.call_role("planner", "Decompose this task into a DAG of subtasks. Types: research, plan, code, review, "
-                           "debate, judge, red_team, test, summarize. Put review/test/red_team keys in 'gates' of the "
-                           "work they check. Return ONLY a JSON array of {key,type,title,body,deps,gates}.\n"
-                           f"AVAILABLE: {json.dumps(agents[:20])}\nTASK:\n{task}")
-        try:
-            dag = json.loads(re.search(r"\[.*\]", out or "", re.S).group(0))
-            keys = {d["key"] for d in dag}
-            if dag and all(set(d.get("deps", []) + d.get("gates", [])) <= keys and d.get("type") for d in dag):
-                _check_acyclic(dag)
-                return dag
-        except Exception:  # noqa: BLE001
-            pass
-        return None
+        for entry in _st.get(self.s, "plan_chain"):
+            if entry == "rules":
+                break
+            if entry == "agent":
+                who = self._planner_agent(prefer)
+                if who:
+                    return [{"key": "plan", "type": "plan", "title": f"Plan: {task.strip().splitlines()[0][:100]}",
+                             "body": P.agent_brief(self.s, task), "assign": who, "plans": True,
+                             "max_attempts": 1}], "agent-plan"  # one try: a failure or timeout falls back to the rules
+                continue
+            model = pl.role_model(entry[5:]) if entry.startswith("role:") else entry
+            if not model or not self.s.q("SELECT 1 FROM providers WHERE name=? AND enabled=1", (model.split("/")[0],)):
+                continue
+            dag = P.llm(self.s, model, task)
+            if dag:
+                return dag, "llm"
+        return None, None
+
+    def _planner_agent(self, prefer: str | None = None) -> str | None:
+        """The live agent to write a plan: the preferred one if it is live with usage to spare, else the best planner."""
+        from . import quota as Q
+        from .messaging import LIVE_MODES, presence
+        ok = lambda aid: presence(self.s, aid)["wake_mode"] in LIVE_MODES and Q.can_take(self.s, aid, "plan")[0]  # noqa: E731
+        if prefer and ok(prefer):
+            return prefer
+        return next((a["id"] for _sc, a in self.profiles.rank("plan") if ok(a["id"])), None)
+
+    def _expand_plan(self, st: dict, result: str) -> int:
+        """An agent's plan arrived: add its parts to the job (the keyword rules if it doesn't parse)."""
+        from . import planning as P
+        job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
+        dag = P.parse(result)
+        if not dag:
+            self.s.audit(None, "plan.unparsed", st["id"], (result or "")[:300])
+            dag = plan(job["body"], "auto")
+        ids = self._insert(job["id"], dag, self._check(dag), {}, prefix="p.")
+        for d in dag:  # the first parts hang off the plan: they see it, and it never shows up as a job result
+            if not d.get("deps"):
+                self.s.x("UPDATE subtasks SET deps=? WHERE id=?", (_j([st["id"]]), ids[d["key"]]))
+        self.s.x("DELETE FROM meta WHERE key=?", (f"planfor:{st['id']}",))
+        self.allocate(job["id"])
+        return len(dag)
+
+    def split(self, subtask_id: str, agent_id: str, parts: list) -> dict:
+        """The agent holding a subtask hands parts of it to other agents. The parts are routed like any job step (what
+        each agent is good at, usage left); the subtask waits for them and comes back to this agent to merge, with
+        their results in the claim packet. parts: [{title, body, type?, deps?: [keys of other parts]}] or strings."""
+        st = dict((self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,)) or [{}])[0])
+        if st.get("claimed_by") != agent_id or st.get("status") != "claimed":
+            raise CommonsError("split only a subtask you have claimed")
+        if not 2 <= len(parts or []) <= 12:
+            raise CommonsError("split into 2 to 12 parts")
+        dag = []
+        for i, p in enumerate(parts):
+            p = {"title": p[:120], "body": p} if isinstance(p, str) else dict(p)
+            if not (p.get("title") or p.get("body")):
+                raise CommonsError(f"part {i + 1} needs a title or body")
+            dag.append({"key": str(p.get("key") or i + 1), "type": p.get("type") or st["type"],
+                        "title": (p.get("title") or p["body"])[:120], "body": p.get("body") or p["title"],
+                        "deps": [str(k) for k in p.get("deps") or []], **({"agent": p["agent"]} if p.get("agent") else {})})
+        chosen = self._check(dag)
+        merge = (f"\n\n--- MERGE ---\nYou split this into {len(dag)} parts and other agents did them. Their results "
+                 "are in dependency_results: combine them into the final result for this subtask.")
+        with self.s.tx():  # parts and the hand-back land together, or not at all if the claim was lost meanwhile
+            ids = self._insert(st["job_id"], dag, chosen, {}, prefix=f"{st['key']}.{st['attempts']}.")
+            won = self.s.db.execute(
+                "UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, assigned_agent=?, deps=?, "
+                "body=?, max_attempts=max_attempts+1, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
+                (agent_id, _j(json.loads(st["deps"] or "[]") + list(ids.values())), st["body"] + merge, now(),
+                 subtask_id, agent_id)).rowcount
+            if won != 1:
+                raise CommonsError("subtask claim expired or was reassigned before the split")
+        for cid in ids.values():
+            self.s.relate(cid, subtask_id, "split_from")
+        self.s.audit(agent_id, "subtask.split", subtask_id, {"parts": list(ids.values())})
+        self.allocate(st["job_id"])
+        rows = {r["id"]: r for r in self.s.q(f"SELECT id, title, assigned_agent FROM subtasks WHERE id IN "
+                                              f"({','.join('?' * len(ids))})", list(ids.values()))}
+        return {"split": subtask_id, "parts": [{"subtask_id": i, "title": rows[i]["title"],
+                                                "assigned_to": self.s.label(rows[i]["assigned_agent"])[1]
+                                                if rows[i]["assigned_agent"] else None} for i in ids.values()],
+                "next": "You are woken to merge when every part is done; their results come with your claim."}
 
     # ---------------------------------------------------------------- kill switch
     def paused(self) -> str | None:
@@ -383,7 +476,10 @@ class Orchestrator:
             if route:  # distributor's routing table nudges allocation
                 ranked = [(sc + (0.3 if a["id"] == route["agent_id"] else 0), a) for sc, a in ranked]
             pen = 1.0 if st["type"] in ("debate", "vote") else 0.3
-            adj = [(sc - pen * siblings.count(a["id"]) - 0.1 * used.get(a["id"], 0), a) for sc, a in ranked]
+            prefer = self.s.q("SELECT value FROM meta WHERE key=?", (f"prefer:{job_id}",))
+            prefer = prefer[0]["value"] if prefer else None
+            adj = [(sc - pen * siblings.count(a["id"]) - 0.1 * used.get(a["id"], 0) + self._usage_bonus(a["id"], st["type"])
+                    + (0.3 if a["id"] == prefer else 0), a) for sc, a in ranked]
             from .routing import Router
             job = self.s.q("SELECT * FROM jobs WHERE id=?", (job_id,))
             picked = Router(self.s).choose(st, adj, dict(job[0]) if job else None)
@@ -396,6 +492,16 @@ class Orchestrator:
                 emit(self.s, best[1]["id"], "task_assigned", ref=st["id"], preview=st["title"] or "",
                      job=job_id, subtask=st["id"])
         self._wake_ready(job_id)
+
+    def _usage_bonus(self, agent_id: str, task_type: str) -> float:
+        """More usage left ranks higher (up to +0.3); room that would reset unused within hours adds 0.1. Agents that
+        report no windows sit in the middle."""
+        from . import quota as Q
+        from . import settings as _st
+        if not _st.get(self.s, "quota_routing"):
+            return 0.0
+        room, expiring = Q.headroom(self.s, agent_id, task_type)
+        return 0.15 if room is None else 0.3 * room + (0.1 if expiring else 0)
 
     def _wake_ready(self, job_id: str) -> None:
         """Mail each assigned subtask to its agent once it can actually be claimed (dependencies done). A
@@ -521,6 +627,8 @@ class Orchestrator:
                 "lease_expires": iso(st["lease_expires"]), "budget": json.loads(st["budget"] or "{}"),
                 "dependency_results": dep_results, "preferences": prefs["text"], "project": project,
                 "related_memory": ctx, "is_gate": bool(st["gate_of"]),
+                "split": "Too big for one sitting, or parts others do better? split_subtask(subtask_id, parts) "
+                         "hands them out and you merge the results.",
                 "protocol": "Return your result. Gate tasks (review/red_team/test/vote) must include a line "
                             "'VERDICT: approve' or 'VERDICT: reject'. Add 'LEFTOVER: <text>' lines for unfinished "
                             "items and 'PREFERENCE: <text>' for user preferences you learned."}
@@ -692,6 +800,8 @@ class Orchestrator:
         item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
                                agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
         self.s.relate(subtask_id, item["id"], "produced")
+        if self.s.q("SELECT 1 FROM meta WHERE key=?", (f"planfor:{subtask_id}",)):  # before _auto closes the job
+            self._expand_plan(st, result)
         if st["type"] == "librarian":
             from .librarian import Librarian
             Librarian(self.s).apply_actions(result, agent_id)
@@ -742,7 +852,12 @@ class Orchestrator:
             self.profiles.record_outcome(g["claimed_by"], g["type"], True, subtask_id=gated_id, note="gates passed")
 
     def _fail(self, subtask_id: str, why: str) -> None:
-        st = self.s.q("SELECT job_id FROM subtasks WHERE id=?", (subtask_id,))[0]
+        st = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0])
+        if self.s.q("SELECT 1 FROM meta WHERE key=?", (f"planfor:{subtask_id}",)):  # no agent could plan: rules do
+            self.s.x("UPDATE subtasks SET status='done', result=?, updated_at=? WHERE id=?",
+                     (f"No agent could plan this ({why}); split by the keyword rules.", now(), subtask_id))
+            self._expand_plan(st, "")
+            return
         self.s.x("UPDATE subtasks SET status='failed', result=COALESCE(result,'')||?, updated_at=? WHERE id=?",
                  (f"\nFAILED: {why}", now(), subtask_id))
         self.s.x("UPDATE jobs SET status='failed', updated_at=? WHERE id=?", (now(), st["job_id"]))
@@ -783,13 +898,28 @@ class Orchestrator:
                 pass
 
     def delegate(self, sender: str, recipient: str, body: str, title: str = "", project: str | None = None,
-                 reroute: bool = True) -> dict:
+                 reroute: bool = True, plan: bool = True) -> dict:
         """A task one agent hands another becomes a tracked job (it shows as running, has a lease, and is reassigned if
         it stalls). It goes to the recipient when the recipient is live; otherwise to the best live agent, so it never
-        waits on an agent that only runs when its user opens it. reroute=False: only the recipient, retries included."""
+        waits on an agent that only runs when its user opens it. reroute=False: only the recipient, retries included.
+        A big task (several parts or a long brief) is planned across the team instead, favouring the recipient;
+        plan=False keeps it whole (skill help: only the helper has the skill)."""
+        from . import planning as P
         from .messaging import LIVE_MODES, presence
         rec = self.s.get_agent(recipient)
         title = (title or body.split("\n", 1)[0])[:120]
+        if plan and reroute and P.looks_big(body):  # several parts or a long brief: plan it across the team, recipient first
+            dag, how = self._plan(body, rec["id"] if rec else None)
+            if dag:
+                job = self.submit(body, pattern=how, project=project, agent_id=sender, title=title, dag=dag,
+                                  prefer=rec["id"] if rec else None)
+                parts = [{"subtask_id": x["id"], "title": x["title"], "assigned_to": x.get("agent")}
+                         for x in job["subtasks"]]
+                return {"job_id": job["job_id"], "split": True, "parts": parts, "rerouted": False,
+                        "note": (f"This was big, so Commons split it into {len(parts)} parts across the team"
+                                 if how == "llm" else f"This was big, so {parts[0]['assigned_to']} is planning how to "
+                                 "split it across the team") + (f", favouring {recipient}" if rec else "")
+                        + ". You'll get the combined result in msg_recv when it's done."}
         live = lambda aid: presence(self.s, aid)["wake_mode"] in LIVE_MODES  # noqa: E731
         to = rec["id"] if rec and (live(rec["id"]) or not reroute) else None
         if not to:

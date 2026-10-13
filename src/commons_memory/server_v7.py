@@ -45,14 +45,14 @@ def register_v7(mcp, store, who):
     @mcp.tool()
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
                  project: str = "", reroute: bool = True, agent: str = "", api_key: str = "") -> str:
-        """Message one agent (to=name) or all (to='*'). type: message|task|question|review|fyi. type=task becomes a tracked job (routed to a live agent if the recipient isn't, unless reroute=false; result returned to you). The reply also shows what Commons already knows about it."""
+        """Message one agent (to=name) or all (to='*'). type: message|task|question|review|fyi. type=task becomes a tracked job (routed to a live agent if the recipient isn't, unless reroute=false; a big task is split across the team, favouring the recipient; result returned to you). The reply also shows what Commons already knows about it."""
         from .messaging import recipient_status
         sender = me(agent, api_key)
         if type == "task" and to != "*" and store.get_agent(to):  # a hand-off is tracked work, not just mail
             from .orchestrator import Orchestrator
             d = Orchestrator(store).delegate(sender, to, body, subject, project or None, reroute=reroute)
             out = {"delegated": d}
-            if not d["rerouted"]:
+            if not d["rerouted"] and not d.get("split"):
                 out |= msg.send(sender, to, body + f"\n\n(Tracked as job {d['job_id']}: claim_subtask "
                                 f"{d['subtask_id']}, then complete_subtask with the result.)", mtype=type,
                                 subject=subject, thread=thread or None, reply_to=reply_to or None,

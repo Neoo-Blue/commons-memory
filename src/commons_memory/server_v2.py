@@ -57,10 +57,10 @@ def register_v2(mcp, store, who):
     def submit_task(task: str, pattern: str = "auto", project: str = "", n: int = 3, budget: dict | None = None,
                     dag: list[dict] | None = None, context_pack: str = "", dedupe: bool = True, agent: str = "",
                     api_key: str = "") -> str:
-        """Submit a task for multi-agent execution. pattern: auto|plan_execute_verify|cross_review|debate|consensus|
-        parallel (bullet list => parallel parts each gated by review). Or pass an explicit dag:
-        [{key,type,title,body,deps:[keys],gates:[keys],agent}] (agent pins a node to that agent, retries included). budget: {tokens, cost, seconds} caps the whole job.
-        context_pack: a pack id from context_save — subtasks get its L1 as a cache-friendly prefix instead of re-sent text."""
+        """Split a task across the agents. pattern=auto: the plan chain (a model, else a live agent, else rules) splits it
+        to fit who is live, what each is good at and their usage left; or plan_execute_verify|cross_review|debate|
+        consensus|parallel. Or a dag: [{key,type,title,body,deps,gates,agent}] (agent pins a step). budget:
+        {tokens,cost,seconds}. context_pack: a context_save id the parts get as a prefix."""
         return _js(orch.submit(task, pattern=pattern, project=project or None, agent_id=me(agent, api_key), n=n,
                                budget=budget, dag=dag, context_pack=context_pack or None,
                                dedupe=dedupe))
@@ -79,6 +79,13 @@ def register_v2(mcp, store, who):
         """Claim the next ready subtask assigned to you (or a specific one). Returns a work packet including dependency
         results and user preferences. Heartbeat before the lease expires; returns null when nothing is ready."""
         return _js(orch.claim(me(agent, api_key), subtask_id or None, lease_seconds))
+
+    @mcp.tool()
+    def split_subtask(subtask_id: str, parts: list, agent: str = "", api_key: str = "") -> str:
+        """A subtask you claimed is too big for one sitting, or has parts other agents do better: hand those parts out.
+        parts: [{title, body, type?, deps?: [keys of other parts]}] (2-12, or plain strings). Each part goes to the
+        agent best at it with usage to spare; you are woken to merge their results (they come with your claim)."""
+        return _js(orch.split(subtask_id, me(agent, api_key), parts))
 
     @mcp.tool()
     def heartbeat(subtask_id: str, lease_seconds: int = 900, agent: str = "", api_key: str = "") -> str:

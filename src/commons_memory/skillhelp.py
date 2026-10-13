@@ -54,6 +54,6 @@ def ask(s: Store, requester: str, name: str, task: str, why: str = "") -> dict:
             + (f" (they can't run it: {why})" if why else "") + f".\nTask: {task}\n"
             + (f"Load the skill with skill(name='{name}') and do the task, then complete with the result."
                if in_pool else f"'{name}' is one of your local skills: run it for them and complete with the result."))
-    d = Orchestrator(s).delegate(requester, s.label(hs[0])[1], body, f"skill help: {name}: {task[:60]}")
+    d = Orchestrator(s).delegate(requester, s.label(hs[0])[1], body, f"skill help: {name}: {task[:60]}", plan=False)
     s.audit(requester, "skill.help", name, {"helper": s.label(hs[0])[1], "job": d["job_id"]})
     return d | {"helper": d["assigned_to"], "candidates": [s.label(a)[1] for a in hs[:5]]}

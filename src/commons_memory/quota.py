@@ -154,6 +154,19 @@ def can_take(s: Store, agent_id: str, task_type: str = "general") -> tuple[bool,
     return False, worst["resets_at"] or now() + 3600, worst["window"]
 
 
+def headroom(s: Store, agent_id: str, task_type: str = "general") -> tuple[float | None, bool]:
+    """(room left after the user's reserve and one task of this type, 0..1, the tightest window deciding; whether that
+    room expires unused soon: a window with real room resets within 3 hours). None = the agent reports no windows."""
+    ws = windows(s, agent_id)
+    if not ws:
+        return None, False
+    rooms = [(100 - w["used_pct"] - reserve(s, agent_id, w) - task_cost(s, agent_id, task_type, w["window"]), w)
+             for w in ws]
+    room = max(0.0, min(r for r, _ in rooms)) / 100
+    expiring = room >= 0.2 and any(r >= 30 and w["resets_at"] and 0 < w["resets_at"] - now() < 3 * 3600 for r, w in rooms)
+    return room, expiring
+
+
 def snapshot(s: Store, agent_id: str) -> dict:
     ws = windows(s, agent_id)
     return {"ts": now(), "w": {w["window"]: w["used_pct"] for w in ws}} if ws else {}

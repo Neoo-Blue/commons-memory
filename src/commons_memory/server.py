@@ -36,7 +36,10 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
    busy = another agent has it: don't start; msg_send them or tell the user who has it.
    done = it was done before: build on it or tell the user; never redo it. finish_work(claim_id, result) when done.
    Both list what's connected to the work (memories, docs, decisions): update whatever your change made outdated.
-4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result. Reviews end with
+   Big task with parts others could do at the same time (from the user or anyone)? submit_task(task): Commons
+   splits it across the agents by what each is good at and how much usage each has left; claim your parts.
+4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result. Too big for one sitting?
+   split_subtask(subtask_id, parts) hands parts to others and you merge their results. Reviews end with
    "VERDICT: approve" or "VERDICT: reject" and the reasons; a reject is still success=true (success=false
    means you couldn't do the work). Never review your own work.
 5) board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence.

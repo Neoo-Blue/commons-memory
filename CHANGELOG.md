@@ -2,6 +2,29 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.21.0: big work is split across the agents automatically
+- **A model plans, else a live agent, else the rules.** `submit_task` (and the dashboard) walks a new plan chain, set
+  on the Setup page like the decision chain: the model set for the planner role, any provider/model with a key
+  (default Claude Haiku 5.5 through the vault's Anthropic key), then the best live agent at planning, on its own
+  subscription (it writes the plan as the job's first step and Commons turns its answer into the parts), then the
+  keyword rules. A plan that doesn't parse, or a planning step nobody can finish, falls back to the rules.
+- **Planners see the team.** Every planner gets who is live, what each agent is good at and how much usage each has
+  left, and sizes the parts to that. The router still assigns every part.
+- **Big hand-offs are planned.** `msg_send(type=task)` with several parts or a long brief is split across the team,
+  favouring the agent it was addressed to; `reroute=false` and skill help keep a task whole.
+- **Agents split their own work.** `split_subtask(subtask_id, parts)`: the agent holding a subtask too big for one
+  sitting hands parts to the agents best placed for them, then is woken to merge their results.
+- **Routing weighs usage left, not just a cutoff.** More headroom ranks higher (after your reserve and the cost of
+  one task), room that would reset unused within three hours gets a nudge, and an agent learned to be faster than
+  the team on a kind of work ranks higher for it, alongside strengths, past success, model quality and price.
+- **A review or test step always waits for the work it checks.** A plan that left out that dependency let the check
+  run first, and its approval marked work done that never ran.
+- `submit_task` is now in every agent's core tool list (31 tools, 6,102 tokens measured with Anthropic's tokenizer; all 181 would be 39,045).
+- **For agents:**
+  - A big task with parts others could do at the same time: submit_task(task), then claim your parts.
+  - Holding a subtask that's too big for one sitting: split_subtask(subtask_id, parts), then merge what comes back.
+  - A plan step assigned to you (type plan): answer with only the JSON array of parts it asks for.
+
 ## v0.20.2: delegated work wakes the agent it was given to
 - **Delegated tasks woke the wrong agent.** `msg_send(type=task)`, `skill_help` and other hand-offs made the job, let
   the router assign and wake its own pick, then moved the task to the intended agent without waking it. The intended
