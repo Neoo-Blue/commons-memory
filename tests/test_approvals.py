@@ -32,7 +32,7 @@ def test_the_first_pin_needs_the_setup_code_from_the_hub(store):
     code = AP.setup_code(store)
     AP.set_pin(store, "482915", code=code)
     assert AP.has_pin(store) and AP.check_pin(store, "482915") and not AP.check_pin(store, "000000")
-    with pytest.raises(CommonsError, match="current PIN"):
+    with pytest.raises(CommonsError, match="current password"):
         AP.set_pin(store, "111111", code=code)  # the code is spent; changing needs the PIN
     AP.set_pin(store, "222222", by="host")  # on the hub itself
     assert AP.check_pin(store, "222222")
@@ -42,7 +42,7 @@ def test_wrong_pins_lock_approvals(store):
     AP.set_pin(store, "482915", by="host")
     for _ in range(AP.LOCK_AFTER):
         AP.check_pin(store, "000000")
-    with pytest.raises(CommonsError, match="locked"):
+    with pytest.raises(CommonsError, match="too many"):
         AP.check_pin(store, "482915")
 
 
@@ -51,9 +51,9 @@ def test_approving_runs_the_request_and_similar_and_always(store, svc, monkeypat
     w = _ask(store, base, monkeypatch, "DELETE", "/a")
     assert w["verdict"] == "waiting_for_user" and w["approve_url"].endswith("/approve/" + w["question_id"])
     page = AP.render(store, w["question_id"], trusted=False)
-    assert "DELETE" in page and "Choose your approval PIN" in page and "setup code" in page
+    assert "DELETE" in page and "Choose your owner password" in page and "setup code" in page
     AP.set_pin(store, "482915", by="host")
-    with pytest.raises(CommonsError, match="wrong PIN"):
+    with pytest.raises(CommonsError, match="wrong password"):
         AP.answer(store, w["question_id"], "yes", pin="999999")
     out = AP.answer(store, w["question_id"], "all", pin="482915")
     assert out["result"]["status"] == 200 and [x for x in seen if x[0] == "DELETE"], out["result"]
@@ -155,7 +155,7 @@ def test_lockouts_are_per_device(store):
     AP.set_pin(store, "482915", by="host")
     for _ in range(AP.LOCK_AFTER):
         AP.check_pin(store, "000000", client="10.0.0.9")
-    with pytest.raises(CommonsError, match="locked"):
+    with pytest.raises(CommonsError, match="too many"):
         AP.check_pin(store, "482915", client="10.0.0.9")
     assert AP.check_pin(store, "482915", client="10.0.0.5")  # an agent guessing can't lock the owner out
 
@@ -249,3 +249,67 @@ def test_an_approval_given_hours_later_still_counts(store, svc, monkeypatch):  #
 def test_approve_links_default_to_the_dashboard_port(store, monkeypatch):
     monkeypatch.delenv("COMMONS_DASHBOARD_PORT", raising=False)
     assert AP.url(store, "q1", "127.0.0.1:8765") == "http://127.0.0.1:8766/approve/q1"
+
+
+def test_a_fresh_hub_is_claimed_by_its_first_visitor(store):
+    AP.open_claim(store)  # Commons just started
+    assert AP.claim_left(store) > 0
+    AP.set_pin(store, "correct horse", client="192.168.50.20")  # no code: the owner opened the dashboard
+    i = AP.info(store)
+    assert i["set"] and i["from"] == "192.168.50.20" and i["claim_left_s"] == 0
+    assert store.q("SELECT 1 FROM notifications WHERE title LIKE '%owner password%'")  # a claim never goes unnoticed
+    AP.open_claim(store)  # a restart doesn't reopen a claimed hub
+    with pytest.raises(CommonsError, match="current password"):
+        AP.set_pin(store, "someone else")
+    AP.reset(store)  # forgot it: reset on the hub, then claim again
+    AP.set_pin(store, "new password")
+    assert AP.check_pin(store, "new password")
+
+
+def test_code_only_mode_and_closed_windows_need_the_setup_code(store, monkeypatch):
+    monkeypatch.setattr(AP, "CLAIM_S", 0)  # COMMONS_CLAIM_MINUTES=0
+    AP.open_claim(store)
+    assert not AP.claim_left(store)
+    with pytest.raises(CommonsError, match="setup code"):
+        AP.set_pin(store, "123456")
+    AP.set_pin(store, "123456", code=AP.setup_code(store))
+    assert AP.has_pin(store)
+
+
+def test_the_owner_can_lock_the_whole_dashboard(store):
+    srv = make_server(store, port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def get(path, cookie=""):
+        req = urllib.request.Request(url + path, headers={"Cookie": cookie})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    def post(path, body, cookie=""):
+        req = urllib.request.Request(url + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"X-Commons": "1", "Content-Type": "application/json", "Cookie": cookie})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                return r.status, json.loads(r.read()), r.headers.get("Set-Cookie", "")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read()), ""
+    try:
+        AP.open_claim(store)
+        assert json.loads(get("/api/owner")[1])["claim_left_s"] > 0  # the first-run banner offers the claim
+        code, _, cookie = post("/approve/pin", {"set_pin": "my hub password"})
+        assert code == 200 and "commons_approver=" in cookie  # claiming signs this browser in
+        cookie = cookie.split(";")[0]
+        assert post("/api/setup/setting", {"key": "dashboard_lock", "value": True}, cookie)[0] == 200
+        code, page = get("/")
+        assert code == 200 and "Commons is locked" in page
+        assert get("/api/overview")[0] == 401 and post("/api/board/add", {"text": "x"})[0] == 401
+        code, page = get("/", cookie)
+        assert code == 200 and "Commons is locked" not in page
+        assert get("/api/overview", cookie)[0] == 200
+        assert "Max-Age=0" in post("/approve/logout", {}, cookie)[2]
+    finally:
+        srv.shutdown()

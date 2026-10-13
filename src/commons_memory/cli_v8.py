@@ -140,8 +140,8 @@ def add_parsers(sub) -> None:
     x.add_argument("file")
     x.add_argument("--key", help="the fingerprint you expect (from `commons audit-key` on the hub)")
     sub.add_parser("audit-key", help="this hub's audit signing key fingerprint (pin it when verifying exports)")
-    x = sub.add_parser("approvals", help="owner approvals: show the setup code, or set the approval PIN on this host")
-    x.add_argument("action", choices=["code", "set-pin", "status"])
+    x = sub.add_parser("approvals", help="the owner password: set it here, reset a forgotten one, or show the setup code")
+    x.add_argument("action", choices=["code", "set-pin", "reset", "status"])
     x = sub.add_parser("graphiti", help="mirror memories into a Graphiti knowledge graph (push) or import its facts (pull)")
     x.add_argument("direction", choices=["push", "pull"])
     x.add_argument("--url", help="Graphiti server (default: the graphiti_url setting)")
@@ -387,17 +387,20 @@ def handle(args, store) -> int:
     elif c == "approvals":
         from . import approvals as AP
         if args.action == "code":
-            print(AP.setup_code(store) if not AP.has_pin(store) else "a PIN is already set: change it with "
-                  "`commons approvals set-pin` here, or with the current PIN on the dashboard")
+            print(AP.setup_code(store) if not AP.has_pin(store) else "an owner password is already set: "
+                  "`commons approvals reset` here forgets it")
         elif args.action == "set-pin":
             import getpass
-            pin = getpass.getpass("New approval PIN (6-12 digits): ")
+            pin = getpass.getpass("New owner password (6+ characters): ")
             if pin != getpass.getpass("Again: "):
-                print("the two PINs differ", file=sys.stderr)
+                print("the two passwords differ", file=sys.stderr)
                 return 1
             print(json.dumps(AP.set_pin(store, pin, by="host")))
+        elif args.action == "reset":
+            out = AP.reset(store)
+            print(f"Owner password forgotten. Open the dashboard within {out['claim_minutes']} minutes to choose a new one.")
         else:
-            print(json.dumps({"pin_set": AP.has_pin(store)}))
+            print(json.dumps({k: v for k, v in AP.info(store).items() if k != "from"}))
     elif c == "graphiti":
         from . import graphiti as G
         from . import settings as _st

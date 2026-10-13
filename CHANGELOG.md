@@ -2,6 +2,22 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.24.1: make the hub yours in one step, and lock the dashboard if you want
+- **What went wrong.** v0.24 asked for a setup code that only the hub's log showed. The owner couldn't find it, and
+  nobody should have to dig through container logs to start using a tool.
+- **First visit claims the hub.** For 30 minutes after Commons starts, the dashboard opens with "Make this hub yours":
+  type an owner password and you're done, from any browser (local, LAN, tunnel). Missed it? Restart Commons and the
+  window reopens until a password exists. Every claim notifies you (dashboard, and your phone if set up), and
+  `commons approvals reset` on the hub forgets a password. `COMMONS_CLAIM_MINUTES=0` keeps the stricter setup-code-only
+  mode.
+- **A password, not a PIN, and sign in once.** Any 6+ characters. Each browser stays signed in for 14 days instead of
+  12 hours, with a Sign out button.
+- **Lock the whole dashboard (optional).** The `dashboard_lock` switch on Setup puts every page and API call behind the
+  owner password, with a sign-in page; agents keep working through their keys.
+- **Fixes.** Long unbroken text (paths, env lines) no longer spills across Team cards; the setup checklist links
+  straight to choosing the password.
+- **For agents:** nothing changes: give the user approve_url when a key use waits for them.
+
 ## v0.24.0: approvals only you can give, from anywhere, in one step; approve-everything at your own risk; code intelligence
 - **What went wrong.** An agent set up a Cloudflare tunnel and needed two writes approved. The user said "approved" in
   the agent's chat, which can't count (an agent can type that too); phone approvals weren't set up; and the dashboard

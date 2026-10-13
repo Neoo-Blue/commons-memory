@@ -317,6 +317,10 @@ class API:
         return st | {"queue": rl.queue(q.get("status") or "pending", q.get("kind") or None, q.get("source") or None,
                                        int(q.get("limit", 300)))}
 
+    def owner(self, q):
+        from .approvals import info
+        return info(self.s)
+
     def network(self, q):
         from .expose import health, snippets, state
         st = health(self.s) if q.get("probe") == "1" else state(self.s)
@@ -608,6 +612,12 @@ def make_handler(api: API, token: str | None):
             self.end_headers()
             self.wfile.write(data)
 
+        def _locked(self) -> bool:
+            """The owner chose to put the whole dashboard behind their password, and this browser isn't signed in."""
+            from . import settings
+            from .approvals import has_pin
+            return bool(settings.get(api.s, "dashboard_lock")) and has_pin(api.s) and not self._approver()
+
         def _approver(self) -> bool:
             from .approvals import session_ok
             for part in self.headers.get("Cookie", "").split(";"):
@@ -622,6 +632,11 @@ def make_handler(api: API, token: str | None):
             if u.path.startswith("/approve/") and _host_allowed(self.headers.get("Host", ""), api.s):
                 from .approvals import render
                 return self._send(200, render(api.s, u.path.split("/")[2], self._approver()), "text/html; charset=utf-8")
+            if self._locked():
+                if u.path in ("/", "/index.html"):
+                    from .approvals import render
+                    return self._send(200, render(api.s, "login", False), "text/html; charset=utf-8")
+                return self._send(401, {"error": "the dashboard is locked: sign in at /", "need_login": True})
             if not self._authed(q):
                 return self._send(401, {"error": getattr(self, "deny", None) or "token required (?token=...)"})
             secure = "; Secure" if getattr(self.server, "tls", False) else ""
@@ -678,6 +693,9 @@ def make_handler(api: API, token: str | None):
                     # ponytail: behind a tunnel every remote browser shares the proxy's address, so they share one
                     # lockout; the owner on the LAN still has their own
                     client = str(self.client_address[0])
+                    if u.path == "/approve/logout":
+                        return self._send(200, {"signed_out": True}, extra={
+                            "Set-Cookie": "commons_approver=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
                     if u.path == "/approve/unlock":
                         out = AP.unlock(api.s, str(b.get("pin") or ""), client)
                     elif b.get("set_pin"):
@@ -694,6 +712,8 @@ def make_handler(api: API, token: str | None):
                                                                f"SameSite=Strict; Path=/; Max-Age={AP.SESSION_S}{secure}"})
                 except (CommonsError, ValueError) as e:
                     return self._send(403, {"error": str(e)})
+            if self._locked():
+                return self._send(401, {"error": "the dashboard is locked: sign in at /", "need_login": True})
             if not self._authed(q):
                 return self._send(401, {"error": getattr(self, "deny", None) or "token required"})
             if self.headers.get("X-Commons") != "1":
@@ -705,11 +725,11 @@ def make_handler(api: API, token: str | None):
                 self._ctx()
                 from . import approvals as AP
                 if u.path.startswith(OWNER_ONLY) and AP.has_pin(api.s) and not self._approver():
-                    return self._send(403, {"error": "this change needs your approval PIN", "need_pin": True})
-                if u.path == "/api/setup/setting" and body.get("key") == "auto_approve_all" and body.get("value") \
-                        and body.get("value") not in ("0", "false", "off") and not AP.has_pin(api.s):
-                    return self._send(403, {"error": "set your approval PIN first (open /approve/pin): approving "
-                                                     "everything must stay a switch only you can flip",
+                    return self._send(403, {"error": "this change needs your owner password", "need_pin": True})
+                if u.path == "/api/setup/setting" and body.get("key") in ("auto_approve_all", "dashboard_lock") \
+                        and body.get("value") and body.get("value") not in ("0", "false", "off") and not AP.has_pin(api.s):
+                    return self._send(403, {"error": "set your owner password first (the banner at the top of the "
+                                                     "dashboard): this switch must stay one only you can flip",
                                             "approve_url": "/approve/pin"})
                 if u.path == "/api/board/answer" and not self._approver():
                     from .approvals import needs_proof
@@ -858,11 +878,11 @@ def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, backg
     from .background import start_background
     start_background(store)
     from . import approvals as AP
-    if not AP.has_pin(store):  # only someone who can read this hub's own log can choose the first approval PIN
+    if not AP.has_pin(store):  # a fresh start: the first visitor claims the hub for the next 30 minutes
         import sys
-        print(f"Commons approval setup code: {AP.setup_code(store)}  (enter it on the dashboard's Setup page or any "
-              "approval link to choose your approval PIN; `commons approvals code` on this host shows it again)",
-              file=sys.stderr, flush=True)
+        AP.open_claim(store)
+        print(f"Open the dashboard within {AP.CLAIM_S // 60} minutes to choose your owner password. Headless? Setup code: "
+              f"{AP.setup_code(store, rotate=True)}", file=sys.stderr, flush=True)
     if background:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         return srv
@@ -900,7 +920,7 @@ header h1{margin:0;font-size:19px;letter-spacing:-.02em;min-width:0;white-space:
 #ks{display:flex;align-items:center;gap:8px;flex:none}#ks button{white-space:nowrap}
 .search{display:flex;align-items:center;gap:8px;min-width:260px;padding:7px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--mut);cursor:pointer}
 kbd{font:11px var(--mono);padding:1px 6px;border-radius:5px;border:1px solid var(--line);background:var(--bg2);color:var(--mut)}
-main{padding:20px 22px 60px;max-width:1440px;width:100%;margin:0 auto;animation:fade .25s ease}
+main{padding:20px 22px 60px;max-width:1440px;width:100%;margin:0 auto;animation:fade .25s ease}#ob{padding:0 22px;max-width:1440px;width:100%;margin:0 auto}#ob:empty{display:none}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:16px;box-shadow:var(--sh);overflow-x:auto}
 .card h3{margin:0 0 10px;font-size:14.5px;letter-spacing:-.01em;display:flex;flex-wrap:wrap;align-items:center;gap:8px}.card h2{letter-spacing:-.02em}
@@ -936,7 +956,7 @@ input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px sol
 .bfil{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 12px}.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .seg button{border:0;border-radius:0;background:transparent;color:var(--mut)}.seg button.on{background:var(--acc-soft);color:var(--fg)}
 .sus{margin:6px 0 0;padding-left:20px}.sus li{margin:5px 0}.sus li.ok b{color:var(--ok)}.chain{padding-left:22px}.chain li{margin:6px 0}.chain button{padding:2px 9px}.suin input{width:240px}
-.team{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}.tcard{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:4px}.tcard.needs_you{border-color:var(--bad)}.tcard.working{border-color:var(--acc)}.tcard ul{margin:2px 0 0;padding-left:16px}
+.team{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}.tcard{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}.tcard.needs_you{border-color:var(--bad)}.tcard.working{border-color:var(--acc)}.tcard ul{margin:2px 0 0;padding-left:16px}
 .skl{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.sk{display:inline-flex;gap:6px;align-items:center;padding:3px 6px 3px 9px;border:1px solid var(--line);border-radius:9px;font-size:13px}.sk button{padding:3px 10px;font-size:12px}
 @media (max-width:640px){.sk button{min-height:44px}.cxstep{min-height:44px}}
 .cxsteps{display:grid;gap:4px;margin:6px 0 10px}.cxstep{display:flex;gap:8px;align-items:center;cursor:pointer}
@@ -999,7 +1019,7 @@ iframe{width:100%;height:76vh;border:0;border-radius:12px;background:var(--bg2)}
 .skel.w{width:70%}@keyframes sh{to{background-position:-200% 0}}
 pre,code{overflow-wrap:anywhere}
 @media (max-width:900px){.app{grid-template-columns:1fr}aside{position:fixed;z-index:30;width:250px;transform:translateX(-100%);transition:transform .2s;background:var(--bg2)}
-aside.open{transform:none}.menu-btn{display:inline-block}.search{min-width:0;flex:0 0 auto}.search span{display:none}.cols{grid-template-columns:1fr}main{padding:14px}
+aside.open{transform:none}.menu-btn{display:inline-block}.search{min-width:0;flex:0 0 auto}.search span{display:none}.cols{grid-template-columns:1fr}main{padding:14px}#ob{padding:0 14px}
 .grid4{grid-template-columns:1fr 1fr}
 div[style*="grid-template-columns:220px"],div[style*="grid-template-columns:1.1fr"]{grid-template-columns:1fr!important}
 .card table{min-width:640px}
@@ -1011,7 +1031,7 @@ header{padding:10px 12px;gap:8px}header h1{font-size:16px;flex:1}
 <div class="app"><aside id="side"><div class="logo"><i>⛬</i>Commons</div><nav class="nav" id="tabs" aria-label="Pages"></nav></aside>
 <div><header><button class="menu-btn" aria-label="Menu" onclick="$('#side').classList.toggle('open')">☰</button><h1 id="ttl">Overview</h1><div class="spacer"></div>
 <div class="search" role="button" tabindex="0" onclick="pal()" onkeydown="if(event.key=='Enter')pal()">⌕ <span>Search or jump to…</span> <kbd>⌘K</kbd></div>
-<button onclick="theme()" aria-label="Toggle theme" title="Toggle theme (t)">◐</button><span id="ks"></span></header><main id="m" aria-live="polite">loading…</main></div></div>
+<button onclick="theme()" aria-label="Toggle theme" title="Toggle theme (t)">◐</button><span id="ks"></span></header><div id="ob"></div><main id="m" aria-live="polite">loading…</main></div></div>
 <div id="pal" role="dialog" aria-modal="true" aria-label="Command palette" onclick="if(event.target.id=='pal')palClose()"><div class="box"><input id="palq" placeholder="Jump to a page, find a place, search memory…" autocomplete="off"><div class="res" id="palr"></div></div></div>
 <div id="toasts" aria-live="assertive"></div>
 <script>
@@ -1024,7 +1044,7 @@ const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({
 const J=v=>E(JSON.stringify(v??""));
 const api=p=>fetch("/api/"+p,{credentials:"same-origin"}).then(r=>r.json());
 const postRaw=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json()).then(async r=>{if(!(r&&r.need_pin))return r;const u=await pinUnlock();return u===true?postRaw(p,b):{error:u||r.error}});
-function pinUnlock(){return new Promise(res=>{let d=document.getElementById("pinDlg");if(!d){d=document.createElement("dialog");d.id="pinDlg";d.innerHTML=`<form method="dialog" style="display:grid;gap:12px;max-width:340px"><h3 style="margin:0">Your approval PIN</h3><p class="mut sm" style="margin:0">Keys, providers, approvals and policies only change from a browser you unlocked with your PIN. This one stays unlocked for 12 hours.</p><input id="pinIn" type="password" inputmode="numeric" autocomplete="current-password" aria-label="approval PIN" style="min-height:44px;font-size:18px"><div style="display:flex;gap:8px"><button class="pri" value="ok" style="min-height:44px;flex:1">Unlock</button><button value="cancel" formnovalidate style="min-height:44px">Cancel</button></div></form>`;document.body.appendChild(d)}
+function pinUnlock(){return new Promise(res=>{let d=document.getElementById("pinDlg");if(!d){d=document.createElement("dialog");d.id="pinDlg";d.innerHTML=`<form method="dialog" style="display:grid;gap:12px;max-width:340px"><h3 style="margin:0">Your owner password</h3><p class="mut sm" style="margin:0">Keys, providers, approvals and policies only change from a browser signed in with your owner password. This one then stays signed in for 14 days.</p><input id="pinIn" type="password" autocomplete="current-password" aria-label="owner password" style="min-height:44px;font-size:16px"><div style="display:flex;gap:8px"><button class="pri" value="ok" style="min-height:44px;flex:1">Unlock</button><button value="cancel" formnovalidate style="min-height:44px">Cancel</button></div></form>`;document.body.appendChild(d)}
 d.onclose=async()=>{const pin=document.getElementById("pinIn").value;document.getElementById("pinIn").value="";if(d.returnValue!=="ok"||!pin)return res("");const r=await fetch("/approve/unlock",{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify({pin})}).then(r=>r.json()).catch(e=>({error:String(e)}));res(r.error?r.error:true)};d.returnValue="";d.showModal()})}
 const bUp=(id,status)=>{const ev=$("#ev_"+id),cu=$("#cu_"+id);post("board/update",{id,status,evidence:ev&&ev.value||"",current:cu&&cu.value||""})};
 const suProv=k=>{const el=$("#pk_"+k),v=el?el.value.trim():"";post("setup/provider",k=="ollama"?{kind:k,base_url:v}:{kind:k,key:v})};
@@ -1123,7 +1143,7 @@ const V={
 async Overview(){const [o,act,us,ag,su,tm]=await Promise.all([api("overview"),api("activity"),api("usage_series?days=14"),api("agents"),api("setup").catch(()=>null),api("team").catch(()=>[])]);
 const cost=[...Array(us.days).keys()].map(d=>Object.values(us.series).reduce((a,v)=>a+v[d],0));
 const st=(k,l,extra="")=>`<div class="card stat"><div class="mut">${l}</div><div class="big">${E(o[k])}</div>${extra}</div>`;
-return `${su&&su.done<su.total?`<div class="card" style="border-color:var(--acc)"><b>Finish setting up Commons</b> <span class="pill pending">${su.done}/${su.total}</span> <span class="mut">next: ${E((su.steps.find(x=>!x.done)||{}).step||"")}</span> <a href="#Setup" onclick="event.preventDefault();go('Setup')">open Setup →</a></div>`:""}${tm.length?`<div class="card"><h3>Team now</h3><div class="team">${tm.map(t=>`<div class="tcard ${t.state}"><div><b>${E(t.agent)}</b> <span class="pill ${t.state=="needs_you"?"failed":t.state=="working"?"running":t.state}">${E(t.state.replace("_"," "))}</span> ${t.live?'<span class="dot live" title="woken instantly"></span>':""}</div><div>${E(t.headline||t.working_on||"")}</div>${t.bullets.length?`<ul class="mut sm">${t.bullets.map(b=>`<li>${E(b)}</li>`).join("")}</ul>`:""}<div class="mut sm">${t.since?ago(Math.max(0,(Date.now()-Date.parse(t.since))/1000|0))+" ago":""}</div></div>`).join("")}</div></div>`:""}<div class="grid grid8"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
+return `${su&&su.done<su.total?`<div class="card" style="border-color:var(--acc)"><b>Finish setting up Commons</b> <span class="pill pending">${su.done}/${su.total}</span> <span class="mut">next: ${E((su.steps.find(x=>!x.done)||{}).step||"")}</span> ${/^Owner password/.test((su.steps.find(x=>!x.done)||{}).step||"")?`<a href="/approve/pin">set it now →</a>`:`<a href="#Setup" onclick="event.preventDefault();go('Setup')">open Setup →</a>`}</div>`:""}${tm.length?`<div class="card"><h3>Team now</h3><div class="team">${tm.map(t=>`<div class="tcard ${t.state}"><div><b>${E(t.agent)}</b> <span class="pill ${t.state=="needs_you"?"failed":t.state=="working"?"running":t.state}">${E(t.state.replace("_"," "))}</span> ${t.live?'<span class="dot live" title="woken instantly"></span>':""}</div><div>${E(t.headline||t.working_on||"")}</div>${t.bullets.length?`<ul class="mut sm">${t.bullets.map(b=>`<li>${E(b)}</li>`).join("")}</ul>`:""}<div class="mut sm">${t.since?ago(Math.max(0,(Date.now()-Date.parse(t.since))/1000|0))+" ago":""}</div></div>`).join("")}</div></div>`:""}<div class="grid grid8"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
 ${st("running_jobs","Running jobs")}${st("agents","Agents")}${st("items","Memories",`<div class="mut" style="font-size:11px">tokens/day</div>${spark(us.tokens,150,26)}`)}${st("open_leftovers","Open leftovers")}${st("conflicts","Conflicts")}${st("entities","Graph entities")}${st("relations","Relations")}</div>
 <div class="cols"><div class="card"><h3>Agents now</h3>${ag.length?`<table>${ag.slice(0,10).map(x=>{const st=agentState(x);const cls=st.text==="never seen"?"offline":(x.claims.length?"busy":st.cls);const doing=st.text==="never seen"?'<span class="mut">offline</span>':(x.claims.length?x.claims.map(c=>pill(c.type)+" "+E(c.title.slice(0,40))).join("<br>"):'<span class="mut">idle</span>');return `<tr><td><span class="dot ${cls}" title="${E(cls)}"></span><b>${E(x.name)}</b> <span class="mut">${E(x.platform||"")}</span></td><td>${doing}</td><td class="mut">${E(st.text)}</td></tr>`}).join("")}</table>`:empty("🤖","No agents yet","<div><code>commons connect --agent claude-code --platform claude-code</code></div>")}</div>
 <div class="card"><h3>Live activity</h3>${act.length?`<ul class="feed">${act.map((e,i)=>`<li style="animation-delay:${i*18}ms"><span class="t">${ago(e.ago)}</span><span>${pill(e.type)} ${E(e.text)} ${e.agent?`<span class="mut">· ${E(e.agent)}</span>`:""}</span></li>`).join("")}</ul>`:empty("✨","Quiet so far","<div>Activity from agents, the librarian and MCP calls streams in here.</div>")}</div></div>
@@ -1357,7 +1377,13 @@ const html=await V[tab]();if(seq!==_rseq)return;const m=$("#m");if(m.dataset.tab
 if(fid){const el=document.getElementById(fid);if(el){el.focus();try{el.setSelectionRange(fc,fc)}catch(err){}}}
 if(tab==="Memory"&&window._mfocus){window._mfocus=false;const el=$("#mq");if(el){el.focus();const n=window._mcaret==null?el.value.length:Math.min(window._mcaret,el.value.length);try{el.setSelectionRange(n,n)}catch(err){}}}}
 catch(e){if(seq!==_rseq)return;toast(String(e&&e.message||e),"err");$("#m").innerHTML='<div class="card failed">'+E(e)+'</div>'}}
-const boot=Date.now();render();
+const boot=Date.now();render();ownerBanner();
+async function ownerBanner(){const el=$("#ob");if(!el)return;let o;try{o=await fetch("/api/owner").then(r=>r.json())}catch(e){return}
+if(o.set||o.error){el.innerHTML=o.locked?`<div style="text-align:right;margin:4px 0"><button onclick="signOut()" style="min-height:44px">Sign out</button></div>`:"";return}
+el.innerHTML=o.claim_left_s?`<div class="card needs" style="margin:12px 0"><h3>Make this hub yours</h3><p class="mut sm">Choose an owner password. Only the owner can approve agents' key use, change keys, providers and settings, or lock this dashboard. Anyone can claim this hub for ${Math.ceil(o.claim_left_s/60)} more minutes, so set it now.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="obpw" type="password" autocomplete="new-password" placeholder="owner password (6+ characters)" aria-label="owner password" style="min-height:44px;flex:1;min-width:200px" onkeydown="if(event.key==='Enter')claimHub()"><button class="pri" style="min-height:44px" onclick="claimHub()">Set password</button></div></div>`
+:`<div class="card" style="margin:12px 0"><h3>Set your owner password</h3><p class="mut sm">Until you do, agents' key approvals wait and anyone on your network can change settings. ${o.claim_minutes?`Restart Commons (Container Manager, or <code>docker restart commons</code>), then reload this page within ${o.claim_minutes} minutes to choose it here.`:`Open <a href="/approve/pin">/approve/pin</a> and enter the setup code from the hub's log.`}</p></div>`}
+async function claimHub(){const pw=$("#obpw").value;const r=await fetch("/approve/pin",{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify({set_pin:pw})}).then(r=>r.json()).catch(e=>({error:String(e)}));if(r.error)return toast(r.error,"err");toast("This hub is yours. This browser stays signed in for 14 days.","ok");ownerBanner()}
+async function signOut(){await fetch("/approve/logout",{method:"POST",headers:{"X-Commons":"1"}});location.reload()}
 const LIVE=["Overview","Board","Capacity","Agents","Orchestration","Usage","Librarian","MCP hub","Context","Sessions"];let lastLive=0,seenN=new Set();
 function liveRender(){if(LIVE.includes(tab)&&!document.querySelector("details[open]")&&!document.querySelector("input:focus,textarea:focus")&&Date.now()-lastLive>1500){lastLive=Date.now();render()}}
 function stopPoll(){if(window._poll){clearInterval(window._poll);window._poll=0}}

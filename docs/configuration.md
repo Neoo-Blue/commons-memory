@@ -26,6 +26,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_CF_ACCESS_AUD` | — | Cloudflare Access application audience tag to verify | expose.py |
 | `COMMONS_CF_ACCESS_CERTS` | — | Cloudflare Access certs URL override | expose.py |
 | `COMMONS_CF_ACCESS_TEAM` | — | Cloudflare Access team name (`<team>.cloudflareaccess.com`) | expose.py |
+| `COMMONS_CLAIM_MINUTES` | `30` | Minutes after Commons starts (or after `commons approvals reset`) during which the first visitor can choose the owner password from the dashboard with no code (default 30). 0 = only with the setup code printed in the hub log | approvals.py |
 | `COMMONS_CONTRADICTION_MAX` | `50` | New notes checked for contradictions per librarian pass (default 50) | librarian.py |
 | `COMMONS_CONTRADICTION_THRESHOLD` | `0.85` | TypeSafe probability at which two notes count as contradicting (default 0.85; precision first) | librarian.py |
 | `COMMONS_DAILY_COST_CAP` | — | USD/day cap across all orchestrated work; jobs pause when hit | usage.py |

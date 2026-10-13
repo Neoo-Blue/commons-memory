@@ -3,8 +3,10 @@
 When the decision chain hands a credential use (or an upstream MCP call) to the user, the agent gets an approval link
 (/approve/<question>) to show the user. The page says exactly what is asked: the key, the method, the URL, the request
 body and the reason. Anyone can open it, so an agent can pass it on, but approving needs proof that the owner is
-there: the owner approval PIN (set once, on first use or with `commons approvals set-pin` on the hub), after which
-that browser stays trusted for 12 hours through an HttpOnly cookie an agent never sees. Phone and email links stay
+there: the owner password. The owner chooses it on their first visit to the dashboard: for 30 minutes after Commons
+starts (or after `commons approvals reset`) the first visitor claims the hub, with no code, from any browser. After that
+the browser stays signed in for 14 days through an HttpOnly cookie an agent never sees, and the owner can lock the
+whole dashboard behind the same password (Setup: dashboard_lock). Phone and email links stay
 one-tap: they are signed and only ever reach the owner. A "yes" typed into an agent's chat never counts, because an
 agent can type that too. Approving runs the stored request at once and hands the result to the waiting agent.
 """
@@ -21,7 +23,9 @@ import secrets
 from .ids import iso, now
 from .store import CommonsError, Store
 
-SESSION_S = 12 * 3600
+SESSION_S = 14 * 24 * 3600
+# how long a fresh (or reset) hub can be claimed without a code; 0 = only with the setup code from the hub's log
+CLAIM_S = int(os.environ.get("COMMONS_CLAIM_MINUTES", "30")) * 60
 LOCK_AFTER, LOCK_S = 5, 900
 QUESTION = re.compile(r"\[(vault|mcp) ([A-Za-z0-9_]+)\]")
 
@@ -39,8 +43,35 @@ def has_pin(s: Store) -> bool:
     return bool(_get(s, "approval_pin"))
 
 
+def open_claim(s: Store) -> None:
+    """Commons just started (or the owner reset the password on the hub): the first visitor may choose it for a while."""
+    if not has_pin(s):
+        _put(s, "approval_claim", {"until": now() + CLAIM_S})
+
+
+def claim_left(s: Store) -> int:
+    """Seconds left to claim this hub without a code (0 once a password exists or the window has closed)."""
+    return 0 if has_pin(s) else max(0, int((_get(s, "approval_claim") or {}).get("until", 0) - now()))
+
+
+def info(s: Store) -> dict:
+    from . import settings
+    rec = _get(s, "approval_pin") or {}
+    return {"set": bool(rec), "at": rec.get("at"), "from": rec.get("from"), "claim_left_s": claim_left(s),
+            "claim_minutes": CLAIM_S // 60,
+            "locked": bool(settings.get(s, "dashboard_lock")) and bool(rec)}
+
+
+def reset(s: Store) -> dict:
+    """On the hub only: forget the owner password and open a new claim window."""
+    s.x("DELETE FROM meta WHERE key='approval_pin'")
+    open_claim(s)
+    s.audit(None, "approvals.pin_reset", "host", {})
+    return {"reset": True, "claim_minutes": CLAIM_S // 60}
+
+
 def setup_code(s: Store, rotate: bool = False) -> str:
-    """A one-time code for choosing the first PIN. It is printed in the hub's own log at startup and by
+    """A one-time code for choosing the first owner password (a headless fallback for the claim window). It is printed in the hub's own log at startup and by
     `commons approvals code` on the hub, never sent over the API, so an agent that can only reach Commons can't use it."""
     rec = _get(s, "approval_setup")
     if rec and not rotate and rec.get("code"):
@@ -51,24 +82,32 @@ def setup_code(s: Store, rotate: bool = False) -> str:
 
 
 def set_pin(s: Store, pin: str, current: str = "", code: str = "", by: str = "owner", client: str = "") -> dict:
-    """The first PIN needs the setup code from the hub's log; changing it needs the current PIN. On the hub itself
-    (`commons approvals set-pin`, by="host") neither is needed."""
-    if not re.fullmatch(r"\d{6,12}", pin or ""):
-        raise CommonsError("the approval PIN is 6 to 12 digits")
+    """The owner password. The first one: anyone during the claim window, else the setup code from the hub's log.
+    Changing it needs the current one. On the hub itself (`commons approvals set-pin`, by="host") neither is needed."""
+    if not 6 <= len(pin or "") <= 128:
+        raise CommonsError("the owner password needs at least 6 characters")
     if by != "host":
         if has_pin(s):
             if not check_pin(s, current, client):
-                raise CommonsError("enter the current PIN to change it (or run `commons approvals set-pin` on the hub)")
-        else:
+                raise CommonsError("enter the current password to change it (or run `commons approvals reset` on the hub)")
+        elif not claim_left(s):
             rec = _get(s, "approval_setup") or {}
             if not rec.get("code") or not hmac.compare_digest(rec["code"], (code or "").strip()):
                 _fail(s, client)
-                raise CommonsError("wrong setup code: it is in the hub's log (`docker logs commons | grep 'setup code'`) "
-                                   "or run `commons approvals code` on the hub")
-    s.x("DELETE FROM meta WHERE key='approval_setup'")  # one-time: spent once a PIN exists
+                raise CommonsError("the 30 minutes to claim this hub have passed: restart Commons and set the password "
+                                   "within 30 minutes, or enter the setup code from the hub's log")
+    s.x("DELETE FROM meta WHERE key IN ('approval_setup','approval_claim')")  # spent once a password exists
     salt = secrets.token_hex(16)
-    _put(s, "approval_pin", {"salt": salt, "hash": _hash(pin, salt), "at": iso(now()), "by": by})
-    s.audit(None, "approvals.pin_set", by, {})
+    first = not has_pin(s)
+    _put(s, "approval_pin", {"salt": salt, "hash": _hash(pin, salt), "at": iso(now()), "by": by, "from": client or by})
+    s.audit(None, "approvals.pin_set", by, {"from": client})
+    if first and by != "host":  # a claim that wasn't the owner must not go unnoticed
+        from .escalation import notify
+        from .phone import push
+        msg = (f"The owner password was set from {client or 'a browser'}. Not you? Run `commons approvals reset` on the "
+               "hub (docker exec commons commons approvals reset) and choose a new one.")
+        notify(s, "Commons now has an owner password", msg, level="info")
+        push(s, "Commons owner password set", msg)
     return {"pin_set": True}
 
 
@@ -78,12 +117,12 @@ def _hash(pin: str, salt: str) -> str:
 
 def check_pin(s: Store, pin: str, client: str = "") -> bool:
     """Wrong tries lock that device (client address) for 15 minutes, not everyone: a stranger on the LAN can't lock the
-    owner out. A trusted browser (session cookie) and phone links don't need the PIN at all."""
+    owner out. A trusted browser (session cookie) and phone links don't need the password at all."""
     rec, lock = _get(s, "approval_pin"), _get(s, f"approval_lock:{client}") or {"fails": 0, "until": 0}
     if not rec or not pin:
         return False
     if lock["until"] > now():
-        raise CommonsError(f"too many wrong PINs: approvals are locked for {int(lock['until'] - now()) // 60 + 1} min")
+        raise CommonsError(f"too many wrong passwords: try again in {int(lock['until'] - now()) // 60 + 1} min")
     ok = hmac.compare_digest(_hash(pin, rec["salt"]), rec["hash"])
     if ok:
         _put(s, f"approval_lock:{client}", {"fails": 0, "until": 0})
@@ -104,7 +143,7 @@ def _fail(s: Store, client: str = "") -> None:
 
 def _session_sig(s: Store, exp: str) -> str:
     from .phone import _secret
-    pin = (_get(s, "approval_pin") or {}).get("hash", "")[:32]  # bound to the PIN: changing it logs every browser out
+    pin = (_get(s, "approval_pin") or {}).get("hash", "")[:32]  # bound to the password: changing it logs every browser out
     return hmac.new(_secret(s), f"approver:{exp}:{pin}".encode(), hashlib.sha256).hexdigest()
 
 
@@ -160,9 +199,9 @@ def answer(s: Store, question_id: str, choice: str, pin: str = "", session: str 
     if choice not in ("yes", "all", "always", "no"):
         raise CommonsError("choose yes, all, always or no")
     if not has_pin(s):
-        raise CommonsError("set your approval PIN first (Setup page, or the box on this page)")
+        raise CommonsError("set your owner password first (the box on this page)")
     if not (session_ok(s, session) or check_pin(s, pin, client)):
-        raise CommonsError("wrong PIN")
+        raise CommonsError("wrong password")
     from . import board as B
     item = B.get(s, question_id)
     if item["status"] not in ("open", "doing", "blocked"):
@@ -188,8 +227,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border-radiu
 dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0}dt{color:var(--mut)}dd{margin:0;word-break:break-word}
 .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}button{min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--line);
 background:var(--card);color:var(--ink);font-weight:600;cursor:pointer}button.ok{background:var(--ok);color:#fff;border-color:var(--ok)}
-button.bad{color:var(--bad)}input{min-height:44px;font-size:18px;letter-spacing:4px;padding:0 12px;border-radius:10px;border:1px solid var(--line);
-background:var(--bg);color:var(--ink);width:180px}.done{color:var(--ok);font-weight:600}.err{color:var(--bad)}
+button.bad{color:var(--bad)}input{min-height:44px;font-size:16px;padding:0 12px;border-radius:10px;border:1px solid var(--line);
+background:var(--bg);color:var(--ink);flex:1 1 220px;min-width:0}.done{color:var(--ok);font-weight:600}.err{color:var(--bad)}
 </style></head><body><main>%(body)s</main><script>
 async function act(choice){const pin=(document.getElementById('pin')||{}).value||'';const r=await fetch(location.pathname,{method:'POST',
 headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({choice,pin})});const d=await r.json();
@@ -197,16 +236,26 @@ if(d.error){document.getElementById('msg').textContent=d.error;document.getEleme
 async function setpin(){const pin=document.getElementById('newpin').value;const r=await fetch(location.pathname,{method:'POST',
 headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({set_pin:pin,code:(document.getElementById('code')||{}).value||''})});const d=await r.json();
 if(d.error){document.getElementById('msg').textContent=d.error;document.getElementById('msg').className='err';return}location.reload()}
+async function signin(){const pin=document.getElementById('pin').value;const r=await fetch('/approve/unlock',{method:'POST',
+headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({pin})});const d=await r.json();
+if(d.error){document.getElementById('msg').textContent=d.error;document.getElementById('msg').className='err';return}location.href='/'}
 </script></body></html>"""
 
 
 def render(s: Store, question_id: str, trusted: bool) -> str:
     e = html.escape
-    if question_id == "pin":  # choose (or change) the approval PIN from Setup, with nothing waiting
+    if question_id == "pin":  # choose the owner password, with nothing waiting
         if not has_pin(s):
-            return PAGE % {"body": '<div class="card"><h1>Approval PIN</h1></div>' + _pin_card()}
-        return PAGE % {"body": '<div class="card"><h1>Approval PIN is set</h1><p class="mut">Change it with '
-                               '<code>commons approvals set-pin</code> on the hub.</p></div>'}
+            return PAGE % {"body": _pin_card(s, "<h1>Make this hub yours</h1>")}
+        return PAGE % {"body": '<div class="card"><h1>The owner password is set</h1><p class="mut">Forgot it? Run '
+                               '<code>commons approvals reset</code> on the hub (in Docker: <code>docker exec commons '
+                               'commons approvals reset</code>), then choose a new one here within 30 minutes.</p></div>'}
+    if question_id == "login":  # the owner locked the dashboard
+        return PAGE % {"body": '<div class="card"><h1>Commons is locked</h1><p class="mut">Sign in with the owner '
+                               'password. This browser then stays signed in for 14 days.</p><div class="row">'
+                               '<input id="pin" type="password" autocomplete="current-password" placeholder="owner password" '
+                               'aria-label="owner password" onkeydown="if(event.key===\'Enter\')signin()" autofocus>'
+                               '<button class="ok" onclick="signin()">Sign in</button></div><p id="msg"></p></div>'}
     try:
         d = details(s, question_id)
     except CommonsError:
@@ -223,32 +272,38 @@ def render(s: Store, question_id: str, trusted: bool) -> str:
         body += f'<div class="card"><p class="done">{e(d.get("answer") or "")}</p>' + \
                 (f'<p class="mut">Ran it: HTTP {e(str(res.get("status")))}</p>' if res else "") + "</div>"
     elif not has_pin(s):
-        body += _pin_card()
+        body += _pin_card(s)
     else:
-        pin = "" if trusted else ('<input id="pin" inputmode="numeric" autocomplete="current-password" '
-                                  'placeholder="PIN" aria-label="approval PIN">')
+        pin = "" if trusted else ('<input id="pin" type="password" autocomplete="current-password" '
+                                  'placeholder="owner password" aria-label="owner password">')
         body += (f'<div class="card"><div class="row">{pin}<button class="ok" onclick="act(\'yes\')">Approve</button>'
                  f'<button onclick="act(\'all\')">Approve similar for 1 h</button>'
                  f'<button onclick="act(\'always\')" title="your risk: change it back on Setup">Always allow this key</button>'
                  f'<button class="bad" onclick="act(\'no\')">Deny</button></div><p id="msg" class="mut">'
-                 f'{"This browser is trusted for approvals." if trusted else "Enter your PIN once; this browser is then trusted for 12 hours."}'
+                 f'{"You are signed in on this browser." if trusted else "Enter your password once; this browser then stays signed in for 14 days."}'
                  '</p></div>')
     return PAGE % {"body": body}
 
 
-def _pin_card() -> str:
-    return ('<div class="card"><p><b>Choose your approval PIN</b> (6 to 12 digits), once. Agents never see it; key '
-            'approvals need it once per browser per 12 hours. To prove you run this hub, enter the setup code from its '
-            'log: <code>docker logs commons | grep "setup code"</code>, or <code>commons approvals code</code> on the hub.'
-            '</p><div class="row"><input id="code" placeholder="setup code" aria-label="setup code" style="letter-spacing:1px">'
-            '<input id="newpin" inputmode="numeric" autocomplete="new-password" placeholder="new PIN" aria-label="new approval PIN">'
-            '<button class="ok" onclick="setpin()">Set PIN</button></div><p id="msg"></p></div>')
+def _pin_card(s: Store, head: str = "") -> str:
+    pw = ('<input id="newpin" type="password" autocomplete="new-password" placeholder="owner password (6+ characters)" '
+          'aria-label="owner password">')
+    if claim_left(s):  # fresh hub: the first visitor claims it, from any browser
+        return (f'<div class="card">{head}<p><b>Choose your owner password.</b> Only the owner can approve agents\' key use and '
+                f'change keys or settings. Anyone can claim this hub for {claim_left(s) // 60 + 1} more minutes, so set it '
+                f'now.</p><div class="row">{pw}<button class="ok" onclick="setpin()">Set password</button></div>'
+                '<p id="msg"></p></div>')
+    return (f'<div class="card">{head}<p><b>Choose your owner password.</b> The 30 minutes to claim this hub have passed. '
+            'Restart Commons (Container Manager, or <code>docker restart commons</code>) and open this page again '
+            'within 30 minutes. Running it headless? Enter the setup code from its log instead.</p>'
+            f'<div class="row"><input id="code" placeholder="setup code (optional)" aria-label="setup code">{pw}'
+            '<button class="ok" onclick="setpin()">Set password</button></div><p id="msg"></p></div>')
 
 
 def unlock(s: Store, pin: str, client: str = "") -> dict:
-    """PIN -> a trusted-browser session for owner-only dashboard changes (approve-everything, the decision chain, keys)."""
+    """Owner password -> a trusted-browser session for owner-only dashboard changes (approve-everything, the decision chain, keys)."""
     if not has_pin(s):
-        raise CommonsError("set your approval PIN first: open /approve/pin")
+        raise CommonsError("set your owner password first: open /approve/pin")
     if not check_pin(s, pin, client):
-        raise CommonsError("wrong PIN")
+        raise CommonsError("wrong password")
     return {"unlocked": True}

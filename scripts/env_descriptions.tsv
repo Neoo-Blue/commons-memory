@@ -138,3 +138,4 @@ COMMONS_AGENT_JUDGE_WAIT	Seconds Commons waits for a connected agent to answer a
 COMMONS_HOOK_GIT	Set to 0 so the hooks on this machine never send the session's git diff to Commons
 COMMONS_AUDIT_KEY_FILE	Ed25519 key that signs audit exports (default COMMONS_HOME/audit_signing.key, created 0600 on first export)
 COMMONS_DASHBOARD_PORT	Dashboard port used to build approval links when no dashboard URL is set on Setup. If Docker maps the dashboard to another host port, or it sits behind a tunnel, set the dashboard URL on Setup instead
+COMMONS_CLAIM_MINUTES	Minutes after Commons starts (or after `commons approvals reset`) during which the first visitor can choose the owner password from the dashboard with no code (default 30). 0 = only with the setup code printed in the hub log

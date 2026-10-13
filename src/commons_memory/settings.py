@@ -21,6 +21,8 @@ DEFAULTS = {
     "auto_approve_all": (False, "Approve everything that would ask me, at my own risk: key uses, password reveals, "
                                 "MCP tool calls, librarian merges and import reviews (keys still go only to their own "
                                 "URLs, and everything is logged)"),
+    "dashboard_lock": (False, "Lock the whole dashboard behind my owner password (each browser signs in once for 14 "
+                              "days; agents keep working through their keys)"),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
     "role_presets": (True, "Use a small model from your first provider key (Claude Haiku with an Anthropic key) for "
                            "planning, knowledge-base summaries and preference extraction, unless you set those roles"),

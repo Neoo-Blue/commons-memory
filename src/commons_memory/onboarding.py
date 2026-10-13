@@ -98,9 +98,9 @@ def status(s: Store) -> dict:
     connected = [a for a in agents if a["connected"]]
     steps = [
         {"step": "Vault ready (keys stored encrypted)", "done": vault_ok, "detail": V.key_source(s) if vault_ok else vault_err},
-        {"step": "Approval PIN set (only you can approve key use)", "done": _pin(s),
-         "detail": "open /approve/pin on this dashboard (the first PIN needs the setup code from the hub's log: "
-                   "`docker logs commons | grep 'setup code'`), or run `commons approvals set-pin` on the hub"},
+        {"step": "Owner password set (only you can approve key use)", "done": _pin(s),
+         "detail": "choose it in the banner at the top of the dashboard (open for 30 minutes after Commons starts; "
+                   "restart Commons to reopen it), or run `commons approvals set-pin` on the hub"},
         {"step": "Decision agent can answer", "done": any(j["ready"] and j["entry"] != "ask" for j in judges),
          "detail": "add a TypeSafe or LLM provider key, or keep 'ask' and decide every credential use yourself"},
         {"step": "Credentials added for your services", "done": bool(user_creds), "detail": f"{len(user_creds)} in the vault"},
