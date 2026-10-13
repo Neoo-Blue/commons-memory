@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.9.2: capture ignores harness notices
+- Background-task notices that a harness relays through the prompt hook (`<task-notification>`, system reminders) are
+  no longer recorded as user prompts or used to trigger a recall search.
+
 ## v0.9.1: quieter capture
 - Capture hooks no longer store a "Session: 0 prompt(s), 0 tool call(s)" summary on turns where nothing happened,
   and a line captured from the transcript tail is stored once per session (consecutive Stop events resend the same

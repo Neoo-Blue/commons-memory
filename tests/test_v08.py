@@ -271,3 +271,14 @@ def test_stop_without_activity_writes_nothing_and_never_repeats_a_line(tmp_path)
     items = s.q("SELECT kind, summary FROM items")
     assert not [i for i in items if (i["summary"] or "").startswith("Session (")], "empty-session summary written"
     assert s.q("SELECT COUNT(*) n FROM items")[0]["n"] - before <= 1, "the same captured line was stored more than once"
+
+
+def test_harness_notices_are_not_user_prompts(tmp_path):
+    from conftest import make_store
+    from commons_memory.capture import Capture
+    s = make_store(tmp_path)
+    aid = s.ensure_agent("cc")
+    Capture(s).event(aid, "prompt", {"session_id": "s2", "project": "p",
+                                     "prompt": "<task-notification> background job finished </task-notification>"},
+                     harness="claude-code")
+    assert not s.q("SELECT 1 FROM observations WHERE session_key LIKE '%s2%' AND kind='prompt'")

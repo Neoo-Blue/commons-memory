@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS capture_settings(
 """
 
 EVENTS = ("session_start", "prompt", "tool", "stop", "session_end", "precompact")
+HARNESS_NOTICES = ("<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>")
 KINDS = ("decision", "bugfix", "discovery", "security_alert", "todo", "change", "summary", "prompt", "tool")
 PRIVATE = re.compile(r"<private>.*?(?:</private>|$)", re.DOTALL | re.IGNORECASE)
 
@@ -176,6 +177,8 @@ class Capture:
             return {"ok": True, "context": self.context(agent_id, project) if st["inject"] else ""}
         if event == "prompt":
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
+            if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
+                return {"ok": True, "context": ""}
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
             return {"ok": True, "context": self.recall(text, project) if st["inject"] else ""}
