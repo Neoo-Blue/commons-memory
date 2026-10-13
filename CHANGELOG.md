@@ -2,6 +2,32 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.10.0: everything remembered, limits respected, nothing dropped
+- **Every message is memory.** Capture hooks store each user message and each agent reply word for word (searchable,
+  with `search(context=N)` returning the turns around a hit), and distilled decisions/todos come on top instead of
+  replacing them. Count-only "Session: N prompt(s)" summaries are gone.
+- **`turn` hook for chat apps** with no hook API (claude.ai, Grok, ChatGPT connectors): one call per turn stores the
+  exchange verbatim and returns the relevant memory before the agent answers.
+- **Quota-aware distribution.** Agents report their 5-hour and weekly windows (`quota_report`, or `commons quota sync`
+  from aiusage). Commons learns your own usage pattern, keeps a reserve for you, routes work only to agents with
+  headroom, learns each task type's cost, and parks work until the earliest reset when everyone is near the limit.
+- **Pause and resume without losing progress.** `subtask_pause` and `quota_exhausted` save a checkpoint; the work
+  comes back after the reset (or to another agent) with the checkpoint in its packet. The agent daemon detects 402/429
+  and usage-limit errors and parks the task instead of retrying.
+- **Scheduled tasks live in Commons.** `schedule_report` registers what an agent runs on a schedule (cron + timezone,
+  how it works, the acceptance bar) and `schedule_ran` reports each run. A missed run, or an owner out of quota past
+  the grace window, is taken over by another agent with the instructions, acceptance bar and last good output.
+  Missed-run takeovers start once the owner has reported a run, and the taker first checks whether the run already
+  happened, so side effects (emails, posts) are never repeated.
+- **Capacity page** in the dashboard: every agent's windows, your reserve, reset timers, and the schedules table.
+- **Ask-Me questions.** `board_add(kind=question)` puts a question for you under "Needs you" on the Board, with what it
+  holds up; your answer goes straight to the asking agent's inbox.
+- **Keep-working Stop hook** (opt-in, `COMMONS_HOOK_KEEP_WORKING=1`): Claude Code keeps going while Commons has tasks
+  for it and quota allows, bounded per session.
+- **Fixes:** imports no longer accept blank memories (every writer now refuses empty content; `text` works as an alias
+  for `content`); agents can `forget` memories they wrote; relayed subagent reports are no longer captured as
+  user prompts; task packets kept the related memory (it was overwritten).
+
 ## v0.9.2: capture ignores harness notices
 - Background-task notices that a harness relays through the prompt hook (`<task-notification>`, system reminders) are
   no longer recorded as user prompts or used to trigger a recall search.

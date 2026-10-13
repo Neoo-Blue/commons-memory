@@ -179,6 +179,10 @@ def _kv(pairs):
     return dict(p.split("=", 1) for p in pairs if "=" in p)
 
 
+QUOTA_ERR = __import__("re").compile(r"\b(402|429)\b|rate.?limit|usage limit|quota|RESOURCE_EXHAUSTED|"
+                                    r"out of (credits|messages)|limit (reached|exceeded)|exceeded your", __import__("re").I)
+
+
 def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)) -> int:
     """Long-poll the mailbox; on messages spawn the agent CLI with a prompt listing them; ack on success."""
     remote = bool(args.url)
@@ -218,7 +222,7 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                   (f"claim_subtask(subtask_id=...) for {', '.join(subs)}, heartbeat while working, complete_subtask "
                    "with the full result" if subs else "claim_subtask() for assigned work") +
                   "; answer questions with msg_send; finish with handoff() and report_usage(). Be concise.")
-        ok = True
+        ok, out = True, ""
         if args.agent_cmd:
             log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}")
             for attempt, pause in enumerate((30, 120, 0)):  # provider blips (a 503) shouldn't park work for the lease
@@ -226,16 +230,32 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                     r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True,
                                        timeout=args.timeout)
                     ok = r.returncode == 0
-                    log((r.stdout or r.stderr or "")[-2000:])
+                    out = (r.stdout or "") + (r.stderr or "")
+                    log(out[-2000:])
                 except (OSError, subprocess.TimeoutExpired) as e:
                     log(f"agent command failed: {e}")
                     ok = False
-                if ok or not pause:
+                if ok or not pause or (out and QUOTA_ERR.search(out)):  # a usage limit won't clear in 30 s
                     break
                 log(f"attempt {attempt + 1} failed; retrying in {pause}s")
                 time.sleep(pause)
         else:
             print(prompt, flush=True)
+        if not ok and out and QUOTA_ERR.search(out):
+            # out of quota: park what this agent holds (with the CLI's last words as the checkpoint) until a reset,
+            # and drop these wakes; the hub re-wakes the work after the reset or hands it to an agent with headroom
+            try:
+                if remote:
+                    from .worker import McpClient
+                    McpClient(args.url.rstrip("/") + "/mcp", args.api_key)._call(
+                        "call", {"tool": "quota_exhausted", "args": {"checkpoint": out[-4000:]}})
+                else:
+                    from .orchestrator import Orchestrator
+                    Orchestrator(store).exhausted(aid, checkpoint=out[-4000:])
+                log(f"{args.agent} hit a usage limit: work parked until its reset")
+                ok = True
+            except Exception as e:  # noqa: BLE001
+                log(f"could not report the usage limit: {e}")
         if ok:
             ack([m["id"] for m in msgs])
 

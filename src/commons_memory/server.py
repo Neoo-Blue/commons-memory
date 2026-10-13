@@ -22,13 +22,19 @@ from .secrets import Broker
 from .store import CommonsError, Store
 
 INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
-0) pickup() and msg_recv() to check in. Your client lists the core tools; tools(query) searches the other ~130 and
+0) Chat app with no hooks (claude.ai, Grok, ChatGPT)? Call turn(user_message, reply=<your previous reply>) at the
+   start of EVERY turn: it saves the exchange automatically and returns what Commons knows; read it before you answer.
+   pickup() and msg_recv() to check in. Your client lists the core tools; tools(query) searches the other ~130 and
    call(tool, args) runs any of them (find, tree, skill_get, submit_task, fs_read, ...).
 1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
 2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
 3) claim_subtask → heartbeat → complete_subtask for assigned work; handoff() before you stop so another AI can resume().
    board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence; check
    board() before you stop: it survives context compaction, your memory of the conversation doesn't.
+   Near a usage limit: subtask_pause(checkpoint) or quota_exhausted(), never abandon work; quota_report your windows.
+   Register your own scheduled tasks with schedule_report and report each run with schedule_ran.
+   Need a decision only the user can make? board_add(kind=question): it waits under "Needs you" and the answer
+   arrives in msg_recv.
 4) Never write secret values; reference them as env://NAME, vault://path#key, op://vault/item/field."""
 
 

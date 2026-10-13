@@ -349,6 +349,19 @@ class Orchestrator:
             ranked = self.profiles.rank(st["type"], exclude)
             if not ranked:
                 continue
+            from . import quota as Q
+            fits, resets = [], []
+            for sc, a in ranked:
+                ok, until, _w = Q.can_take(self.s, a["id"], st["type"])
+                if ok:
+                    fits.append((sc, a))
+                elif until:
+                    resets.append(until)
+            if not fits:  # every capable agent is at its limit (after the user's reserve): wait, lose nothing
+                self.s.x("UPDATE subtasks SET not_before=? WHERE id=?", (min(resets), st["id"]))
+                self.s.audit(None, "subtask.wait_quota", st["id"], {"until": iso(min(resets))})
+                continue
+            ranked = fits
             from .providers import ProviderLayer
             route = ProviderLayer(self.s).route_for(st["type"])
             if route:  # distributor's routing table nudges allocation
@@ -372,8 +385,8 @@ class Orchestrator:
         for st in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND assigned_agent IS NOT NULL "
                            "AND type<>'tally'", (job_id,)):
             st = dict(st)
-            key = f"woke:{st['id']}:{st['attempts']}"  # once per attempt (a rework is a new attempt)
-            if not self._deps_ok(st) or self.s.q("SELECT 1 FROM meta WHERE key=?", (key,)):
+            key = f"woke:{st['id']}:{st['attempts']}:{int(st.get('not_before') or 0)}"  # once per attempt and per pause
+            if not self._deps_ok(st) or (st.get("not_before") or 0) > now() or self.s.q("SELECT 1 FROM meta WHERE key=?", (key,)):
                 continue
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, st["assigned_agent"]))
             kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
@@ -386,8 +399,8 @@ class Orchestrator:
         self.reap()
         rows = [dict(r) for r in self.s.q(
             "SELECT s.* FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.status='pending' AND j.status='running' "
-            "AND s.type<>'tally' AND (s.assigned_agent=? OR s.assigned_agent IS NULL) "
-            "ORDER BY s.priority DESC, s.created_at", (agent_id,))]
+            "AND s.type<>'tally' AND (s.assigned_agent=? OR s.assigned_agent IS NULL) AND COALESCE(s.not_before,0)<=? "
+            "ORDER BY s.priority DESC, s.created_at", (agent_id, now()))]
         from .scheduler import Scheduler
         rows = Scheduler(self.s).order(rows)  # priorities, fair share, project limits/budgets, job deps, pauses
         out = []
@@ -432,6 +445,10 @@ class Orchestrator:
                 (agent_id, now() + lease_seconds, now(), now(), st["id"]))
             if cur.rowcount != 1:  # someone else won the race: no duplicate work
                 return None
+        from . import quota as Q
+        snap = Q.snapshot(self.s, agent_id)
+        if snap:
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"qsnap:{st['id']}", json.dumps(snap)))
         return self.packet(st["id"], agent_id)
 
     def packet(self, subtask_id: str, agent_id: str | None = None, max_tokens: int = 1500) -> dict:
@@ -464,14 +481,18 @@ class Orchestrator:
         if target and target["model"]:
             model = target["model"]
         skills = SkillPool(self.s).suggest(f"{st['type']} {st['title']}")
-        ctx = None
+        pack = None  # (was `ctx = None`, which threw away the related memory gathered above)
         cpr = self.s.q("SELECT value FROM meta WHERE key=?", (f"job_ctx:{job['id']}",))
         if cpr:
             from .contextpacks import ContextStore
             ld = ContextStore(self.s).load(cpr[0]["value"], "L1", 1500, model, agent_id=agent_id)
-            ctx = {"pack_id": ld["pack_id"], "layer": ld["layer"], "tokens": ld["tokens"], "prefix": ld["prefix"] or ld["text"],
-                   "hint": f"context_load('{ld['pack_id']}', layer='L2'|'L3') for more"}
-        return {"context": ctx, "model": model, "effort": (target or {}).get("effort"),
+            pack = {"pack_id": ld["pack_id"], "layer": ld["layer"], "tokens": ld["tokens"], "prefix": ld["prefix"] or ld["text"],
+                    "hint": f"context_load('{ld['pack_id']}', layer='L2'|'L3') for more"}
+        checkpoint = st.get("checkpoint")
+        return {"context": pack, "model": model,
+                **({"resume_from_checkpoint": checkpoint,
+                    "resume_hint": "an earlier attempt paused at its session limit; continue from this checkpoint instead "
+                                   "of starting over"} if checkpoint else {}), "effort": (target or {}).get("effort"),
                 "routing": {k: target[k] for k in ("decision_id", "difficulty", "mode", "rationale")} if target else None,
                 "skills": [f"{x['name']}: {x['description'][:80]}" for x in skills],
                 "subtask_id": st["id"], "job_id": job["id"], "job_title": job["title"], "type": st["type"],
@@ -482,6 +503,61 @@ class Orchestrator:
                 "protocol": "Return your result. Gate tasks (review/red_team/test/vote) must include a line "
                             "'VERDICT: approve' or 'VERDICT: reject'. Add 'LEFTOVER: <text>' lines for unfinished "
                             "items and 'PREFERENCE: <text>' for user preferences you learned."}
+
+    def pause(self, subtask_id: str, agent_id: str, checkpoint: str, resume_at: float | None = None,
+              release: bool = False) -> dict:
+        """Park a claimed subtask with its progress (checkpoint) until resume_at (default: the agent's next quota reset).
+        The same agent picks it up after the reset; release=True lets any agent with headroom take it now. Nothing
+        done so far is lost: the next claim's packet carries `resume_from_checkpoint`."""
+        from . import quota as Q
+        if not (checkpoint or "").strip():
+            raise CommonsError("pause needs a checkpoint: what is done, what is left, where the work is")
+        if resume_at is None and not release:
+            ok, until, _w = Q.can_take(self.s, agent_id)
+            resume_at = until or now() + float(os.environ.get("COMMONS_QUOTA_BACKOFF", "3600"))
+        checkpoint, _ = redact(checkpoint)
+        with self.s.lock:
+            won = self.s.db.execute(
+                "UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, checkpoint=?, not_before=?, "
+                "assigned_agent=?, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
+                (checkpoint[:20000], None if release else resume_at, None if release else agent_id, now(), subtask_id,
+                 agent_id)).rowcount
+        if won != 1:
+            raise CommonsError("subtask is not claimed by you")
+        st = self.s.q("SELECT job_id FROM subtasks WHERE id=?", (subtask_id,))[0]
+        self.s.audit(agent_id, "subtask.pause", subtask_id, {"resume_at": iso(resume_at) if resume_at else None,
+                                                             "release": release})
+        if release:
+            self.allocate(st["job_id"])
+        return {"subtask_id": subtask_id, "paused_until": iso(resume_at) if resume_at and not release else None,
+                "released": release, "checkpoint_chars": len(checkpoint)}
+
+    def exhausted(self, agent_id: str, resets_at: float | None = None, checkpoint: str = "", window: str = "self-reported") -> dict:
+        """An agent hit its limit: record it, and park everything it holds until the reset with its progress."""
+        from . import quota as Q
+        resets_at = resets_at or now() + float(os.environ.get("COMMONS_QUOTA_BACKOFF", "3600"))
+        Q.report(self.s, agent_id, [{"window": window, "used_pct": 100, "resets_at": resets_at}], source="exhausted")
+        held = [r["id"] for r in self.s.q("SELECT id FROM subtasks WHERE claimed_by=? AND status='claimed'", (agent_id,))]
+        for sid in held:
+            self.pause(sid, agent_id, checkpoint or "(paused: the agent hit its usage limit mid-task; no checkpoint text "
+                                                    "was given, so review its last heartbeat/messages)", resets_at)
+        return {"agent_id": agent_id, "until": iso(resets_at), "paused": held}
+
+    def quota_wake(self) -> list[str]:
+        """After a reset time passes: hand waiting work back out (its own agent if it has headroom again, else
+        anyone who does) and wake whoever gets it."""
+        from . import quota as Q
+        woke = []
+        for st in self.s.q("SELECT * FROM subtasks WHERE status='pending' AND not_before IS NOT NULL AND not_before<=?",
+                           (now(),)):
+            st = dict(st)
+            if st["assigned_agent"] and not Q.can_take(self.s, st["assigned_agent"], st["type"])[0]:
+                self.s.x("UPDATE subtasks SET assigned_agent=NULL WHERE id=?", (st["id"],))
+            self.s.x("UPDATE subtasks SET not_before=NULL WHERE id=?", (st["id"],))
+            self.allocate(st["job_id"])
+            self._wake_ready(st["job_id"])
+            woke.append(st["id"])
+        return woke
 
     def heartbeat(self, subtask_id: str, agent_id: str, lease_seconds: int = DEFAULT_LEASE) -> dict:
         with self.s.lock:  # conditional: a late heartbeat must not extend a lease someone else now holds
@@ -552,6 +628,11 @@ class Orchestrator:
                                      agent_id)).rowcount
         if won != 1:
             raise CommonsError("subtask claim expired or was reassigned before completion")
+        snap = self.s.q("SELECT value FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
+        if snap:
+            from . import quota as Q
+            Q.record_cost(self.s, agent_id, st["type"], json.loads(snap[0]["value"]))
+            self.s.x("DELETE FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
         seconds = now() - (st["started_at"] or now())
         tokens = tokens if tokens is not None else estimate_tokens(result)
         job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
@@ -787,7 +868,8 @@ class Orchestrator:
     def run_due(self, force: str | None = None, at: float | None = None) -> list[dict]:
         """Start runs of due recurring tasks; open leftovers from previous runs are carried forward as subtasks."""
         t = at or now()
-        rows = self.s.q("SELECT * FROM recurring WHERE enabled=1 AND (next_run<=? OR name=? OR id=?)", (t, force, force))
+        rows = self.s.q("SELECT * FROM recurring WHERE enabled=1 AND COALESCE(external,0)=0 AND (next_run<=? OR name=? "
+                        "OR id=?)", (t, force, force))
         out = []
         for r in rows:
             # missed-slot accounting (catch-up policy)

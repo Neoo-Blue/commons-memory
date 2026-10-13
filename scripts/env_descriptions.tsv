@@ -96,6 +96,8 @@ COMMONS_RANK_SIM_FLOOR	Minimum cosine similarity for a vector hit (non-hash embe
 COMMONS_EMBED_THREADS	ONNX threads for the fastembed embedder (default: all cores)
 COMMONS_CAPTURE	Global switch for hook auto-capture (0 disables everywhere)
 COMMONS_HOOK_CONTEXT_TOKENS	Token budget of the SessionStart context pack injected by hooks
+COMMONS_HOOK_KEEP_WORKING	Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows
+COMMONS_HOOK_KEEP_WORKING_MAX	Max consecutive keep-working rounds per session before a Stop is allowed (default 5)
 COMMONS_HOOK_RECALL_SIM	Min similarity for prompt-time recall snippets injected by hooks
 COMMONS_HOOK_TIMEOUT	Seconds a hook waits for the server before queueing offline
 COMMONS_RERANK	Second-stage rerank: off, cross-encoder (local fastembed) or llm (role reranker)
@@ -119,3 +121,9 @@ COMMONS_LIBRARIAN_INDEX_EVERY	Seconds between full rebuilds of the librarian's "
 COMMONS_QA_DATES	bench qa-*: `iso` prints memory dates as 2023-05-08 (the v0.9.0 style); default "8 May 2023"
 COMMONS_CALL_TIMEOUT	Seconds a remote CLI/worker call to the hub may take before it fails and is retried by the caller (default 300)
 COMMONS_RESOLVE_DATES	Set to 0 to stop annotating relative time words in results with absolute dates from each memory's own date ("yesterday (7 May 2023)")
+COMMONS_QUOTA_REPORTERS	Agents allowed to report quota windows on behalf of other agents (comma list), e.g. the agent whose key runs `commons quota sync` from aiusage
+COMMONS_QUOTA_RESERVE	Default % of every quota window kept for the user (default 20); per period: COMMONS_QUOTA_RESERVE_5H, _WEEKLY, _DAILY, _MONTHLY; per agent: profile limits.reserve
+COMMONS_QUOTA_RESERVE_5H	User reserve for 5-hour windows, % (default COMMONS_QUOTA_RESERVE)
+COMMONS_QUOTA_RESERVE_WEEKLY	User reserve for weekly windows, % (default COMMONS_QUOTA_RESERVE)
+COMMONS_QUOTA_TASK_PCT	Assumed % of a window one subtask uses until Commons has learned that agent/task type (default 5)
+COMMONS_QUOTA_BACKOFF	Seconds to park work when an agent hits its limit without a known reset time (default 3600)

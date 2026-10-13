@@ -40,6 +40,29 @@ def register_v8(mcp, store, who):
         return _js({"id": r["id"], "kind": kind})
 
     @mcp.tool()
+    def turn(user_message: str = "", reply: str = "", conversation: str = "", project: str = "", agent: str = "",
+             api_key: str = "") -> str:
+        """Hook mode for chat agents with no hook API (claude.ai, Grok, ChatGPT connectors): the same automatic capture
+        and recall Claude Code gets from its hooks. Call it on EVERY turn: turn(user_message=<the user's message>,
+        reply=<your previous reply>) before you answer. It stores the exchange verbatim (and distills the decisions,
+        preferences and todos on top; you don't pick what to save) and returns what Commons already knows that is relevant,
+        so read it before answering. Every message and reply is kept word for word. conversation = a stable id for
+        this chat, if you have one."""
+        aid = me(agent, api_key)
+        import time as _t
+        pl = {"session_id": conversation or f"{aid}:{_t.strftime('%Y%m%d', _t.gmtime())}", "project": project or None}
+        out = {}
+        if reply.strip():
+            r = cap.event(aid, "stop", pl | {"reply": reply, "transcript_tail": "assistant: " + reply[-8000:]}, harness="mcp")
+            out["captured"] = r.get("observations", 0)
+        if user_message.strip():
+            r = cap.event(aid, "prompt", pl | {"prompt": user_message}, harness="mcp")
+            out["context"] = r.get("context") or "Nothing in Commons matches this message."
+        if not out:
+            raise CommonsError("pass user_message (before you answer) and/or reply (your previous answer)")
+        return _js(out)
+
+    @mcp.tool()
     def capture_settings(project: str, enabled: str = "", tools: str = "", prompts: str = "", inject: str = "",
                          agent: str = "", api_key: str = "") -> str:
         """Per-project auto-capture switches (hooks): enabled/tools/prompts/inject = on|off; empty = unchanged."""
@@ -82,9 +105,81 @@ def register_v8(mcp, store, who):
                             goal=goal or None, path=path or None, agent_id=aid))
 
     @mcp.tool()
+    def quota_report(windows: list[dict], for_agent: str = "", agent: str = "", api_key: str = "") -> str:
+        """Report your usage windows so Commons only hands you work you can finish: [{window: "five_hour", used_pct:
+        14, resets_at: "2026-10-13T03:00:00Z"}, {window: "weekly", ...}]. for_agent: report for another agent (only
+        callers listed in COMMONS_QUOTA_REPORTERS, e.g. the machine running `commons quota sync` from aiusage)."""
+        import os as _os
+        from . import quota as Q
+        caller = me(agent, api_key)
+        target = caller
+        if for_agent:
+            t = store.get_agent(for_agent)
+            if not t:
+                raise CommonsError(f"unknown agent {for_agent}")
+            if t["id"] != caller:
+                allowed = {x.strip() for x in _os.environ.get("COMMONS_QUOTA_REPORTERS", "").split(",") if x.strip()}
+                if store.label(caller)[1] not in allowed:
+                    raise CommonsError("only agents in COMMONS_QUOTA_REPORTERS may report quota for other agents")
+            target = t["id"]
+        return _js(Q.report(store, target, windows, source="agent" if target == caller else f"via {store.label(caller)[1]}"))
+
+    @mcp.tool()
+    def quota_status() -> str:
+        """Every agent's windows: used %, the user's reserve (static floor or learned need until reset), what is free
+        for Commons work, reset times, and who can take work now."""
+        from . import quota as Q
+        return _js(Q.status(store))
+
+    @mcp.tool()
+    def subtask_pause(subtask_id: str, checkpoint: str, resume_at: str = "", release: bool = False, agent: str = "",
+                      api_key: str = "") -> str:
+        """Near your session limit? Park a claimed subtask with a checkpoint (what's done, what's left, where the work
+        is). It resumes at resume_at (default: your next quota reset) with the checkpoint in the packet; release=true
+        lets another agent with headroom continue it now."""
+        from .orchestrator import Orchestrator
+        from .store import _parse_time
+        return _js(Orchestrator(store).pause(subtask_id, me(agent, api_key), checkpoint,
+                                             _parse_time(resume_at) if resume_at else None, release))
+
+    @mcp.tool()
+    def quota_exhausted(resets_at: str = "", checkpoint: str = "", agent: str = "", api_key: str = "") -> str:
+        """You hit your usage limit: Commons marks you full until resets_at and parks everything you hold, with the
+        checkpoint, so nothing is lost and the work resumes after the reset (or moves to an agent with headroom)."""
+        from .orchestrator import Orchestrator
+        from .store import _parse_time
+        return _js(Orchestrator(store).exhausted(me(agent, api_key), _parse_time(resets_at) if resets_at else None,
+                                                 checkpoint))
+
+    @mcp.tool()
+    def schedule_report(name: str, cron: str, instructions: str, acceptance: str = "", how: str = "", project: str = "",
+                        tz: str = "UTC", grace_minutes: float = 30, agent: str = "", api_key: str = "") -> str:
+        """Register a task YOU run on a schedule (cron + IANA tz), with the instructions another agent would follow,
+        how it runs (tools, inputs, outputs) and the acceptance bar. Commons watches it: if a run is missed or you are
+        out of quota, another agent takes it over to the same bar. Report each run with schedule_ran."""
+        from . import schedules as SC
+        return _js(SC.register(store, me(agent, api_key), name, cron, instructions, acceptance=acceptance, how=how,
+                               project=project or None, tz=tz, grace_minutes=grace_minutes))
+
+    @mcp.tool()
+    def schedule_ran(name: str, status: str = "ok", summary: str = "", output_ref: str = "", agent: str = "",
+                     api_key: str = "") -> str:
+        """Report a scheduled run (ok | failed | partial). The latest good summary becomes the quality reference a
+        takeover agent must match."""
+        from . import schedules as SC
+        return _js(SC.ran(store, me(agent, api_key), name, status, summary, output_ref))
+
+    @mcp.tool()
+    def schedules(agent_name: str = "") -> str:
+        """Every registered scheduled task: owner, cron/tz, next run, whether the latest run was delivered (by the owner
+        or a takeover), how it runs and its acceptance bar."""
+        from . import schedules as SC
+        return _js(SC.listing(store, agent_name or None))
+
+    @mcp.tool()
     def import_items(items: list[dict] | None = None, check: list[str] | None = None, agent: str = "",
                      api_key: str = "") -> str:
-        """Bulk-import memories (max 500 per call), idempotent by each item's `src` id. Item fields: content*, kind,
+        """Bulk-import memories (max 500 per call), idempotent by each item's `src` id. Item fields: content* (or text), kind,
         title, summary, project, tags, created_at (epoch or ISO), src, preference (-> also a shared user preference),
         status (keep | review = hold in the review queue | drop/merge/duplicate = record only). check=[src...]
         returns which srcs are already handled. `commons import <source> [--curate] --url ...` drives this."""
@@ -98,6 +193,18 @@ def register_v8(mcp, store, who):
         if len(items) > 500:
             raise CommonsError("import_items takes at most 500 items per call")
         return _js(_imp(store, items, agent_id=aid))
+
+    @mcp.tool()
+    def forget(id: str, agent: str = "", api_key: str = "") -> str:
+        """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
+        removed by the user from the dashboard."""
+        aid = me(agent, api_key)
+        r = store.q("SELECT agent_id FROM items WHERE id=?", (id,))
+        if not r:
+            raise CommonsError(f"unknown id {id}")
+        if r[0]["agent_id"] != aid:
+            raise CommonsError("you can only forget memories you wrote; ask the user to remove this one in the dashboard")
+        return _js(store.delete_item(id, agent_id=aid))
 
     @mcp.tool()
     def memory_tier(id: str, tier: str, agent: str = "", api_key: str = "") -> str:

@@ -5,11 +5,17 @@ import json
 import os
 import sys
 
-NOSTORE = {"hook", "hooks", "bench", "import"}
+NOSTORE = {"hook", "hooks", "bench", "import", "quota"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
+    q = sub.add_parser("quota", help="agent usage windows: sync them into a hub from aiusage, or print them")
+    q.add_argument("action", choices=["sync", "status"])
+    q.add_argument("--url", help="Commons MCP url (http://host:8770/mcp); key from $COMMONS_API_KEY")
+    q.add_argument("--aiusage-db", help="aiusage database (default ~/.aiusage/usage.db)")
+    q.add_argument("--map", help="JSON file mapping aiusage provider/window to Commons agents (default "
+                                 "~/.commons/quota-map.json or the built-in map)")
     x = sub.add_parser("import", help="import memories from claude-mem, mem0, Claude Code memory files or sesame "
                                       "(idempotent; locally or into a remote hub with --url)")
     x.add_argument("source", choices=["claude-mem", "mem0", "claude-memory", "sesame", "all"])
@@ -164,6 +170,24 @@ def _import(args) -> int:
 
 def handle_nostore(args) -> int:
     c = args.cmd
+    if c == "quota":
+        from . import quota as Q
+        from .worker import McpClient
+        if not args.url:
+            print("quota needs --url (the hub to sync into / read from)", file=sys.stderr)
+            return 2
+        cli = McpClient(args.url, os.environ.get("COMMONS_API_KEY", ""))
+        if args.action == "status":
+            print(json.dumps(json.loads(cli._call("call", {"tool": "quota_status", "args": {}})), indent=2))
+            return 0
+        mapping = json.load(open(args.map)) if args.map else None
+        sent = {}
+        for agent, wins in Q.from_aiusage(args.aiusage_db, mapping).items():
+            # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
+            cli._call("call", {"tool": "quota_report", "args": {"windows": wins, "for_agent": agent}})
+            sent[agent] = [w["window"] for w in wins]
+        print(json.dumps({"synced": sent}))
+        return 0
     if c == "import":
         return _import(args)
     if c == "hook":

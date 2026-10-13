@@ -208,6 +208,10 @@ def _v5(db):
     tier_columns(db)
     from .board import migrate as board_migrate
     board_migrate(db)
+    from .quota import migrate as quota_migrate
+    quota_migrate(db)
+    from .schedules import migrate as schedules_migrate
+    schedules_migrate(db)
 
 
 _v4e_migrate = migrate

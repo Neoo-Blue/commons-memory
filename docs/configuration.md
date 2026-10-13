@@ -52,6 +52,8 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
 | `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, cli_v7.py, expose.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
+| `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
+| `COMMONS_HOOK_KEEP_WORKING_MAX` | `5` | Max consecutive keep-working rounds per session before a Stop is allowed (default 5) | capture.py |
 | `COMMONS_HOOK_RECALL_SIM` | `0.6` | Min similarity for prompt-time recall snippets injected by hooks | capture.py |
 | `COMMONS_HOOK_TIMEOUT` | `2` | Seconds a hook waits for the server before queueing offline | capture.py |
 | `COMMONS_HOST` | `127.0.0.1` | Default bind address for `commons serve` | cli.py |
@@ -88,6 +90,10 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_PRICES` | — | Path to a JSON price table (USD per 1M tokens) for cost estimates | usage.py |
 | `COMMONS_PUBLIC_URL` | `computed` | Externally visible base URL (OAuth metadata, A2A card, wake links) | connect.py, dashboard.py, server.py |
 | `COMMONS_QA_DATES` | — | bench qa-*: `iso` prints memory dates as 2023-05-08 (the v0.9.0 style); default "8 May 2023" | bench.py |
+| `COMMONS_QUOTA_BACKOFF` | `3600` | Seconds to park work when an agent hits its limit without a known reset time (default 3600) | orchestrator.py |
+| `COMMONS_QUOTA_REPORTERS` | — | Agents allowed to report quota windows on behalf of other agents (comma list), e.g. the agent whose key runs `commons quota sync` from aiusage | server_v8.py |
+| `COMMONS_QUOTA_RESERVE` | `20` | Default % of every quota window kept for the user (default 20); per period: COMMONS_QUOTA_RESERVE_5H, _WEEKLY, _DAILY, _MONTHLY; per agent: profile limits.reserve | quota.py |
+| `COMMONS_QUOTA_TASK_PCT` | `5` | Assumed % of a window one subtask uses until Commons has learned that agent/task type (default 5) | quota.py |
 | `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |

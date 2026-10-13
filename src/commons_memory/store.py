@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS items(
 CREATE INDEX IF NOT EXISTS items_kind ON items(kind, created_at);
 CREATE INDEX IF NOT EXISTS items_proj ON items(project_id, created_at);
 CREATE INDEX IF NOT EXISTS items_fact ON items(subject, predicate);
+CREATE INDEX IF NOT EXISTS items_sess ON items(session_id, created_at);
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(item_id UNINDEXED, title, summary, content, tags,
   tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS embeddings(item_id TEXT PRIMARY KEY, model TEXT, vec BLOB);
@@ -248,6 +249,8 @@ class Store:
                  subject: str | None = None, predicate: str | None = None, value: str | None = None,
                  authenticated: bool = False, created_at: float | None = None,
                  check_conflicts: bool = True) -> dict:
+        if not (content or "").strip() and not (value or "").strip():
+            raise CommonsError("empty memory: `content` has no text")  # every writer routes here; never store a blank row
         content, f1 = redact(content or "")
         title, f2 = redact(title or "")
         summary, f3 = redact(summary or "")

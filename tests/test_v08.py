@@ -109,7 +109,9 @@ def test_capture_pipeline_and_privacy(tmp_path, monkeypatch):
                               "assistant: We decided to use signed cookies instead of server sessions.\n"
                               "assistant: TODO: still need to add a regression test for logout."}, "claude-code")
     kinds = {i["kind"] for i in r["items"]}
-    assert {"bugfix", "decision", "todo", "change", "summary"} <= kinds
+    assert {"bugfix", "decision", "todo", "change"} <= kinds
+    said = [r["content"] for r in s.q("SELECT content FROM items WHERE session_id='claude-code:s1' ORDER BY created_at")]
+    assert said[0] == "fix the login bug [private]" and len(said) == 4   # the prompt and all three replies, word for word
     assert not s.q("SELECT 1 FROM observations WHERE text LIKE '%hunter2%'")
     assert not s.q("SELECT 1 FROM items WHERE content LIKE '%hunter2%'")
     from commons_memory.orchestrator import Orchestrator

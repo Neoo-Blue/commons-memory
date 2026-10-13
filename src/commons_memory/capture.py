@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS capture_settings(
 """
 
 EVENTS = ("session_start", "prompt", "tool", "stop", "session_end", "precompact")
-HARNESS_NOTICES = ("<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>")
+HARNESS_NOTICES = ("<task-notification>", "[SYSTEM NOTIFICATION", "<system-reminder>", "<agent-message",
+                   "Another Claude session sent a message")  # the last two: a subagent's report relayed as a turn
 KINDS = ("decision", "bugfix", "discovery", "security_alert", "todo", "change", "summary", "prompt", "tool")
 PRIVATE = re.compile(r"<private>.*?(?:</private>|$)", re.DOTALL | re.IGNORECASE)
 
@@ -179,9 +180,11 @@ class Capture:
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
             if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
                 return {"ok": True, "context": ""}
+            ctx = self.recall(text, project, skey=skey) if st["inject"] else ""  # before storing, or it finds itself
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
-            return {"ok": True, "context": self.recall(text, project) if st["inject"] else ""}
+                self.verbatim(agent_id, project, skey, harness, "user", text)
+            return {"ok": True, "context": ctx}
         if event == "tool":
             if st["tools"]:
                 tool = payload.get("tool_name") or payload.get("tool") or ("Edit" if payload.get("file_path") else "shell")
@@ -195,8 +198,47 @@ class Capture:
                           {"tool": tool, "file": fpath, "error": err})
             return {"ok": True}
         # stop / session_end / precompact
-        return {"ok": True} | self.flush(agent_id, pid, skey, harness, strip_private(payload.get("transcript_tail", "")),
-                                         final=event != "stop", reason=event)
+        if st["prompts"]:
+            for reply in ([payload["reply"]] if payload.get("reply") else replies(payload.get("transcript_tail", ""))):
+                self.verbatim(agent_id, project, skey, harness, "assistant", reply)
+        out = {"ok": True} | self.flush(agent_id, pid, skey, harness, strip_private(payload.get("transcript_tail", "")),
+                                        final=event != "stop", reason=event)
+        if event == "stop" and payload.get("keep_working"):
+            reason = self.keep_working(agent_id, skey)
+            if reason:
+                out["block"] = reason
+        return out
+
+    def verbatim(self, agent_id, project, skey, harness, role, text) -> str | None:
+        """Everything said is memory: the user's messages and the agent's replies are stored word for word (searchable;
+        search(context=N) brings back the turns around a hit). Distilled observations come on top, never instead."""
+        from .redact import redact
+        text = redact(strip_private(text or "").strip())[0][:20000]
+        if not text or self.s.q("SELECT 1 FROM items WHERE session_id=? AND content=? LIMIT 1", (skey, text)):
+            return None  # each Stop resends the transcript tail: store every message once
+        who = "user" if role == "user" else self.s.label(agent_id)[1] or "agent"
+        return self.s.add_item("memory", text, title=f"[{who}] {' '.join(text.split())[:70]}", project=project,
+                               agent_id=agent_id, session_id=skey, tags=["conversation", role],
+                               meta={"source": f"hook:{harness}", "role": role}, check_conflicts=False)["id"]
+
+    def keep_working(self, agent_id: str, skey: str) -> str:
+        """Opt-in (COMMONS_HOOK_KEEP_WORKING=1 on the client): when work is waiting for this agent and its quota allows,
+        tell the harness not to stop yet. Bounded per session (COMMONS_HOOK_KEEP_WORKING_MAX rounds, default 5)."""
+        from . import quota as Q
+        from .orchestrator import Orchestrator
+        key = f"keepwork:{skey}"
+        row = self.s.q("SELECT value FROM meta WHERE key=?", (key,))
+        n, ts = (json.loads(row[0]["value"]) if row else [0, 0])
+        if now() - ts > 1800:
+            n = 0
+        work = Orchestrator(self.s).claimable(agent_id, 5)
+        if not work or n >= int(os.environ.get("COMMONS_HOOK_KEEP_WORKING_MAX", "5")) or not Q.can_take(self.s, agent_id)[0]:
+            self.s.x("DELETE FROM meta WHERE key=?", (key,))
+            return ""
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps([n + 1, now()])))
+        lines = "\n".join(f"- {w['id']} [{w['type']}] {w['title'][:100]}" for w in work)
+        return (f"Commons has {len(work)} task(s) waiting for you. Claim one with claim_subtask(subtask_id=...), do it, "
+                f"complete_subtask with the full result, then stop:\n{lines}")
 
     def _raw(self, agent_id, pid, skey, harness, event, kind, text, meta):
         from .redact import redact
@@ -225,10 +267,7 @@ class Capture:
             typed = None
         if typed is None:
             typed = heuristic_observations(raw, transcript)
-            prompts = [r["text"] for r in raw if r["kind"] == "prompt"]
-            tools = [r for r in raw if r["kind"] == "tool"]
-            summary = (f"Session ({harness}, {reason}): {len(prompts)} prompt(s), {len(tools)} tool call(s)"
-                       + (f"; first ask: {prompts[0][:200]}" if prompts else "")) if prompts or tools else ""
+            summary = ""  # the verbatim messages already hold what a count-and-first-ask summary said
         made = []
         from .orchestrator import Orchestrator
         orch = None
@@ -291,13 +330,17 @@ class Capture:
             text = text.rsplit("\n", 1)[0]
         return text
 
-    def recall(self, prompt: str, project: str | None, max_tokens: int = 300) -> str:
+    def recall(self, prompt: str, project: str | None, max_tokens: int = 300, skey: str | None = None) -> str:
         if len((prompt or "").split()) < 3:
             return ""
         rep = self._repeated_ask(prompt, project)
-        ids, _, why = self.s.rank(prompt, project=project, limit=5)
+        ids, _, why = self.s.rank(prompt, project=project, limit=8)
         if ids is None:  # project not created yet
             return rep
+        if skey and ids:  # this conversation's own turns are already in the agent's context
+            ph = ",".join("?" * len(ids))
+            mine = {r["id"] for r in self.s.q(f"SELECT id FROM items WHERE id IN ({ph}) AND session_id=?", (*ids, skey))}
+            ids = [i for i in ids if i not in mine]
         good = [i for i in ids if why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_HOOK_RECALL_SIM", "0.6"))
                 or (why.get(i, {}).get("bm25_rank", 99) <= 2 and why.get(i, {}).get("vec_rank", 99) <= 3)]
         if not good:
@@ -348,6 +391,13 @@ def output_for(harness: str, hevent: str, context: str) -> str:
     return context
 
 
+def replies(tail: str) -> list[str]:
+    """The assistant messages in a transcript tail ("user: ..."/"assistant: ..." lines); a message cut off at the
+    start of the tail is skipped (it was stored whole by an earlier Stop)."""
+    parts = re.split(r"(?m)^(user|assistant): ", tail or "")
+    return [parts[i + 1].strip() for i in range(1, len(parts) - 1, 2) if parts[i] == "assistant" and parts[i + 1].strip()]
+
+
 def transcript_tail(path: str | None, max_chars: int = 12000) -> str:
     """Last messages of a JSONL transcript (Claude Code / Codex), text only, private sections stripped."""
     if not path or not os.path.isfile(path):
@@ -392,12 +442,16 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
             payload.get("last_assistant_message") or payload.get("prompt_response") or "")
     payload.pop("transcript_path", None)
     payload.setdefault("project", project_from_cwd(payload.get("cwd") or os.getcwd()))
+    if event == "stop" and os.environ.get("COMMONS_HOOK_KEEP_WORKING") == "1":
+        payload["keep_working"] = True
     url = os.environ.get("COMMONS_URL", "").rstrip("/")
     timeout = float(os.environ.get("COMMONS_HOOK_TIMEOUT", "2"))
     if url:
         res = _post(url, harness, event, payload, timeout)
     else:
         res = _local(harness, event, payload, store_factory)
+    if res and res.get("block") and harness == "claude-code" and hevent == "Stop":
+        return json.dumps({"decision": "block", "reason": res["block"]})  # Claude Code keeps going instead of stopping
     return output_for(harness, hevent, (res or {}).get("context", "")) if res else ""
 
 

@@ -15,7 +15,7 @@ import re
 from .ids import iso, new_id, now
 from .store import CommonsError, Store
 
-KINDS = ("ask", "target", "expectation", "action", "delivered")
+KINDS = ("ask", "target", "expectation", "action", "delivered", "question")
 STATUSES = ("open", "doing", "blocked", "done", "dropped")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS board(
@@ -60,6 +60,8 @@ def add(s: Store, kind: str, text: str, *, project: str | None = None, path: str
         raise CommonsError(f"unknown parent {parent}")
     if status == "done" and not (evidence or "").strip():
         raise CommonsError("an item can only start as done with evidence")
+    if kind == "question":  # an agent needs the user: it blocks until answered and leads the Board's "Needs you"
+        status = "blocked"
     bid, t = new_id("brd"), now()
     s.x("INSERT INTO board(id,project_id,path,kind,text,parent,metric,goal,current,status,evidence,source,repeats,agent_id,"
         "created_at,updated_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)",
@@ -104,6 +106,41 @@ def update(s: Store, item_id: str, *, status: str | None = None, current: str | 
     return get(s, item_id)
 
 
+def answer(s: Store, item_id: str, text: str, by: str = "user") -> dict:
+    """The user answers an agent's question: the answer goes to the asking agent's inbox and the item closes."""
+    r = s.q("SELECT * FROM board WHERE id=?", (item_id,))
+    if not r or r[0]["kind"] != "question":
+        raise CommonsError(f"{item_id} is not a question on the board")
+    if not (text or "").strip():
+        raise CommonsError("write the answer")
+    r = dict(r[0])
+    s.x("UPDATE board SET status='done', evidence=?, updated_at=?, closed_at=? WHERE id=?",
+        (f"answer from {by}: {text.strip()}"[:4000], now(), now(), item_id))
+    if r["agent_id"]:
+        from .messaging import Messaging
+        Messaging(s).send(None, r["agent_id"], f"Answer to your question {item_id} ({r['text'][:120]}):\n{text.strip()}",
+                          mtype="message", subject="answer: " + r["text"][:60], meta={"board": item_id})
+    s.audit(None, "board.answer", item_id, {"by": by})
+    return get(s, item_id)
+
+
+def needs_user(s: Store, project: str | None = None) -> list[dict]:
+    """Open questions for the user, each with what it is holding up (open items under the same ask)."""
+    where, args = "kind='question' AND status IN ('open','doing','blocked')", []
+    if project:
+        where += " AND project_id IS ?"
+        args.append(s.project_id(project))
+    out = []
+    for r in s.q(f"SELECT id FROM board WHERE {where} ORDER BY created_at", args):
+        d = get(s, r["id"])
+        held = s.q("SELECT COUNT(*) n FROM board WHERE parent=? AND id<>? AND status IN ('open','doing','blocked')",
+                   (d["parent"], d["id"])) if d.get("parent") else [{"n": 0}]
+        d["holding_up"] = held[0]["n"]
+        d["blocks"] = get(s, d["parent"])["text"][:160] if d.get("parent") else None
+        out.append(d)
+    return out
+
+
 def get(s: Store, item_id: str) -> dict:
     r = s.q("SELECT * FROM board WHERE id=?", (item_id,))
     if not r:
@@ -136,11 +173,14 @@ def view(s: Store, project: str | None = None, path: str = "", status: str = "op
         kids.setdefault(r["parent"] if r["parent"] in byid else None, []).append(r)
     mark = {"open": "[ ]", "doing": "[~]", "blocked": "[!]", "done": "[x]", "dropped": "[-]"}
     lines, shown, counts = [], [], {}
+    if any(r["kind"] == "question" and r["status"] in OPEN for r in rows):
+        lines.append("NEEDS THE USER: questions marked [?] block their work until answered")
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
 
     def line(r, depth):
-        bits = [f"{'  ' * depth}{mark.get(r['status'], '[ ]')} {r['id']} {r['kind']}"]
+        m = "[?]" if r["kind"] == "question" and r["status"] in OPEN else mark.get(r["status"], "[ ]")
+        bits = [f"{'  ' * depth}{m} {r['id']} {r['kind']}"]
         if r["kind"] == "target" and (r["metric"] or r["goal"]):
             bits.append(f"{r['metric'] or ''} goal {r['goal'] or '?'} now {r['current'] or '?'}:")
         bits.append(r["text"][:240])

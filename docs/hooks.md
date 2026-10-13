@@ -5,9 +5,13 @@ Agents shouldn't have to remember to call memory tools. With hooks installed, Co
 | When | What happens |
 |---|---|
 | **Session start** | injects a token-budgeted context pack: ready subtasks, inbox, leftovers ranked by your expertise, preferences, KB digest, and recent decisions/observations for the project (`COMMONS_HOOK_CONTEXT_TOKENS`, default 1200) |
-| **Prompt submit** | records the prompt, and adds a short "possibly relevant memory" snippet *only* when there's a confident match |
+| **Prompt submit** | stores the prompt word for word as a searchable memory, and adds a short "possibly relevant memory" snippet *only* when there's a confident match |
 | **After each tool call** | appends a compact observation (tool, input, output, error flag, file touched), fire-and-forget |
-| **Stop / session end / pre-compact** | turns the session's raw observations and the transcript tail into **typed observations** |
+| **Stop / session end / pre-compact** | stores each new agent reply word for word, then turns the session's raw observations and the transcript tail into **typed observations** on top |
+
+Every message is kept, not only what a model judged worth keeping: the prompt and reply rows carry the tag
+`conversation`, share the session id, and `search(context=N)` returns the turns around any hit. Each message is
+stored once per session even though every Stop resends the transcript tail. `--prompts off` turns verbatim capture off.
 
 Typed observations are `decision`, `bugfix`, `discovery`, `security_alert`, `todo`, `change` and `summary`. They are
 stored as `observation` items (searchable, graphed, KB-indexed), and they fan out:
@@ -63,5 +67,11 @@ next successful call.
 
 ## Manual observations and the stream
 
-- Agents without hooks can call `observe(kind, text, project, why)`.
+- Chat apps with no hook API (claude.ai, Grok, ChatGPT connectors) call `turn(user_message, reply=<previous reply>)`
+  at the start of every turn. It does what the prompt and Stop hooks do: stores both messages verbatim, distills
+  typed observations, and returns the relevant memory before the agent answers.
+- Agents without hooks can also call `observe(kind, text, project, why)`.
+- Keep-working (Claude Code, opt-in): with `COMMONS_HOOK_KEEP_WORKING=1` in the hook's environment, a Stop is
+  blocked while Commons has tasks waiting for the agent and its quota allows, at most `COMMONS_HOOK_KEEP_WORKING_MAX`
+  (default 5) times in a row per session.
 - `commons observations --project X` (or the MCP tool `memory_stream`) shows the live memory stream.

@@ -216,7 +216,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
                 queued += 1
                 continue
             try:
-                r = s.add_item(it.get("kind") or "memory", it.get("content") or "", title=it.get("title") or "",
+                r = s.add_item(it.get("kind") or "memory", it.get("content") or it.get("text") or "", title=it.get("title") or "",
                                summary=it.get("summary") or "", project=it.get("project"), agent_id=agent_id,
                                tags=it.get("tags"), meta={"src": src, "imported": True},
                                created_at=_epoch(it.get("created_at")), check_conflicts=False)
