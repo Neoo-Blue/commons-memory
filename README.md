@@ -58,6 +58,33 @@ Connect a second AI the same way and it can see the first one's memory immediate
 | **Access & audit** | Project ACLs plus row-level access: one memory, decision, board item or file can be limited to named agents (`restrict`, `remember(visible_to=...)`), and it then disappears from everyone else's search, graph, board, Drive and the shared knowledge base · signed, hash-chained audit export (`commons audit-export`, `audit-verify --key`) that proves nothing was edited, dropped or re-signed · secrets redacted everywhere, keys only through the vault | [docs/configuration.md](docs/configuration.md) |
 | **Operations** | Setup page with a first-run checklist (keys, decision order, credentials, features) · model presets: with one provider key, planning, knowledge-base summaries and preference extraction just work (Haiku with an Anthropic key), summaries cached by content · Message Batches (half price) for curated imports and benchmarks · `commons setup` connects 17 AI clients in one command and `commons doctor --repair` fixes a broken connection · dashboard (30 pages, live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
 
+## What each feature buys you
+Measured where we have numbers (details in [benchmarks/README.md](benchmarks/README.md)); "not benchmarked" means the
+effect is real but not yet measured. Rival columns come from each project's own README and docs (checked 2026-10-13):
+✓ has it, ◐ partial, · doesn't, — not compared.
+
+| Feature | Without it → with it | mem0 | claude-mem | MemPalace | Archify |
+|---|---|---|---|---|---|
+| Hybrid search + neighbouring turns + date resolution | LoCoMo QA 69.5% → **78.8%**; LongMemEval QA 62% → **67%** (temporal 53% → 63%) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
+| Indexed search | p50 at 30k memories 1,383 ms → **68 ms** | — | — | — | · |
+| Lean tool list | tool schemas per session 39.7k → **6.3k tokens** (−84%) | — | — | 45 MCP tools | · |
+| Verbatim capture hooks + `turn()` for chat apps | nothing said is lost to an agent's own summary; Claude Code, Codex, Gemini, Cursor, any chat app | ◐ | ✓ (8+ harnesses) | ✓ (3 clients) | · |
+| Project board | your asks survive compaction and agent switches; asked-twice is counted | · | · | · | · |
+| No duplicate work (`start_work`) | two agents never build the same thing (not benchmarked) | · | · | ✓ claim protocol | · |
+| Work splitting (model, live agent or rules plan it; `split_subtask`) | big jobs run in parallel across agents by strength and usage left; live run: 3 jobs, 4 agents (not benchmarked for speed) | · | · | ✓ task delegation (no planner) | · |
+| Job workspace + recorded diffs | every part's result, diff and GitHub-checked commit in one place; reviewers get the diff | · | ◐ file paths only | ✓ patch submit | · |
+| Credential vault + decision agent | agents never see keys; reads allowed, writes need your ask, the rest asks you | · | · | · | · |
+| Row-level access + signed audit export | one record limited to named agents; tamper-evident, verifiable audit | ◐ scoping by ids | ◐ private tags, unsigned log | ◐ checksummed, unsigned | · |
+| Shared skill pool | any model loads a skill with nothing installed; `skill_help` when it can't run one | ◐ own skills | · | ◐ own skills | · |
+| Messaging + instant wake | daemon agents start within seconds of new work | · | ◐ | ✓ | · |
+| Knowledge base per project | cited digest per project, rebuilt as memory changes | ✓ | ✓ | ◐ no summaries | · |
+| Code graph + diagrams | call graphs, sequence, workflow, lifecycle and architecture diffs from the real index | · | · | ◐ | ✓ |
+| Contradiction flags (TypeSafe) | conflicting notes flagged: precision 1.00, recall 0.97 on 96 pairs | — | — | — | · |
+| Cost controls | Message Batches −50% on imports and benchmarks; prompt caching (cached input ~10% price); KB summaries cached by content | — | — | n/a (no LLM on write) | n/a |
+
+¹ mem0's hosted platform reports LoCoMo 92.5 / LongMemEval 94.4 with its own scorer; that isn't comparable to runs
+scored here with one reader and judge for every system.
+
 ## Architecture
 ```mermaid
 flowchart LR
@@ -223,8 +250,8 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 | Project | Great at | Commons' angle |
 |---|---|---|
 | [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Higher LoCoMo QA in every category (78.8% vs 70.3%, same reader and judge) with no LLM on the write path, plus a code graph, handoffs, a project board, orchestration and secrets; `commons import mem0` brings your memories over |
-| [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture for Claude Code | Same hook-based capture for Claude Code, Codex, Gemini and Cursor, shared by every agent; `commons import claude-mem --curate` imports and cleans its history |
-| [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Higher recall on LoCoMo under MemPalace's own metric (0.708 vs 0.545 dialog-level), plus multi-agent coordination |
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture across 8+ agent harnesses | The same capture shared by every agent, plus orchestration, a vault, a board and a job workspace; `commons import claude-mem --curate` imports and cleans its history |
+| [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks, logstream task coordination | Higher LoCoMo recall under MemPalace's own metric (0.708 vs 0.545 dialog-level); both coordinate agents (claims, diffs, wake), and Commons adds model-planned work splitting, a credential vault, a project board, row-level access and signed audit exports |
 | [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Diagrams come from the real code index and history: code graph with source links pinned to the indexed commit, call and multi-agent sequence diagrams, job workflows, lifecycle state machines with real transition counts, and an architecture diff between any two snapshots, plus communities, impact paths and a cluster map |
 | [Graphiti / Zep](https://github.com/getzep/graphiti) | Temporal knowledge graph | Inspired Commons' conflict and supersede model |
 | [Cognee](https://github.com/topoteretes/cognee) | Rich document graphs | Commons is a lighter single-file hub |
