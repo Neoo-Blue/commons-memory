@@ -175,7 +175,7 @@ TROUBLESHOOTING = [
      "restart the client (or toggle the server off/on in its MCP settings) after upgrading Commons."},
     {"symptom": "Connected but never picks up work / says it will check every few minutes", "fix": "A chat window can't "
      "run while idle, so it only sees work when you talk to it. For instant pickup run the agent daemon on the agent's "
-     "machine (see 'Instant wake' above): it holds an open connection and starts the agent CLI within a second of being "
+     "machine (the instant-wake step of the setup command): it holds an open connection and starts the agent CLI within a second of being "
      "assigned work or summoned. Or register a wake channel so Commons pings it: `commons connect <name> --wake "
      "ntfy:topic=...` (also webhook, slack, telegram, email, command)."},
     {"symptom": "Last seen never updates", "fix": "Run the verification command: OK means the server saw the key. If it "
