@@ -52,13 +52,25 @@ def register_v7(mcp, store, who):
         sender = me(agent, api_key)
         res = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None, reply_to=reply_to or None,
                        project=project or None)
-        return _js(res | recipient_status(store, to, sender))
+        out = res | recipient_status(store, to, sender)
+        if to != "*":  # handing work off? show what Commons already knows, so the sender can often just do it
+            from .capture import Capture
+            known = Capture(store).recall(f"{subject} {body}"[:2000], project or None, max_tokens=400)
+            if known.strip():
+                out["commons_knows"] = known.strip()
+                out["hint"] = "You may not need another agent: check this first, and do it yourself if you can."
+        return _js(out)
 
     @mcp.tool()
     def msg_recv(wait: float = 0, limit: int = 20, ack: bool = False, types: list[str] | None = None,
                  agent: str = "", api_key: str = "") -> str:
         """Your unacked messages (at-least-once). wait = long-poll seconds (<=60). Ack with msg_ack after handling."""
-        return _js(msg.recv(me(agent, api_key), wait=min(wait, 25), limit=limit, ack=ack, types=types))
+        from .server import playbook_once
+        aid = me(agent, api_key)
+        pb = playbook_once(store, aid)
+        if pb:  # agents that only poll their mail get the routine here (pickup/turn deliver it too)
+            msg.send(None, store.label(aid)[1], pb, mtype="fyi", subject="Commons playbook (new or updated): follow it")
+        return _js(msg.recv(aid, wait=min(wait, 25), limit=limit, ack=ack, types=types))
 
     @mcp.tool()
     def msg_ack(ids: list[int], agent: str = "", api_key: str = "") -> str:

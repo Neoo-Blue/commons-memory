@@ -299,3 +299,18 @@ def test_message_to_an_agent_that_isnt_running_says_who_is(store):
     store.x("INSERT INTO wake_channels(id,agent_id,kind,config,secret,enabled,created_at,failures) "
             "VALUES('w1',?,'webhook','{}','',1,0,0)", (chat,))
     assert recipient_status(store, "chatbot2", a)["recipient_live"] is True
+
+
+def test_mail_only_agents_get_the_playbook_and_handoffs_show_what_commons_knows(store):
+    import asyncio
+    from commons_memory.server import build_server
+    srv = build_server(store)
+    tool = lambda n, **a: json.loads(asyncio.run(srv._tool_manager.get_tool(n).fn(**a)))  # noqa: E731
+    store.ensure_agent("poller"), store.ensure_agent("helper2")
+    store.add_item("memory", "AltMount at http://192.168.50.202:8080/api/health lists recently imported files without a key")
+    got = tool("msg_recv", agent="poller")
+    assert any("COMMONS PLAYBOOK" in json.dumps(m) for m in (got if isinstance(got, list) else got.get("messages", [])))
+    assert "COMMONS PLAYBOOK" not in json.dumps(tool("msg_recv", agent="poller"))     # once per version
+    sent = tool("msg_send", to="helper2", agent="poller", type="task",
+                body="please check which files AltMount recently imported via its api health endpoint")
+    assert "api/health" in sent.get("commons_knows", "") and "do it yourself" in sent["hint"]
