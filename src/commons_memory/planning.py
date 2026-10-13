@@ -16,7 +16,8 @@ from .store import Store
 TYPES = ("research", "plan", "code", "review", "test", "red_team", "debate", "judge", "summarize", "write", "general")
 FORMAT = ("Return ONLY a JSON array of {\"key\",\"type\",\"title\",\"body\",\"deps\":[keys],\"gates\":[keys]}. "
           f"Types: {', '.join(TYPES)}. Put review/test/red_team keys in the \"gates\" of the work they check. Each body "
-          "must stand on its own: an agent sees only its part and the results of the parts it depends on. Don't name "
+          "must stand on its own (an agent sees only its part and the results of the parts it depends on) and stay "
+          "under 120 words. Don't name "
           "agents: Commons assigns each part to the agent best at it with usage to spare. A small task is one node.")
 SYSTEM = "ROLE: planner. You split work for a team of AI agents in Commons. Follow the output format exactly."
 
@@ -67,11 +68,14 @@ def parse(text: str) -> list[dict] | None:
 def llm(s: Store, model: str, task: str) -> list[dict] | None:
     from .providers import ProviderLayer
     try:
-        out = ProviderLayer(s).chat(model, prompt(s, task), system=SYSTEM, max_tokens=2500, role="planner")
+        out = ProviderLayer(s).chat(model, prompt(s, task), system=SYSTEM, max_tokens=8000, role="planner")
     except Exception as e:  # noqa: BLE001 - no key, quota, outage: the next entry plans
         s.audit(None, "plan.error", model, str(e)[:200])
         return None
-    return parse(out.get("text") or "")
+    dag = parse(out.get("text") or "")
+    if not dag:  # usually a plan cut off at max_tokens; the next entry plans instead
+        s.audit(None, "plan.unparsed", model, (out.get("text") or "")[-300:])
+    return dag
 
 
 def agent_brief(s: Store, task: str) -> str:

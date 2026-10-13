@@ -2,6 +2,11 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.21.1: the model planner no longer runs out of room
+- Haiku writes thorough part briefs and hit the planner's 2,500-token output cap mid-plan on the first live job, so
+  the cut-off plan was rejected and a live agent planned instead. The cap is now 8,000 tokens, briefs are asked to stay
+  under 120 words, and an unusable model plan is logged (`plan.unparsed`) before the next entry plans.
+
 ## v0.21.0: big work is split across the agents automatically
 - **A model plans, else a live agent, else the rules.** `submit_task` (and the dashboard) walks a new plan chain, set
   on the Setup page like the decision chain: the model set for the planner role, any provider/model with a key
