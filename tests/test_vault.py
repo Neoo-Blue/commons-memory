@@ -111,3 +111,14 @@ def test_locked_vault(store, monkeypatch):
     monkeypatch.delenv("COMMONS_VAULT_KEY", raising=False)
     with pytest.raises(CommonsError, match="locked"):
         V.add(store, "plex", SECRET, "plex", ["http://x/"], {"bearer": True})
+
+
+def test_basic_auth_header(store, svc, monkeypatch):
+    base, seen = svc
+    V.add(store, "dsh", "pw-123456", "dsh", [base], {"basic": "aerkin"})
+    captured = {}
+    import urllib.request
+    real = urllib.request.urlopen
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=30: captured.setdefault("h", req.headers) and real(req, timeout=timeout))
+    V.call(store, dict(store.q("SELECT * FROM vault_creds WHERE name='dsh'")[0]), "GET", base + "/x")
+    assert captured["h"]["Authorization"] == "Basic " + base64.b64encode(b"aerkin:pw-123456").decode()

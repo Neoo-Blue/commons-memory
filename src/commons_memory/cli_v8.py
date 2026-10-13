@@ -16,7 +16,7 @@ def add_parsers(sub) -> None:
     v.add_argument("name", nargs="?")
     v.add_argument("--service", help="service name shown to agents and the judge, e.g. plex")
     v.add_argument("--base-url", action="append", default=[], help="URL prefix the key may be sent to (repeatable)")
-    v.add_argument("--auth", default="bearer", help="bearer | header:NAME | header:NAME:PREFIX | query:PARAM")
+    v.add_argument("--auth", default="bearer", help="bearer | basic:USER | header:NAME | header:NAME:PREFIX | query:PARAM")
     v.add_argument("--extra-header", action="append", default=[], help="NAME:VALUE sent with every call (repeatable)")
     v.add_argument("--risk", default="normal", choices=["low", "normal", "high"],
                    help="high = every write goes to the user; low = reads need no judgment")
@@ -278,7 +278,7 @@ def handle(args, store) -> int:
             kind, _, rest = args.auth.partition(":")
             name, _, prefix = rest.partition(":")
             auth = {"bearer": True} if kind == "bearer" else {"query": name} if kind == "query" else \
-                {"header": name, **({"prefix": prefix} if prefix else {})}
+                {"basic": name} if kind == "basic" else {"header": name, **({"prefix": prefix} if prefix else {})}
             if args.extra_header:
                 auth["extra_headers"] = dict(h.split(":", 1) for h in args.extra_header)
             print(json.dumps(V.add(store, args.name, sys.stdin.read(), args.service or args.name, args.base_url, auth,

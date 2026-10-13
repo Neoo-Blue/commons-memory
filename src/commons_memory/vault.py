@@ -82,7 +82,8 @@ def _value(s: Store, name: str) -> str:
 def add(s: Store, name: str, value: str, service: str, base_urls: list[str], auth: dict, description: str = "",
         risk: str = "normal") -> dict:
     """Admin only (CLI on the hub): store a credential. auth: {"header": "X-Plex-Token"} | {"query": "apikey"} |
-    {"bearer": true} | {"header": "Authorization", "prefix": "Token "}, optional "extra_headers"."""
+    {"bearer": true} | {"basic": "username"} (value = password) | {"header": "Authorization", "prefix": "Token "},
+    optional "extra_headers"."""
     if not re.fullmatch(r"[a-z0-9_]{2,40}", name or ""):
         raise CommonsError("name: 2-40 chars of a-z, 0-9, _")
     value = (value or "").strip()
@@ -91,8 +92,8 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     urls = [u.rstrip("/") + "/" for u in base_urls if urllib.parse.urlparse(u).scheme in ("http", "https")]
     if not urls:
         raise CommonsError("give at least one http(s) base URL the key may be sent to")
-    if not any(k in auth for k in ("header", "query", "bearer")):
-        raise CommonsError("auth needs header, query or bearer")
+    if not any(k in auth for k in ("header", "query", "bearer", "basic")):
+        raise CommonsError("auth needs header, query, bearer or basic")
     if risk not in ("low", "normal", "high"):
         raise CommonsError("risk is low, normal or high")
     s.x("INSERT OR REPLACE INTO vault_creds(name,service,description,base_urls,auth,risk,secret,created_at,updated_at) "
@@ -197,6 +198,9 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
         url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode({auth["query"]: value})
     elif auth.get("bearer"):
         headers["Authorization"] = "Bearer " + value
+    elif auth.get("basic"):
+        import base64
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{auth['basic']}:{value}".encode()).decode()
     else:
         headers[auth["header"]] = auth.get("prefix", "") + value
     if content_type:

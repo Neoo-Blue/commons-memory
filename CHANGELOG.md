@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.11.1: Basic auth in the vault
+- The vault can attach a key as HTTP Basic auth (`--auth basic:USER`, the stored value is the password), for web UIs
+  and WebDAV.
+
 ## v0.11.0: Commons is the vault
 - **Credential vault with a decision agent.** Commons stores the user's API keys itself, encrypted (AES-GCM, bound to
   each name) with a master key kept outside the database. Agents list them with `credentials()` and use one with
