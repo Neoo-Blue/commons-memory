@@ -55,3 +55,17 @@ def test_start_work_says_ok_busy_or_done_in_one_field(store):
     a, b = store.ensure_agent("a"), store.ensure_agent("b")
     assert W.start(store, a, "shared claim for the feature test", "p")["status"] == "ok"
     assert W.start(store, b, "shared claim for the feature test", "p")["status"] == "busy"
+
+
+def _wakes(store, sid):
+    return [store.label(r["recipient"])[1] for r in store.q("SELECT recipient FROM messages WHERE body LIKE ?", (f"%{sid}%",))]
+
+
+def test_a_delegated_task_wakes_only_the_agent_it_was_given_to(store):
+    sender, rec, star = (store.ensure_agent(n) for n in ("sender", "muse", "star"))
+    o = Orchestrator(store)
+    store.x("UPDATE agents SET profile=? WHERE id=?", ('{"expertise": {"general": 1.0}}', star))  # router's pick
+    d = o.delegate(sender, "muse", "check the feature test", reroute=False)
+    assert d["assigned_to"] == "muse" and _wakes(store, d["subtask_id"]) == ["muse"]
+    d = o.delegate(sender, "muse", "nobody is live, so it falls back to muse")
+    assert d["assigned_to"] == "muse" and _wakes(store, d["subtask_id"]) == ["muse"]

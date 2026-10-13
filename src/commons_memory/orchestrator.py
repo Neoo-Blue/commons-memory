@@ -226,13 +226,14 @@ class Orchestrator:
                             "title": f"Leftover: {lo['text'][:100]}", "body": lo["text"], "deps": [],
                             "priority": lo.get("priority", 1), "leftover_id": lo["id"]})
         keys = {d["key"] for d in dag}
-        pins = {}
+        pins, soft = {}, {}  # agent: chosen by the submitter, retries stay; assign: first try only (delegate)
         for d in dag:
-            if d.get("agent"):  # the submitter chose who does this node: no routing, and retries stay with them
-                a = self.s.get_agent(d["agent"])
-                if not a:
-                    raise CommonsError(f"subtask {d['key']}: unknown agent {d['agent']}")
-                pins[d["key"]] = a["id"]
+            for field, into in (("agent", pins), ("assign", soft)):
+                if d.get(field):
+                    a = self.s.get_agent(d[field])
+                    if not a:
+                        raise CommonsError(f"subtask {d['key']}: unknown agent {d[field]}")
+                    into[d["key"]] = a["id"]
         for d in dag:
             for k in d.get("deps", []) + d.get("gates", []):
                 if k not in keys:
@@ -269,10 +270,12 @@ class Orchestrator:
                       ids[gate_of[d["key"]]] if d["key"] in gate_of else None, "pending", d.get("priority", 0),
                       _j(d.get("budget", per)), d.get("max_attempts", 3), now(), now()))
             self.s.relate(ids[d["key"]], jid, "part_of")
-            if d["key"] in pins:
-                self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (pins[d["key"]], ids[d["key"]]))
-                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{ids[d['key']]}", pins[d["key"]]))
-                self.s.relate(ids[d["key"]], pins[d["key"]], "assigned_to")
+            chosen = pins.get(d["key"]) or soft.get(d["key"])
+            if chosen:  # set before allocate() runs, so the first wake goes to this agent
+                self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (chosen, ids[d["key"]]))
+                self.s.relate(ids[d["key"]], chosen, "assigned_to")
+                if d["key"] in pins:
+                    self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{ids[d['key']]}", chosen))
             if d.get("leftover_id"):
                 self.s.x("UPDATE leftovers SET status='carried', carried_to=?, updated_at=? WHERE id=?",
                          (ids[d["key"]], now(), d["leftover_id"]))
@@ -779,26 +782,27 @@ class Orchestrator:
             except Exception:  # noqa: BLE001 - the result is stored either way
                 pass
 
-    def delegate(self, sender: str, recipient: str, body: str, title: str = "", project: str | None = None) -> dict:
+    def delegate(self, sender: str, recipient: str, body: str, title: str = "", project: str | None = None,
+                 reroute: bool = True) -> dict:
         """A task one agent hands another becomes a tracked job (it shows as running, has a lease, and is reassigned if
         it stalls). It goes to the recipient when the recipient is live; otherwise to the best live agent, so it never
-        waits on an agent that only runs when its user opens it."""
+        waits on an agent that only runs when its user opens it. reroute=False: only the recipient, retries included."""
         from .messaging import LIVE_MODES, presence
         rec = self.s.get_agent(recipient)
         title = (title or body.split("\n", 1)[0])[:120]
-        job = self.submit(body, pattern="parallel", project=project, agent_id=sender, title=title,
-                          dag=[{"key": "only", "type": "general", "title": title, "body": body, "deps": []}])
-        sid = self.s.q("SELECT id FROM subtasks WHERE job_id=?", (job["job_id"],))[0]["id"]
         live = lambda aid: presence(self.s, aid)["wake_mode"] in LIVE_MODES  # noqa: E731
-        to = rec["id"] if rec and live(rec["id"]) else None
+        to = rec["id"] if rec and (live(rec["id"]) or not reroute) else None
         if not to:
             for _sc, a in self.profiles.rank("general", {sender, rec["id"] if rec else ""}):
                 if live(a["id"]):
                     to = a["id"]
                     break
         to = to or (rec["id"] if rec else None)
-        self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (to, sid))
-        self._wake_ready(job["job_id"])
+        node = {"key": "only", "type": "general", "title": title, "body": body, "deps": []}
+        if to:  # chosen before submit: allocate() would otherwise route it and wake someone else first
+            node["assign" if reroute else "agent"] = to
+        job = self.submit(body, pattern="parallel", project=project, agent_id=sender, title=title, dag=[node])
+        sid = self.s.q("SELECT id FROM subtasks WHERE job_id=?", (job["job_id"],))[0]["id"]
         who = self.s.label(to)[1] if to else None
         return {"job_id": job["job_id"], "subtask_id": sid, "assigned_to": who,
                 "rerouted": bool(rec and to != rec["id"]),

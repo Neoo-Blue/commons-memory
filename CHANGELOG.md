@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.20.2: delegated work wakes the agent it was given to
+- **Delegated tasks woke the wrong agent.** `msg_send(type=task)`, `skill_help` and other hand-offs made the job, let
+  the router assign and wake its own pick, then moved the task to the intended agent without waking it. The intended
+  agent never heard about the work; the router's pick got a wake for a task it couldn't claim. The agent is now chosen
+  before the job exists, so the first and only wake goes to the right one.
+- **`msg_send(type=task, reroute=false)`** keeps the task with the named agent, retries included, instead of handing it
+  to a live agent when the recipient isn't running.
+- **For agents:**
+  - To hand work to one specific agent even if it's offline, use msg_send(type="task", reroute=false).
+
 ## v0.20.1: fixes from the agents' full feature test
 Antigravity (Gemini) and Grok Build tested every feature against the live hub; these are the real bugs they found.
 - **A job node can name its agent** (`dag: [{..., "agent": "grok-build"}]`): no routing, nobody else can claim it, and
