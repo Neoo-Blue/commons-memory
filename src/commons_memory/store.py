@@ -466,18 +466,21 @@ class Store:
         seen = {r["id"] for r in out["results"]}
         extra, used = [], 0
         for r in out["results"]:
-            me = self.q("SELECT session_id, created_at, rowid AS rid FROM items WHERE id=?", (r["id"],))
+            me = self.q("SELECT session_id, created_at FROM items WHERE id=?", (r["id"],))
             if not me or not me[0]["session_id"]:
                 continue
-            sid, ts, rid = me[0]["session_id"], me[0]["created_at"], me[0]["rid"]
-            near = self.q("SELECT * FROM (SELECT id, summary, created_at, rowid AS rid FROM items WHERE session_id=? AND "
-                          "superseded_by IS NULL AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at "
-                          "DESC, rowid DESC LIMIT ?) UNION ALL SELECT * FROM (SELECT id, summary, created_at, rowid AS rid "
-                          "FROM items WHERE session_id=? AND superseded_by IS NULL AND (created_at > ? OR (created_at = ? AND "
-                          "rowid > ?)) ORDER BY created_at, rowid LIMIT ?)", (sid, ts, ts, rid, n, sid, ts, ts, rid, n))
+            sid, ts, iid = me[0]["session_id"], me[0]["created_at"], r["id"]
+            # ids start with a millisecond timestamp, so (created_at, id) is insertion order on SQLite and Postgres alike
+            before = self.q("SELECT id, summary, created_at FROM items WHERE session_id=? AND superseded_by IS NULL AND "
+                            "(created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?",
+                            (sid, ts, ts, iid, n))
+            after = self.q("SELECT id, summary, created_at FROM items WHERE session_id=? AND superseded_by IS NULL AND "
+                           "(created_at > ? OR (created_at = ? AND id > ?)) ORDER BY created_at, id LIMIT ?",
+                           (sid, ts, ts, iid, n))
+            near = list(before) + list(after)
             hidden = self.hidden_ids([x["id"] for x in near])
             ctx = [{"id": x["id"], "summary": x["summary"], "created_at": iso(x["created_at"])}
-                   for x in sorted(near, key=lambda x: (x["created_at"], x["rid"])) if x["id"] not in seen | hidden]
+                   for x in sorted(near, key=lambda x: (x["created_at"], x["id"])) if x["id"] not in seen | hidden]
             x_ts = {x["id"]: x["created_at"] for x in near}
             for c in ctx:
                 t = estimate_tokens(c["summary"] or "") + 4

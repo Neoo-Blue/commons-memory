@@ -305,8 +305,8 @@ class Capture:
         w = _words(prompt)
         pid = self.s.project_id(project) if project else None
         hits = []
-        for r in self.s.q("SELECT id, text, repeats FROM board WHERE kind='ask' AND status IN ('open','doing','blocked') "
-                          "AND (project_id IS ? OR ? IS NULL)", (pid, pid)):
+        rows = self.s.q("SELECT id, text, repeats, project_id FROM board WHERE kind='ask' AND status IN ('open','doing','blocked')")
+        for r in (x for x in rows if not pid or x["project_id"] == pid):
             o = _words(r["text"])
             if w and o and len(w & o) / len(w | o) >= 0.5:
                 self.s.x("UPDATE board SET repeats=repeats+1, updated_at=? WHERE id=?", (now(), r["id"]))
