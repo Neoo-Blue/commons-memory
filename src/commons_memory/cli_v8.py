@@ -105,7 +105,7 @@ def add_parsers(sub) -> None:
     x.add_argument("--workers", type=int, default=4)
     x.add_argument("--rerank", action="store_true")
     x = sub.add_parser("diagram", help="interactive HTML diagram (code graph or job plan)")
-    x.add_argument("kind", choices=["code", "job", "delta"])
+    x.add_argument("kind", choices=["code", "job", "workflow", "sequence", "lifecycle", "delta"])
     x.add_argument("target", nargs="?", default="", help="project (code) or job id (job)")
     x.add_argument("-o", "--out", default="")
     x = sub.add_parser("fact", help="temporal facts: set / invalidate / history / as-of")

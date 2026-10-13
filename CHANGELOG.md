@@ -2,6 +2,25 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.18.0: the diagrams Archify had, and memory writes that can't half-happen
+- **Sequence diagrams**: `diagram sequence <job id>` shows how a job moved between agents (submit, assign, claim,
+  result, review verdicts, messages); `diagram sequence <function>` shows its call path through the code index.
+- **Lifecycle diagrams**: `diagram lifecycle subtask|board` draws the real state machine, with how often each
+  transition happened, from history.
+- **Workflow diagrams**: `diagram workflow <job id>` (the job plan, as before under `job`).
+- **Source links pinned to a commit**: code diagrams link each file and symbol to GitHub at the exact commit that was
+  indexed (`commons index` records the remote and the full commit).
+- **Architecture diff between any two snapshots**: `diagram delta project:from:to` with positions or commit prefixes
+  (default: the last two).
+- **Atomic memory writes**: a memory, its search entry, its vector and its graph links are written in one
+  transaction, and the embedding is computed before the transaction opens, so a crash can't leave a half-written
+  memory.
+- **Lighter for every agent**: the core tool list is 28 tools (4.4k tokens a session, from 6.1k); one-time tools such
+  as set_profile, vault_deposit, vault_generate, handover_status and whats_new stay one `call()` away.
+- **For agents:**
+  - set_profile, vault_deposit, vault_generate, handover_status, whats_new, status_update, subtask_pause and
+    context_load are no longer in your tool list: run them with call(tool, args); tools(query) finds them.
+
 ## v0.17.1: one question per request
 - An agent asking again for the same credential write points at the question already waiting under Needs you instead
   of adding another one.

@@ -433,8 +433,10 @@ def register_v8(mcp, store, who):
 
     @mcp.tool()
     def diagram(kind: str, target: str = "") -> str:
-        """Write an interactive HTML diagram to Commons Drive: kind=code (target=project), job (target=job id) or
-        delta (target=project: files and dependencies added/removed since the previous index). Returns the Drive path."""
+        """Write an interactive HTML diagram to Commons Drive. kind: code (target=project; source links pinned to the
+        indexed commit), workflow (target=job id), sequence (target=job id for how it moved between agents, or a
+        function name for its call path), lifecycle (target=subtask|board: real state machine with transition counts),
+        delta (target=project or project:from:to snapshot positions/commits). Returns the Drive path."""
         from .diagrams import make
         html = make(store, kind, target)
         from .drive import Drive

@@ -97,14 +97,21 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
             store.db.execute("ROLLBACK")
             raise
     import subprocess
-    try:  # pin source badges to the commit that was indexed
-        head = subprocess.run(["git", "-C", str(rootp), "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                              timeout=5).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        head = ""
+
+    def git(*a):
+        try:
+            return subprocess.run(["git", "-C", str(rootp), *a], capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    head = git("rev-parse", "--short", "HEAD")  # pin source badges to the commit that was indexed
     if head:
         store.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"codecommit:{pid}", head))
         stats["commit"] = head
+        full, origin = git("rev-parse", "HEAD"), git("remote", "get-url", "origin")
+        m = re.match(r"(?:git@github\.com:|https://github\.com/)([\w.-]+/[\w.-]+?)(?:\.git)?$", origin)
+        if full and m:  # commit-pinned links to the exact source on GitHub
+            store.x("INSERT OR REPLACE INTO meta VALUES(?,?)",
+                    (f"codesource:{pid}", f"https://github.com/{m.group(1)}/blob/{full}/"))
     try:  # file-level architecture snapshot for `diagram delta`
         from .diagrams import snapshot
         snapshot(store, project)

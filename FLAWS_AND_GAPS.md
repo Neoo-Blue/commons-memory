@@ -112,6 +112,7 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Free-text contradictions | Only structured facts (subject/predicate) were checked | Librarian asks TypeSafe about each new note vs its 3 nearest (precision 1.00 / recall 0.97 on 96 pairs) | `test_librarian_flags_free_text_contradictions_once` |
 
 ### Fixed since v0.9
+- Archify parity (v0.18): sequence diagrams (a job between agents, or a function's call path), workflow (job plan), lifecycle state machines with transition counts from history, source links pinned to the indexed commit, and an architecture diff between any two snapshots.
 - `add_item` is one transaction (v0.18): a crash can no longer leave a memory without its index, vector or graph links.
 
 ### Still open after v0.9
@@ -121,7 +122,6 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Context costs reader tokens | `context=2` lifted LoCoMo QA from 69.5% to 78.8% (beating mem0 70.3% in every category) but gives the reader ~2.5x more text; `context=0` stays the default for search. |
 | Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
 | Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |
-| Archify parity | Graphs are real and analysed, but there are no sequence, workflow or lifecycle diagram types, no commit-pinned source badges and no architecture diff between snapshots yet. |
 | Instant wake for chat-only AIs | A browser chat can't run while idle. Commons wakes daemon-backed agents instantly; chat agents see work on their next `msg_recv`. |
 | Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). |
 | Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |

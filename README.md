@@ -223,7 +223,7 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 | [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Higher LoCoMo QA in every category (78.8% vs 70.3%, same reader and judge) with no LLM on the write path, plus a code graph, handoffs, a project board, orchestration and secrets; `commons import mem0` brings your memories over |
 | [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture for Claude Code | Same hook-based capture for Claude Code, Codex, Gemini and Cursor, shared by every agent; `commons import claude-mem --curate` imports and cleans its history |
 | [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Higher recall on LoCoMo under MemPalace's own metric (0.708 vs 0.545 dialog-level), plus multi-agent coordination |
-| [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Graphs come from the real code index and memory, with communities, impact paths and a cluster map; Archify still has more diagram types |
+| [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Diagrams come from the real code index and history: code graph with source links pinned to the indexed commit, call and multi-agent sequence diagrams, job workflows, lifecycle state machines with real transition counts, and an architecture diff between any two snapshots, plus communities, impact paths and a cluster map |
 | [Graphiti / Zep](https://github.com/getzep/graphiti) | Temporal knowledge graph | Inspired Commons' conflict and supersede model |
 | [Cognee](https://github.com/topoteretes/cognee) | Rich document graphs | Commons is a lighter single-file hub |
 | [basic-memory](https://github.com/basicmachines-co/basic-memory) | Human-readable Markdown memory | Commons has Obsidian/Markdown export |
@@ -234,7 +234,6 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 - Publish to PyPI so `uvx commons-memory` / `pipx install commons-memory` work without git.
 - Planner, summarizer and preference-extractor presets out of the box.
 - Graphiti adapter, plus tree-sitter for more languages and live LSP lookups.
-- Sequence, workflow and architecture-delta diagrams derived from the code index and job history.
 - Message Batches support for half-price curated imports and benchmarks.
 - Fine-grained (row-level) ACLs and signed audit export.
 - Hosted dashboard auth via OIDC.

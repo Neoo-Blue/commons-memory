@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 
 from .store import CommonsError, Store
 
@@ -45,15 +46,24 @@ def code_graph(s: Store, project: str | None) -> dict:
             e["weight"] += 1
             if r["type"] == "calls":
                 e["kind"] = "calls"
+    src = s.q("SELECT value FROM meta WHERE key=?", (f"codesource:{pid}",)) if pid else []
+    base = src[0]["value"] if src else ""  # https://github.com/owner/repo/blob/<full commit>/
     nodes = []
     for p, f in files.items():
         syms = sorted(sym_by_file.get(p, []), key=lambda e: e["line"] or 0)
         top = p.split("/")[0] if "/" in p else "."
-        nodes.append({"id": f["id"], "label": p.split("/")[-1], "group": top, "title": p,
-                      "detail": {"path": p, "symbols": [f"{e['type']} {e['name']} :{e['line'] or ''}" for e in syms[:60]],
-                                 "symbol_count": len(syms)}})
-    return {"title": f"Code graph: {project or 'all projects'}", "kind": "code", "nodes": nodes, "edges": list(agg.values()),
-            "legend": "edges: imports / calls (aggregated per file); groups = top-level directory"}
+        detail = {"path": p, "symbols": [f"{e['type']} {e['name']} :{e['line'] or ''}" for e in syms[:60]],
+                  "symbol_count": len(syms)}
+        if base:
+            detail["source"] = base + p
+            detail["links"] = [{"label": f"{e['type']} {e['name']}", "url": f"{base}{p}#L{e['line']}"}
+                               for e in syms[:25] if e["line"]]
+        nodes.append({"id": f["id"], "label": p.split("/")[-1], "group": top, "title": p, "detail": detail})
+    commit = base.rstrip("/").rsplit("/", 1)[-1][:12] if base else None
+    return {"title": f"Code graph: {project or 'all projects'}" + (f" @ {commit}" if commit else ""), "kind": "code",
+            "nodes": nodes, "edges": list(agg.values()),
+            "legend": "edges: imports / calls (aggregated per file); groups = top-level directory"
+                      + ("; click a file for source links pinned to the indexed commit" if commit else "")}
 
 
 def job_graph(s: Store, job_id: str) -> dict:
@@ -128,14 +138,16 @@ function col(n){if(n.color)return n.color;if(!(n.group in gc))gc[n.group]=pal[Ob
 const NS='http://www.w3.org/2000/svg',vp=document.getElementById('vp');
 const eEls=E.filter(e=>XY[e.from]&&XY[e.to]).map(e=>{const p=document.createElementNS(NS,'path');const[a,b]=[XY[e.from],XY[e.to]];
  const x1=a[0]+W/2,y1=a[1]+H,x2=b[0]+W/2,y2=b[1],my=(y1+y2)/2;p.setAttribute('d',`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
- p.setAttribute('class','e '+(e.kind||''));p.setAttribute('stroke-width',Math.min(6,1+Math.log2(e.weight||1)));p.dataset.f=e.from;p.dataset.t=e.to;vp.appendChild(p);return p});
+ p.setAttribute('class','e '+(e.kind||''));p.setAttribute('stroke-width',Math.min(6,1+Math.log2(e.weight||1)));p.dataset.f=e.from;p.dataset.t=e.to;vp.appendChild(p);
+ if(e.label){const t=document.createElementNS(NS,'text');t.setAttribute('x',(x1+x2)/2+6);t.setAttribute('y',my);t.setAttribute('fill','#c8ccd6');t.setAttribute('font-size','11');t.textContent=e.label;vp.appendChild(t)}return p});
 const nEls={};N.forEach(n=>{const g=document.createElementNS(NS,'g');g.setAttribute('class','n');const[x,y]=XY[n.id];g.setAttribute('transform',`translate(${x},${y})`);
  const r=document.createElementNS(NS,'rect');r.setAttribute('width',W);r.setAttribute('height',H);r.setAttribute('fill',col(n));g.appendChild(r);
  const t=document.createElementNS(NS,'text');t.setAttribute('x',8);t.setAttribute('y',21);t.textContent=(n.label||n.id).slice(0,26);g.appendChild(t);
  const ti=document.createElementNS(NS,'title');ti.textContent=n.title||n.label;g.appendChild(ti);
  g.onclick=ev=>{ev.stopPropagation();sel(n.id)};vp.appendChild(g);nEls[n.id]=g});
 let cur=null;function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function sel(id){cur=id;const n=byId[id];document.getElementById('det').innerHTML=`<h3>${esc(n.title||n.label)}</h3><pre>${esc(JSON.stringify(n.detail||{},null,2))}</pre>
+function sel(id){cur=id;const n=byId[id],d=Object.assign({},n.detail||{}),lk=d.links||[],src=d.source;delete d.links;delete d.source;
+ document.getElementById('det').innerHTML=`<h3>${esc(n.title||n.label)}</h3>${src?`<p><a href="${esc(src)}" target="_blank" rel="noopener">source at this commit</a></p>`:''}${lk.length?'<p>'+lk.map(l=>`<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join('<br>')+'</p>':''}<pre>${esc(JSON.stringify(d,null,2))}</pre>
  <p>in: ${inn[id].length} · out: ${out[id].length}</p>`;trace(new Set([id]))}
 function reach(id,adj){const s=new Set([id]),q=[id];while(q.length){const v=q.pop();for(const w of adj[v])if(!s.has(w)){s.add(w);q.push(w)}}return s}
 function trace(s){Object.entries(nEls).forEach(([k,g])=>{g.classList.toggle('dim',!s.has(k));g.classList.toggle('hl',k==cur)});
@@ -161,6 +173,139 @@ document.getElementById('pngb').onclick=()=>{const img=new Image(),r=svg.getBoun
 </script></body></html>"""
 
 
+# ------------------------------------------------------------------ sequence and lifecycle (v0.18)
+def job_sequence(s: Store, job_id: str) -> dict:
+    """How a job moved between agents over time: assignment, claim, result, review verdicts, messages."""
+    j = s.q("SELECT * FROM jobs WHERE id=?", (job_id,))
+    if not j:
+        raise CommonsError(f"unknown job {job_id}")
+    j, ev = dict(j[0]), []
+    lab = lambda a: s.label(a)[1] if a else "Commons"  # noqa: E731
+    sub = s.label(j["submitted_by"])[1] if j.get("submitted_by") else "user"
+    ev.append((j["created_at"], sub, "Commons", f"submit: {j['title'][:60]}"))
+    for t in s.q("SELECT * FROM subtasks WHERE job_id=? ORDER BY created_at", (job_id,)):
+        t = dict(t)
+        who = lab(t["claimed_by"] or t["assigned_agent"])
+        if t["assigned_agent"] or t["claimed_by"]:
+            ev.append((t["created_at"] + 0.001, "Commons", who, f"assign {t['type']}: {t['title'][:50]}"))
+        if t.get("started_at"):
+            ev.append((t["started_at"], who, "Commons", f"claim (attempt {t['attempts']})"))
+        if t["status"] in ("done", "failed", "cancelled"):
+            verdict = f" VERDICT {t['verdict']}" if t.get("verdict") else ""
+            target = lab(s.q("SELECT claimed_by FROM subtasks WHERE id=?", (t["gate_of"],))[0]["claimed_by"]) \
+                if t.get("gate_of") and s.q("SELECT 1 FROM subtasks WHERE id=?", (t["gate_of"],)) else "Commons"
+            ev.append((t["updated_at"], who, target, f"{t['status']}{verdict}: {(t['result'] or '')[:50]}"))
+    for m in s.q("SELECT sender, recipient, subject, body, created_at FROM messages WHERE meta LIKE ? ORDER BY created_at",
+                 (f'%{job_id}%',)):
+        ev.append((m["created_at"], lab(m["sender"]), lab(m["recipient"]), (m["subject"] or m["body"])[:60]))
+    ev.sort(key=lambda e: e[0])
+    parts = list(dict.fromkeys([e[1] for e in ev] + [e[2] for e in ev]))
+    return {"title": f"Job sequence: {j['title']} ({j['status']})", "participants": parts,
+            "messages": [{"from": a, "to": b, "label": l, "ts": t} for t, a, b, l in ev]}
+
+
+def code_sequence(s: Store, symbol: str, project: str | None = None, depth: int = 4) -> dict:
+    """The call path from one function through the code index, as a sequence between files."""
+    pid = s.project_id(project) if project else None
+    cond = " AND project_id=?" if pid else ""
+    root = s.q(f"SELECT id, name, path FROM entities WHERE type IN ('function','method') AND (name=? OR name LIKE ?){cond} "
+               "ORDER BY length(name) LIMIT 1", (symbol, f"%.{symbol}", *([pid] if pid else [])))
+    if not root:
+        raise CommonsError(f"no function named {symbol!r} in the code index")
+    seen, msgs = {root[0]["id"]}, []
+    file_of = lambda e: (e["path"] or "?").split("/")[-1]  # noqa: E731
+
+    def walk(eid, d):
+        if d >= depth or len(msgs) > 60:
+            return
+        me = dict(s.q("SELECT id, name, path FROM entities WHERE id=?", (eid,))[0])
+        for r in s.q("SELECT e.id, e.name, e.path FROM relations x JOIN entities e ON e.id=x.dst WHERE x.src=? AND "
+                     "x.type='calls' ORDER BY e.path, e.line", (eid,)):
+            msgs.append({"from": file_of(me), "to": file_of(r), "label": f"{r['name']}()"})
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                walk(r["id"], d + 1)
+    walk(root[0]["id"], 0)
+    parts = list(dict.fromkeys([file_of(root[0])] + [m["from"] for m in msgs] + [m["to"] for m in msgs]))
+    return {"title": f"Call sequence: {root[0]['name']}()", "participants": parts, "messages": msgs}
+
+
+def lifecycle(s: Store, kind: str = "subtask") -> dict:
+    """The real state machine of work items, with how often each transition happened (from history)."""
+    counts: dict[tuple, int] = {}
+    add = lambda a, b, n=1: counts.__setitem__((a, b), counts.get((a, b), 0) + n)  # noqa: E731
+    if kind == "subtask":
+        for r in s.q("SELECT status, attempts, started_at FROM subtasks"):
+            claimed = bool(r["started_at"]) or r["status"] in ("claimed", "done", "failed")
+            if claimed:
+                add("pending", "claimed")
+            if r["status"] in ("done", "failed"):
+                add("claimed", r["status"])
+            elif r["status"] == "cancelled":
+                add("claimed" if claimed else "pending", "cancelled")
+            if (r["attempts"] or 0) > 1:
+                add("failed", "pending", r["attempts"] - 1)
+        for action, frm, to in (("subtask.pause", "claimed", "paused"), ("subtask.timeout", "claimed", "pending"),
+                                ("subtask.wait_quota", "pending", "waiting for quota")):
+            n = s.q("SELECT COUNT(*) n FROM audit WHERE action=?", (action,))[0]["n"]
+            if n:
+                add(frm, to, n)
+        if counts.get(("claimed", "paused")):
+            add("paused", "pending", counts[("claimed", "paused")])
+        if counts.get(("pending", "waiting for quota")):
+            add("waiting for quota", "pending", counts[("pending", "waiting for quota")])
+    elif kind == "board":
+        last: dict[str, str] = {}
+        for r in s.q("SELECT action, target, detail FROM audit WHERE action IN ('board.add','board.update') ORDER BY ts"):
+            if r["action"] == "board.add":
+                last[r["target"]] = "open"
+                continue
+            st = (json.loads(r["detail"] or "{}") or {}).get("status")
+            if st and r["target"] in last and st != last[r["target"]]:
+                add(last[r["target"]], st)
+                last[r["target"]] = st
+    else:
+        raise CommonsError("lifecycle kind is subtask or board")
+    if not counts:
+        raise CommonsError(f"no {kind} history yet")
+    states = sorted({x for k in counts for x in k})
+    return {"title": f"Lifecycle: {kind}s (transitions seen in history)", "kind": "lifecycle",
+            "nodes": [{"id": st, "label": st, "group": st, "color": STATUS_COLORS.get(st), "title": st,
+                       "detail": {"in": sum(v for (a, b), v in counts.items() if b == st),
+                                  "out": sum(v for (a, b), v in counts.items() if a == st)}} for st in states],
+            "edges": [{"from": a, "to": b, "kind": "transition", "weight": n, "label": str(n)} for (a, b), n in counts.items()],
+            "legend": "states and how many times each transition happened"}
+
+
+def render_sequence(seq: dict) -> str:
+    data = json.dumps(seq, default=str).replace("</", "<\\/")
+    return SEQ_TEMPLATE.replace("__TITLE__", html.escape(seq["title"])).replace("__DATA__", data)
+
+
+SEQ_TEMPLATE = r"""<!doctype html><html><head><meta charset="utf-8"><title>__TITLE__</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body{margin:0;font:13px system-ui,sans-serif;background:#0f1115;color:#e6e6e6}header{padding:10px 14px;background:#151820;
+position:sticky;top:0;display:flex;gap:10px;align-items:center}h1{font-size:14px;margin:0}input,button{background:#22252d;color:#eee;
+border:1px solid #333;border-radius:6px;padding:4px 8px}.wrap{overflow:auto}svg text{fill:#e6e6e6;font-size:12px}
+.life{stroke:#3a3f4b;stroke-dasharray:4 4}.box{fill:#3949ab}.msg{stroke:#8ab4ff;fill:none}.self{stroke:#ffb74d;fill:none}
+.dim{opacity:.15}footer{padding:8px 14px;color:#888;font-size:11px}</style></head><body>
+<header><h1>__TITLE__</h1><input id="q" placeholder="filter messages…"><button id="svgb">SVG</button></header>
+<div class="wrap"><svg id="s"></svg></div><footer>generated by Commons · sequence diagram</footer><script>
+const D=__DATA__,NS='http://www.w3.org/2000/svg',P=D.participants,M=D.messages,CW=190,TOP=60,RH=34,svg=document.getElementById('s');
+const X={};P.forEach((p,i)=>X[p]=80+i*CW);const W=80+P.length*CW,H=TOP+40+M.length*RH+40;svg.setAttribute('width',W);svg.setAttribute('height',H);
+svg.innerHTML='<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#8ab4ff"/></marker></defs>';
+const el=(t,a,txt)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;svg.appendChild(e);return e};
+P.forEach(p=>{el('line',{x1:X[p],y1:TOP+28,x2:X[p],y2:H-20,class:'life'});el('rect',{x:X[p]-75,y:TOP-6,width:150,height:30,rx:6,class:'box'});
+ el('text',{x:X[p],y:TOP+14,'text-anchor':'middle'},p.slice(0,22))});
+const rows=M.map((m,i)=>{const y=TOP+56+i*RH,g=[];if(m.from===m.to){g.push(el('path',{d:`M${X[m.from]},${y} h40 v14 h-40`,class:'self','marker-end':'url(#a)'}))}
+ else{g.push(el('line',{x1:X[m.from],y1:y,x2:X[m.to],y2:y,class:'msg','marker-end':'url(#a)'}))}
+ const lx=Math.min(X[m.from],X[m.to])+8;g.push(el('text',{x:m.from===m.to?X[m.from]+46:lx,y:y-6},(i+1)+'. '+m.label));return g});
+document.getElementById('q').oninput=e=>{const q=e.target.value.toLowerCase();M.forEach((m,i)=>rows[i].forEach(n=>n.classList.toggle('dim',!!q&&!(m.label+' '+m.from+' '+m.to).toLowerCase().includes(q))))};
+document.getElementById('svgb').onclick=()=>{const c=svg.cloneNode(true);c.setAttribute('xmlns',NS);const a=document.createElement('a');
+ a.href=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(c)],{type:'image/svg+xml'}));a.download='sequence.svg';a.click()};
+</script></body></html>"""
+
+
 # ------------------------------------------------------------------ architecture delta (v0.9)
 def snapshot(s: Store, project: str, keep: int = 10) -> dict:
     """Record the file-level dependency graph after an index run so `delta` can show how the architecture moved."""
@@ -179,14 +324,25 @@ def snapshot(s: Store, project: str, keep: int = 10) -> dict:
     return {"files": len(snap["files"]), "edges": len(snap["edges"]), "snapshots": len(snaps[-keep:])}
 
 
-def delta_graph(s: Store, project: str) -> dict:
-    """What changed between the last two index runs: added/removed files and dependencies (graphview format)."""
+def delta_graph(s: Store, project: str, frm: str = "", to: str = "") -> dict:
+    """What changed between two index runs (default: the last two): added/removed files and dependencies. frm / to
+    pick snapshots by position (-1 = latest, 0 = oldest kept) or by commit prefix."""
     pid = s.find_project(project)
     r = s.q("SELECT value FROM meta WHERE key=?", (f"codesnap:{pid}",)) if pid else []
     snaps = json.loads(r[0]["value"]) if r else []
     if len(snaps) < 2:
         raise CommonsError("need two index runs of this project to diff (index again after changes)")
-    a, b = snaps[-2], snaps[-1]
+
+    def pick(ref, default):
+        if not ref:
+            return snaps[default]
+        if re.fullmatch(r"-?\d+", ref):
+            return snaps[int(ref)]
+        hit = [x for x in snaps if (x.get("commit") or "").startswith(ref)]
+        if not hit:
+            raise CommonsError(f"no snapshot at commit {ref}; kept: {[x.get('commit') for x in snaps]}")
+        return hit[-1]
+    a, b = pick(frm, -2), pick(to, -1)
     fa, fb = set(a["files"]), set(b["files"])
     ea, eb = {tuple(e[:2]) for e in a["edges"]}, {tuple(e[:2]) for e in b["edges"]}
     nodes = {}
@@ -207,11 +363,22 @@ def delta_graph(s: Store, project: str) -> dict:
 
 
 def make(s: Store, kind: str, target: str = "") -> str:
-    """kind = code (target project) | job (target job id) | delta (target project)."""
+    """kind = code (target project) | workflow / job (job id) | sequence (job id, or a function name for its call path)
+    | lifecycle (subtask | board) | delta (project, or project:from:to with snapshot positions or commits)."""
+    if kind == "sequence":
+        return render_sequence(job_sequence(s, target) if s.q("SELECT 1 FROM jobs WHERE id=?", (target,))
+                               else code_sequence(s, target))
+    if kind == "lifecycle":
+        return render(lifecycle(s, target or "subtask"))
+    if kind == "workflow":
+        kind = "job"
     if kind == "delta":
-        from .graphview import render
-        g = delta_graph(s, target)
+        from .graphview import render as gv_render
+        project, _, rng = target.partition(":")
+        frm, _, to = rng.partition(":")
+        target = project
+        g = delta_graph(s, project, frm, to)
         sm = g["summary"]
-        return render(g, f"Architecture delta: {target} (+{sm['files_added']}/-{sm['files_removed']} files, "
+        return gv_render(g, f"Architecture delta: {target} (+{sm['files_added']}/-{sm['files_removed']} files, "
                          f"+{sm['deps_added']}/-{sm['deps_removed']} deps)")
-    return code_diagram(s, target or None) if kind == "code" else job_diagram(s, target)
+    return code_diagram(s, target or None) if kind == "code" else job_diagram(s, target)  # job = workflow
