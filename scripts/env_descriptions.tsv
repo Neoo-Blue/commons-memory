@@ -131,3 +131,4 @@ COMMONS_WAKE_DEBOUNCE	Seconds a queued push wake (webhook etc.) absorbs further 
 COMMONS_KEY	Agent key for `commons wake daemon` when no --api-key / key file is given
 COMMONS_DUP_SIM	Similarity (0-1) at which start_work and the prompt hooks treat two tasks as the same work (default 0.8)
 COMMONS_WORK_STALE	Seconds of agent silence after which its open work claim no longer blocks others (default 7200)
+COMMONS_VAULT_KEY	Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database

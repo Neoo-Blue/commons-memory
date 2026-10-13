@@ -2,6 +2,20 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.11.0: Commons is the vault
+- **Credential vault with a decision agent.** Commons stores the user's API keys itself, encrypted (AES-GCM, bound to
+  each name) with a master key kept outside the database. Agents list them with `credentials()` and use one with
+  `use_credential(credential, url, justification)`: Commons makes the call and returns only the response, so no agent
+  ever sees a key. A key is only ever sent to its own service's URLs, and responses are scrubbed of it.
+- **Case-by-case decisions.** The decision agent (TypeSafe, or an LLM `gatekeeper` role) judges each request against
+  the agent's reason, the user's asks on the board and the agent's current work. Sound reads get a one-hour grant;
+  writes need the user's request behind them and cover exactly one call; anything destructive, costly or that messages
+  people goes to the user under "Needs you", and a "yes" there grants that one call. With no judge available it fails
+  closed. Every decision is logged (`commons vault decisions`).
+- **Admin CLI:** `commons vault set NAME --service S --base-url URL --auth header:X-Api-Key < value`, `list`, `rm`.
+- **`msg_send` says whether the recipient is live** and, if not, which agents are, so work that can't wait isn't
+  parked on an agent that only runs when its user opens it.
+
 ## v0.10.0: everything remembered, limits respected, nothing dropped
 - **Every message is memory.** Capture hooks store each user message and each agent reply word for word (searchable,
   with `search(context=N)` returning the turns around a hit), and distilled decisions/todos come on top instead of

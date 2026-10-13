@@ -38,6 +38,8 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
 6) Limits: quota_report your usage windows; near a limit subtask_pause(checkpoint) or quota_exhausted(), never
    abandon work. Scheduled tasks: schedule_report them and schedule_ran after every run.
 7) Other agents: summon() wakes them and says who is ready. Never promise to check back on a timer.
+   Need one of the user's API keys? credentials() lists them; use_credential(credential, url, justification) makes
+   the call for you. Never ask the user for a key, and do it yourself rather than handing it to another agent.
 8) Before you stop: board() for anything still open, then handoff(summary, next_steps), then report_usage().
 Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
 Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them."""

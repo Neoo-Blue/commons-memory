@@ -9,7 +9,7 @@ ARG PYTHON=3.12
 
 # ---------- build: wheel + every dependency into a venv (compilers stay here)
 FROM python:${PYTHON}-slim AS build
-ARG EXTRAS="postgres,http,tokens,code,otel,sftp,smb,ws,embed"
+ARG EXTRAS="postgres,http,tokens,code,otel,sftp,smb,ws,embed,vault"
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 # all extras ship manylinux/aarch64 wheels, so no compiler is needed
 WORKDIR /src

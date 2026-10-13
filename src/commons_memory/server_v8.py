@@ -221,6 +221,23 @@ def register_v8(mcp, store, who):
         return _js(W.active(store, project or None))
 
     @mcp.tool()
+    def credentials() -> str:
+        """The user's API keys Commons holds (names, services, where each may be sent; never values). Use one with
+        use_credential; never ask the user to paste a key."""
+        from . import vault as V
+        return _js(V.listing(store))
+
+    @mcp.tool()
+    def use_credential(credential: str, url: str, justification: str, method: str = "GET", body: str = "",
+                       content_type: str = "", agent: str = "", api_key: str = "") -> str:
+        """Call a service with one of the user's keys without seeing it: Commons makes the HTTP call and returns the
+        response. justification = what you need it for (the user's ask or your task); Commons' decision agent judges
+        it: sound reads are allowed, writes need the user's request behind them, and anything destructive, costly or
+        that messages people goes to the user first (verdict waiting_for_user; the answer arrives in msg_recv)."""
+        from . import vault as V
+        return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
+
+    @mcp.tool()
     def forget(id: str, agent: str = "", api_key: str = "") -> str:
         """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
         removed by the user from the dashboard."""

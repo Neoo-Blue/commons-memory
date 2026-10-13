@@ -126,6 +126,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TYPESAFE_MODEL` | `jev-latest` | TypeSafe model (default jev-latest) | typesafe.py |
 | `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
 | `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, wakeclient.py |
+| `COMMONS_VAULT_KEY` | — | Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database | vault.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_DEBOUNCE` | `2` | Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake) | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |

@@ -214,6 +214,8 @@ def _v5(db):
     schedules_migrate(db)
     from .work import migrate as work_migrate
     work_migrate(db)
+    from .vault import migrate as vault_migrate
+    vault_migrate(db)
 
 
 _v4e_migrate = migrate
