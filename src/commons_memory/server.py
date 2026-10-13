@@ -35,6 +35,7 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
 3) Before starting ANY task, including one the user gives you directly: start_work(what, project, paths).
    busy = another agent has it: don't start; msg_send them or tell the user who has it.
    done = it was done before: build on it or tell the user; never redo it. finish_work(claim_id, result) when done.
+   Both list what's connected to the work (memories, docs, decisions): update whatever your change made outdated.
 4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result. Reviews end with
    "VERDICT: approve" or "VERDICT: reject" and the reasons. Never review your own work.
 5) board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence.

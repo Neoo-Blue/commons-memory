@@ -329,3 +329,16 @@ def test_a_task_handed_to_an_idle_agent_becomes_a_job_for_a_live_one(store):
     o.complete(d["subtask_id"], live, "Added (tmdb 12345), search found no WEB-DL yet")
     from commons_memory.messaging import Messaging
     assert "no WEB-DL yet" in json.dumps(Messaging(store).recv(asker))                              # result comes back
+
+
+def test_work_lists_connected_portions_to_update(store):
+    from commons_memory import work as W
+    a = store.ensure_agent("editor")
+    doc = store.add_item("memory", "The Connect page in dashboard_v81.py shows the agent prompt from connect.prompt_text")["id"]
+    store.add_item("memory", "Unrelated: the NAS fan curve was tuned in September")
+    talk = store.add_item("memory", "dashboard_v81.py came up in chat", tags=["conversation", "user"])["id"]
+    r = W.start(store, a, "Rewrite the agent prompt routine", project=None, paths=["src/commons_memory/dashboard_v81.py"])
+    ids = [x["id"] for x in r["related"]]
+    assert doc in ids and talk not in ids                       # connected portion found; conversation history isn't
+    done = W.finish(store, a, r["claim_id"], "prompt now generated from INSTRUCTIONS")
+    assert doc in [x["id"] for x in done["check_related"]] and "outdated" in done["do"]

@@ -28,6 +28,36 @@ STOP = set("the and for with that this from into onto have has was were are you 
 
 def migrate(db) -> None:
     db.executescript(SCHEMA)
+    from .facts import add_columns
+    add_columns(db, [("work_claims", "related", "TEXT")])
+
+
+def related(s: Store, what: str, project: str | None = None, paths: list[str] | None = None, limit: int = 8) -> list[dict]:
+    """Memories, decisions, documents and handoffs connected to this work (by meaning, or naming one of its paths):
+    when the work changes something, these are the portions that may need updating too. Conversation records are
+    history, not facts, so they're left out."""
+    hits: list[str] = []
+    for p in paths or []:  # anything that names a file or place this work touches
+        base = os.path.basename(p.rstrip("/")) or p
+        if len(base) >= 4:
+            hits += [r["id"] for r in s.q("SELECT id FROM items WHERE content LIKE ? AND superseded_by IS NULL "
+                                         "AND kind<>'observation' ORDER BY created_at DESC LIMIT 5", (f"%{base}%",))]
+    try:
+        ids, _, why = s.rank(f"{what} {' '.join(paths or [])}", project=project, limit=limit * 3,
+                             kinds=["memory", "fact", "decision", "document", "handoff"])
+    except Exception:  # noqa: BLE001
+        ids, why = [], {}
+    out, seen = [], set()
+    for i in hits + [i for i in ids or [] if why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_RELATED_SIM", "0.6"))]:
+        if i in seen:
+            continue
+        seen.add(i)
+        r = s.q("SELECT id, kind, summary, tags FROM items WHERE id=? AND superseded_by IS NULL", (i,))
+        if r and '"conversation"' not in (r[0]["tags"] or ""):
+            out.append({"id": i, "kind": r[0]["kind"], "summary": (r[0]["summary"] or "")[:160]})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _words(t: str) -> set[str]:
@@ -136,9 +166,12 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
     s.x("INSERT INTO work_claims(id,agent_id,project_id,what,paths,status,reason,vec,started_at) VALUES(?,?,?,?,?,?,?,?,?)",
         (cid, agent_id, s.project_id(project) if project else None, redact(what)[0][:1000], json.dumps(sorted(paths or [])),
          "active", reason or None, pack(v) if v is not None else None, now()))
+    rel = related(s, what, project, paths)
+    s.x("UPDATE work_claims SET related=? WHERE id=?", (json.dumps([r["id"] for r in rel]), cid))
     s.audit(agent_id, "work.start", cid, {"what": what[:200], "forced": bool(force)})
-    return {"ok": True, "claim_id": cid, "builds_on": ov["done"],
-            "do": "It's yours: others are warned off. Call finish_work(claim_id, result) (or handoff) when done."}
+    return {"ok": True, "claim_id": cid, "builds_on": ov["done"], "related": rel,
+            "do": "It's yours: others are warned off. `related` is what's connected to this work: if you change it, "
+                  "update those too. Call finish_work(claim_id, result) (or handoff) when done."}
 
 
 def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status: str = "done") -> dict:
@@ -149,9 +182,21 @@ def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status
     ids = [r["id"] for r in s.q(f"SELECT id FROM work_claims WHERE {where}", args)]
     if claim_id and not ids:
         raise CommonsError(f"{claim_id} is not your work claim")
+    check = []
     for i in ids:
         s.x("UPDATE work_claims SET status=?, result=?, done_at=? WHERE id=?", (status, redact(result or "")[0][:4000], now(), i))
-    return {"closed": ids, "status": status}
+        row = s.q("SELECT related FROM work_claims WHERE id=?", (i,))[0]
+        for rid in json.loads(row["related"] or "[]"):
+            r = s.q("SELECT id, kind, summary FROM items WHERE id=? AND superseded_by IS NULL", (rid,))
+            if r and rid not in [c["id"] for c in check]:
+                check.append({"id": rid, "kind": r[0]["kind"], "summary": (r[0]["summary"] or "")[:160]})
+                s.relate(i, rid, "may_affect", agent_id=agent_id)
+    out = {"closed": ids, "status": status}
+    if check and status == "done":
+        out |= {"check_related": check,
+                "do": "Your change may have made these outdated. Update each one it affects (remember with related_ids, "
+                      "a superseding fact, or edit the doc), or note why it still holds."}
+    return out
 
 
 def active(s: Store, project: str | None = None) -> list[dict]:

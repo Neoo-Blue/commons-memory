@@ -23,3 +23,12 @@ def test_master_instructions_install_update_and_uninstall(tmp_path, monkeypatch)
     I.install("all", uninstall=True)
     assert (tmp_path / ".claude" / "CLAUDE.md").read_text().strip() == mine.strip()
     assert not (tmp_path / ".claude" / "skills" / "commons" / "SKILL.md").exists()
+
+
+def test_prompt_md_is_generated_from_the_master_instructions():
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, str(root / "scripts" / "gen_prompt.py"), "--check"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr

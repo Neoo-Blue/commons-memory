@@ -170,11 +170,13 @@ def test_new_event_sources_wake(store):
 
 
 def test_connect_emits_wake_setup_per_platform():
-    from commons_memory.connect import PLATFORMS, bundle
-    for p in PLATFORMS:
-        blk = [b for b in bundle(p, "http://10.0.0.2:8770/mcp", "a1")["blocks"] if b["id"] == "wake"]
-        assert blk and "/agent/stream" in blk[0]["text"] or "wake" in blk[0]["text"]
-    assert "--pty 'claude'" in bundle("claude-code", "http://h:8770", "a1")["blocks"][1]["text"]
+    from commons_memory.connect import PLATFORMS, bundle, wake_block
+    for p in PLATFORMS:  # the per-platform wake recipe is still generated (CLI docs, `commons connect`)
+        t = wake_block(p, "http://10.0.0.2:8770/mcp", "a1")["text"]
+        assert "/agent/stream" in t or "wake" in t
+    assert "--pty 'claude'" in wake_block("claude-code", "http://h:8770/mcp", "a1")["text"]
+    setup = bundle("claude-code", "http://h:8770", "a1")["blocks"][0]   # v0.12: instant wake is a setup step, on by default
+    assert "wake" in [x["id"] for x in setup["steps"]]
 
 
 def test_wake_prompt_never_types_message_text_into_a_terminal():

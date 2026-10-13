@@ -833,7 +833,8 @@ input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px sol
 .bfil{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 12px}.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .seg button{border:0;border-radius:0;background:transparent;color:var(--mut)}.seg button.on{background:var(--acc-soft);color:var(--fg)}
 .skl{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.sk{display:inline-flex;gap:6px;align-items:center;padding:3px 6px 3px 9px;border:1px solid var(--line);border-radius:9px;font-size:13px}.sk button{padding:3px 10px;font-size:12px}
-@media (max-width:640px){.sk button{min-height:44px}}
+@media (max-width:640px){.sk button{min-height:44px}.cxstep{min-height:44px}}
+.cxsteps{display:grid;gap:4px;margin:6px 0 10px}.cxstep{display:flex;gap:8px;align-items:center;cursor:pointer}
 .brow{display:grid;grid-template-columns:18px auto minmax(0,1fr) auto;gap:10px;align-items:start;padding:9px 8px 9px calc(8px + var(--dep,0)*22px);border-radius:10px;transition:background .15s}
 .brow:hover{background:var(--acc-soft)}.brow+.brow{border-top:1px solid var(--line)}.bmk{color:var(--mut);line-height:1.5}.brow.done .bmk{color:var(--ok)}.brow.doing .bmk{color:var(--warn)}.brow.blocked .bmk{color:var(--bad)}
 .brow.done .btx>div:first-child,.brow.dropped .btx>div:first-child{color:var(--mut)}.brow.dropped .btx>div:first-child{text-decoration:line-through}

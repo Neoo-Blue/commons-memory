@@ -66,47 +66,27 @@ flowchart LR
 ```
 
 ## Connect any AI
-**Every AI learns the routine by heart.** `commons instructions install all` writes the master instructions into each
-AI's always-loaded instructions on this machine: Claude Code (`CLAUDE.md` plus a `commons` skill), Codex
-(`AGENTS.md`), Gemini CLI and Antigravity (`GEMINI.md`), Grok Build (`~/.grok/AGENTS.md`) and Cursor (an always-on
-rule). Running it again updates them in place, and `uninstall` removes only that block. Commons also hands every
-agent the same playbook on its first check-in and whenever it changes.
+**One command per AI.** On the machine where the AI runs:
 
-**Hosted chat apps** (claude.ai, ChatGPT, Grok, Muse) can't be written to from your machine: paste this prompt into
-their custom instructions. The full text is in [PROMPT.md](PROMPT.md).
-
-```text
-You are connected to Commons, the shared memory and task hub that my other AIs also use.
-Server: {{COMMONS_URL}} (MCP). Your agent name: {{AGENT_NAME}}. Authenticate with your configured key (Authorization: Bearer). Never repeat, print or store the key.
-If Commons is unreachable, say so once and carry on without it. Never invent tool results.
-On every task:
-1. Check in: call `pickup` and `msg_recv`. Follow the preferences it returns.
-2. Get context first: use `resume` for handoffs, `context_load` (layer L1) for packs, and `search`/`why` for past work. Don't redo finished work.
-3. Claim before working: `claim_subtask`, then `heartbeat` while busy, then `complete_subtask` with the full result. Reviews end with `VERDICT: approve` or `VERDICT: reject` plus the reasons. Never review your own work.
-4. Record: `record_decision` (what and why), `remember` for durable facts, `observe_preference` when I correct you. No secrets; use references like env://NAME.
-5. Before you stop: call `handoff` (summary, next steps, open questions) or `add_leftover`, then `report_usage` (tokens, model).
-No MCP? Use HTTP with the same key: GET {{COMMONS_URL_BASE}}/agent/recv and POST /agent/send.
+```bash
+pip install -U commons-memory && commons setup --client claude-code --agent my-agent --url http://HUB:8770
 ```
 
-**Native setup per platform** (it installs the skill and MCP config, plus a key in `~/.commons/agents/<name>.key`):
+It asks for the agent's key once (hidden, saved 0600), then does every step, each on by default:
+- connects the AI to Commons over MCP;
+- installs the master instructions it always loads (`CLAUDE.md` plus a `commons` skill, `AGENTS.md`, `GEMINI.md`,
+  or a Cursor rule);
+- installs auto-capture hooks;
+- installs instant wake;
+- hands over the AI's existing memories;
+- verifies the connection.
 
-| Platform | Command |
-|---|---|
-| Claude Code | `commons connect claude --platform claude-code` (adds `/commons-checkin`, `/commons-handoff`, …) |
-| Claude Desktop | `commons connect claude-desktop --platform claude-desktop` |
-| Cursor | `commons connect cursor --platform cursor` (always-on rule + `.cursor/mcp.json`) |
-| Codex / AGENTS.md tools | `commons connect codex --platform codex` |
-| ChatGPT · Grok · Muse · any HTTP MCP client | `commons connect muse --platform generic`, then use the MCP URL `http://<host>:8770/mcp` with header `Authorization: Bearer <key>` |
+Add `--no-<step>` to leave one out. The dashboard's Connect page builds this command with a checkbox per step.
+Clients: `claude-code`, `codex`, `gemini`, `cursor`.
 
-**Easiest: the dashboard's Connect page** (v0.8.1). Open **Connect** in the dashboard (or ⌘K → "Connect"), pick the
-client (Claude Code, Codex CLI, Cursor, Gemini CLI, ChatGPT/other HTTP MCP clients, any AI, Docker/self-host), press
-**Create agent key**, and copy the ready-made blocks: the install command or JSON/TOML config with URL and key filled
-in, the prompt above filled in, the skill install command, and a one-line verify command that prints `OK`. The page
-detects the reachable MCP URL from the address you opened the dashboard on (editable), shows the agent's *last seen*
-live as it connects, and has a troubleshooting checklist. The same output from a shell:
-`commons connect cursor --name laptop-cursor --new-key` (`--json` for the API shape; `GET /api/connect?platform=…`).
-
-Remote clients need the hub on HTTP (see [Networking](#networking)). More detail is in [docs/connect.md](docs/connect.md).
+**Hosted chat apps** (claude.ai, ChatGPT, Grok, Muse) can't run commands: paste [PROMPT.md](PROMPT.md) into their
+custom instructions. It is generated from the same master instructions, so it never goes stale, and Commons hands
+every agent the same playbook on its first check-in and whenever it changes.
 
 ## Screenshots
 Captured from a demo database (`examples/demo_multi_agent.py`); keys are redacted.

@@ -96,22 +96,13 @@ def detect_url(request_host: str = "", bind_host: str | None = None, port: int |
 
 # ------------------------------------------------------------------ text generators
 def prompt_text(url: str, agent: str, key: str | None = None, project: str = "") -> str:
+    """The same master instructions `commons instructions` installs, so the prompt can never go stale."""
+    from .instructions import master
+    text = master(url, agent)
+    if project:
+        text += f"\nProject: {project}. Pass project=\"{project}\" to tools that take one."
     base = url.rstrip("/").removesuffix("/mcp")
-    keyline = (f"API key (send as Authorization: Bearer): {key}. It is a secret: never repeat, print or store it."
-               if key else "Authenticate with your configured key (Authorization: Bearer). Never repeat, print or store the key.")
-    proj = f"Project: {project}. Pass project=\"{project}\" to tools that take one.\n" if project else ""
-    return f"""You are connected to Commons, the shared memory and task hub that my other AIs also use.
-Server: {url} (MCP). Your agent name: {agent}. {keyline}
-{proj}If Commons is unreachable, say so once and carry on without it. Never invent tool results.
-On every task:
-1. Check in: call `pickup` and `msg_recv`. Follow the preferences it returns.
-2. Get context first: use `resume` for handoffs, `context_load` (layer L1) for packs, and `search`/`why` for past work. Don't redo finished work.
-3. Claim before working: `claim_subtask`, then `heartbeat` while busy, then `complete_subtask` with the full result. Reviews end with `VERDICT: approve` or `VERDICT: reject` plus the reasons. Never review your own work.
-4. Record: `record_decision` (what and why), `remember` for durable facts, `observe_preference` when I correct you. No secrets; use references like env://NAME.
-5. Before you stop: call `handoff` (summary, next steps, open questions) or `add_leftover`, then `report_usage` (tokens, model).
-To bring other agents in, call `summon` (it wakes them at once and says who is ready). Never promise to check back on a timer: if you can't run in the background, say so; new work waits in `msg_recv` for your next turn.
-No MCP? Use HTTP with the same key: GET {base}/agent/recv and POST {base}/agent/send.
-"""
+    return text + (f"\nNo MCP? Use HTTP with the same key: GET {base}/agent/recv and POST {base}/agent/send.")
 
 
 def verify_command(url: str, key: str | None = None) -> str:
@@ -198,13 +189,20 @@ def bundle(platform: str, url: str, agent: str = "my-agent", key: str | None = N
     if not url.rstrip("/").endswith("/mcp"):
         url = url.rstrip("/") + "/mcp"
     label, _, hint = PLATFORMS[platform]
-    blocks = [config_block(platform, url, key, agent) | {"id": "config"},
-              {"id": "prompt", "title": "Prompt (paste as system prompt / custom instructions / first message)",
-               "lang": "text", "text": prompt_text(url, agent, key, project)},
-              {"id": "skill", "title": "Install the Commons skill (optional, teaches the routine locally)",
-               "lang": "bash", "text": skill_command(platform, agent)},
-              {"id": "verify", "title": "Verify (prints OK)", "lang": "bash", "text": verify_command(url, key)}]
-    blocks.insert(1, wake_block(platform, url, agent))
+    from .setup import CLIENTS, LABELS
+    prompt = {"id": "prompt", "lang": "text", "text": prompt_text(url, agent, key, project)}
+    if platform in CLIENTS:  # one command does everything; each step can be unticked
+        base = (f"pip install -U commons-memory && commons setup --client {platform} --agent {shlex.quote(agent)} "
+                f"--url {url.removesuffix('/mcp')}")
+        blocks = [{"id": "setup", "kind": "setup", "title": "Set up this AI: one command (asks for the key once)",
+                   "lang": "bash", "base": base, "text": base,
+                   "steps": [{"id": k, "label": v} for k, v in LABELS.items()]},
+                  prompt | {"title": "Chat app with no terminal (claude.ai, ChatGPT, Grok, Muse)? Paste this prompt "
+                                     "into its custom instructions instead", "collapsed": True}]
+    else:
+        blocks = [config_block(platform, url, key, agent) | {"id": "config"},
+                  prompt | {"title": "Prompt: paste into the AI's custom instructions or system prompt"},
+                  {"id": "verify", "title": "Verify (prints OK)", "lang": "bash", "text": verify_command(url, key)}]
     return {"platform": platform, "label": label, "hint": hint, "url": url, "agent": agent, "project": project,
             "key_included": bool(key), "blocks": blocks, "troubleshooting": TROUBLESHOOTING,
             "platforms": {k: v[0] for k, v in PLATFORMS.items()}, "version": __version__}

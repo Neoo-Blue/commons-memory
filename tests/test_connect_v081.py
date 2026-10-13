@@ -17,29 +17,32 @@ def test_bundle_every_platform(plat):
     b = C.bundle(plat, "http://192.168.50.111:8770", "grok", "cmk_SECRET", "proj")
     assert b["url"] == "http://192.168.50.111:8770/mcp"
     ids = [x["id"] for x in b["blocks"]]
-    cli = plat in ("claude-code", "codex", "cursor", "gemini")
-    assert ids == ["config", "wake", "prompt", "skill", "verify"]  # v0.9.3: every platform gets a wake setup
     txt = {x["id"]: x["text"] for x in b["blocks"]}
-    if cli:  # v0.9 instant wake: one command installs the agent daemon; the key never goes on the command line
-        assert "commons agent daemon --agent grok --preset" in txt["wake"] and "--install" in txt["wake"]
-        assert "cmk_SECRET" not in txt["wake"]
-    assert "summon" in txt["prompt"] and "timer" in txt["prompt"]
-    assert (plat == "docker" or "cmk_SECRET" in txt["config"]) and "cmk_SECRET" in txt["verify"] and "cmk_SECRET" in txt["prompt"]
-    assert "Your agent name: grok" in txt["prompt"] and 'project="proj"' in txt["prompt"]
+    if plat in ("claude-code", "codex", "cursor", "gemini"):  # v0.12: one command, every step on unless unticked
+        assert ids == ["setup", "prompt"]
+        setup = b["blocks"][0]
+        assert f"commons setup --client {plat} --agent grok --url http://192.168.50.111:8770" in setup["text"]
+        assert [x["id"] for x in setup["steps"]] == ["mcp", "instructions", "hooks", "wake", "import", "verify"]
+        assert "cmk_SECRET" not in setup["text"]               # asked once at a hidden prompt, never in shell history
+    else:
+        assert ids == ["config", "prompt", "verify"]
+        assert (plat == "docker" or "cmk_SECRET" in txt["config"]) and "cmk_SECRET" in txt["verify"]
+        assert "initialize" in txt["verify"] and "whoami" in txt["verify"] and "echo OK" in txt["verify"]
+    from commons_memory.server import INSTRUCTIONS
+    assert INSTRUCTIONS in txt["prompt"]                           # the prompt is the master instructions: never stale
+    assert "as agent `grok`" in txt["prompt"] and 'project="proj"' in txt["prompt"] and "cmk_SECRET" not in txt["prompt"]
     assert "http://192.168.50.111:8770/mcp" in txt["prompt"] and "/agent/recv" in txt["prompt"]
-    assert "commons install-skill" in txt["skill"] and "--agent grok" in txt["skill"]
-    assert "initialize" in txt["verify"] and "whoami" in txt["verify"] and "echo OK" in txt["verify"]
     assert len(b["troubleshooting"]) >= 4
 
 
 def test_snippet_formats_and_placeholder():
     url = "http://10.0.0.5:8770/mcp"
-    cur = json.loads(C.bundle("cursor", url)["blocks"][0]["text"])
+    cur = json.loads(C.config_block("cursor", url)["text"])
     assert cur["mcpServers"]["commons"] == {"url": url, "headers": {"Authorization": f"Bearer {C.KEY_PLACEHOLDER}"}}
-    gem = json.loads(C.bundle("gemini", url, key="cmk_a")["blocks"][0]["text"])
+    gem = json.loads(C.config_block("gemini", url, key="cmk_a")["text"])
     assert gem["mcpServers"]["commons"]["httpUrl"] == url
-    assert 'bearer_token_env_var = "COMMONS_API_KEY"' in C.bundle("codex", url)["blocks"][0]["text"]
-    cc = C.bundle("claude-code", url, key="cmk_a")["blocks"][0]["text"]
+    assert 'bearer_token_env_var = "COMMONS_API_KEY"' in C.config_block("codex", url)["text"]
+    cc = C.config_block("claude-code", url, key="cmk_a")["text"]
     assert cc.startswith("claude mcp add --transport http") and "'Authorization: Bearer cmk_a'" in cc
     b = C.bundle("any", url)
     assert "cmk_" not in json.dumps(b) and not b["key_included"]
@@ -108,7 +111,7 @@ def test_dashboard_connect_api_tokenless_private(tmp_path, monkeypatch):
         b = json.loads(urllib.request.urlopen(base + "/api/connect?platform=cursor&name=x").read())
         assert b["detected_url"] == "http://127.0.0.1:8770/mcp" and b["can_create_key"]
         code, r = _post(base + "/api/connect/key", {"name": "newbot", "role": "write", "platform": "codex"})
-        assert code == 200 and r["api_key"] in r["bundle"]["blocks"][0]["text"]
+        assert code == 200 and r["bundle"]["blocks"][0]["id"] == "setup" and r["api_key"] not in r["bundle"]["blocks"][0]["text"]
         st = json.loads(urllib.request.urlopen(base + "/api/connect_status?name=newbot").read())
         assert st["exists"] and st["last_seen"] is None
         html = urllib.request.urlopen(base + "/").read().decode()
@@ -160,4 +163,4 @@ def test_cli_connect_platform(tmp_path, capsys, monkeypatch):
     assert b["platform"] == "gemini" and b["key_included"] and b["url"] == "http://10.1.1.1:8770/mcp"
     main(["--db", db, "connect", "cursor"])
     out = capsys.readouterr().out
-    assert "# Connect Cursor" in out and C.KEY_PLACEHOLDER in out
+    assert "# Connect Cursor" in out and "commons setup --client cursor" in out

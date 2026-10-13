@@ -2,6 +2,19 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.13.0: one setup command, and changes reach everything connected
+- **`commons setup`**: one command connects an AI completely: MCP server, the master instructions it always loads
+  (plus skill), auto-capture hooks, instant wake, its existing memories handed over, and a verification. It asks for
+  the key once (hidden, saved 0600, never on the command line). Every step is on by default; `--no-<step>` leaves
+  one out. Clients: claude-code, codex, gemini, cursor.
+- **The Connect page is one block**: a checkbox per step, all ticked and marked recommended, that builds the single
+  command. Chat apps without a terminal get the prompt in a collapsed section.
+- **The prompt can't go stale.** The Connect page prompt, PROMPT.md and the installed instructions are all generated
+  from the server's master instructions; a test fails if PROMPT.md drifts.
+- **Work lists what it touches.** `start_work` returns the memories, decisions, documents and handoffs connected to the
+  work (by meaning, or naming one of its paths); `finish_work` returns them again as a checklist ("your change may
+  have made these outdated") and links each to the work in the graph.
+
 ## v0.12.1: Discover shows each skill once
 - Mirror copies of the same skill inside one repo (one folder per AI tool) collapse into a single chip; an imported copy
   wins.
