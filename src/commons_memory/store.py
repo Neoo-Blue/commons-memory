@@ -6,6 +6,7 @@ Relations can link any two ids, so memories, code entities, sessions and agents 
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import json
 import os
 import re
@@ -163,6 +164,22 @@ class Store:
         with self.lock:
             self.db.execute(sql, tuple(args))
 
+    @contextlib.contextmanager
+    def tx(self):
+        """One atomic write: everything inside commits together or not at all. Re-entrant, and it joins a transaction
+        that is already open (the caller then owns the commit)."""
+        with self.lock:
+            if getattr(self.db, "in_transaction", False):
+                yield
+                return
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+            self.db.execute("COMMIT")
+
     def audit(self, agent_id: str | None, action: str, target: str = "", detail: Any = None) -> None:
         self.x("INSERT INTO audit(ts,agent_id,action,target,detail) VALUES(?,?,?,?,?)",
                (now(), agent_id, action, target, _j(detail) if detail is not None else None))
@@ -267,14 +284,30 @@ class Store:
         iid = new_id({"decision": "dec", "handoff": "hof", "checkpoint": "chk", "fact": "fct"}.get(kind, "mem"))
         ts = float(created_at) if created_at is not None else now()  # explicit timestamp for imports/backfills
         tags = [t.strip().lower() for t in (tags or []) if t.strip()]
+        vec = self.embedder.embed([f"{title}\n{summary}\n{content}"[:4000]])[0] \
+            if self.embedder and not self.defer_embed else None  # bulk import: reindex() batches
+        with self.tx():  # a crash can't leave a memory without its search index, vector or graph links
+            self._write_item(iid, kind, pid, agent_id, session_id, title, summary, content, tags, meta_s, subject,
+                             predicate, value, authenticated, ts, vec, entities, related_ids)
+        out = {"id": iid, "kind": kind, "summary": summary}
+        if found:
+            out["redacted"] = found
+            self.audit(agent_id, "redact", iid, found)
+        if subject and predicate and check_conflicts:
+            conflicts = self._check_conflict(iid, subject, predicate, value)
+            if conflicts:
+                out["conflicts_with"] = conflicts
+        return out
+
+    def _write_item(self, iid, kind, pid, agent_id, session_id, title, summary, content, tags, meta_s, subject,
+                    predicate, value, authenticated, ts, vec, entities, related_ids) -> None:
         self.x("INSERT INTO items(id,kind,project_id,agent_id,session_id,title,summary,content,tags,meta,subject,"
                "predicate,value,authenticated,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                (iid, kind, pid, agent_id, session_id, title, summary, content, _j(tags), meta_s,
                 subject, predicate, value, int(authenticated), ts, ts))
         self.x("INSERT INTO items_fts(item_id,title,summary,content,tags) VALUES(?,?,?,?,?)",
                (iid, title, summary, content, " ".join(tags)))
-        if self.embedder and not self.defer_embed:  # bulk import: reindex() batches
-            vec = self.embedder.embed([f"{title}\n{summary}\n{content}"[:4000]])[0]
+        if vec is not None:
             self.x("INSERT OR REPLACE INTO embeddings(item_id,model,vec) VALUES(?,?,?)", (iid, self.embedder.name, pack(vec)))
             if self._pgvec:
                 self.x("UPDATE embeddings SET v=?::vector WHERE item_id=?", (_vecstr(vec), iid))
@@ -297,15 +330,6 @@ class Store:
             from .graphlinks import link_item
             link_item(self, iid)
         self.kb_dirty(pid)
-        out = {"id": iid, "kind": kind, "summary": summary}
-        if found:
-            out["redacted"] = found
-            self.audit(agent_id, "redact", iid, found)
-        if subject and predicate and check_conflicts:
-            conflicts = self._check_conflict(iid, subject, predicate, value)
-            if conflicts:
-                out["conflicts_with"] = conflicts
-        return out
 
     def sync_fts(self, iid: str, reembed: bool = False) -> None:
         """Rewrite an item's keyword-index row (and optionally its vector) from the items table. Every UPDATE of

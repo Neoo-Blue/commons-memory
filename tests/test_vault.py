@@ -255,3 +255,22 @@ def test_a_repeated_write_request_reuses_the_waiting_question(store, svc, monkey
     r2 = V.use(store, a, "sonarr", "POST", base + "/api/v3/series", "user confirmed in chat: add Stargate Universe")
     assert r1["question_id"] == r2["question_id"]
     assert len(store.q("SELECT 1 FROM board WHERE kind='question' AND status='blocked'")) == 1
+
+
+def test_a_memory_write_is_all_or_nothing(store, monkeypatch):
+    import commons_memory.store as SM
+    calls = {"n": 0}
+    real = SM.Store.relate
+    def flaky(self, *a, **kw):
+        calls["n"] += 1
+        raise RuntimeError("crash between statements")
+    monkeypatch.setattr(SM.Store, "relate", flaky)
+    a = store.ensure_agent("writer")
+    with pytest.raises(RuntimeError):
+        store.add_item("memory", "This write dies after the item row is inserted", agent_id=a, project="p")
+    assert calls["n"] == 1
+    assert not store.q("SELECT 1 FROM items WHERE content LIKE 'This write dies%'")       # no half-written memory
+    assert not store.q("SELECT 1 FROM items_fts WHERE content LIKE 'This write dies%'")
+    monkeypatch.setattr(SM.Store, "relate", real)
+    r = store.add_item("memory", "This write succeeds with its links", agent_id=a, project="p")
+    assert store.q("SELECT 1 FROM relations WHERE src=? AND type='authored_by'", (r["id"],))

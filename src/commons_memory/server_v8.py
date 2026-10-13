@@ -42,12 +42,7 @@ def register_v8(mcp, store, who):
     @mcp.tool()
     def turn(user_message: str = "", reply: str = "", conversation: str = "", project: str = "", agent: str = "",
              api_key: str = "") -> str:
-        """Hook mode for chat agents with no hook API (claude.ai, Grok, ChatGPT connectors): the same automatic capture
-        and recall Claude Code gets from its hooks. Call it on EVERY turn: turn(user_message=<the user's message>,
-        reply=<your previous reply>) before you answer. It stores the exchange verbatim (and distills the decisions,
-        preferences and todos on top; you don't pick what to save) and returns what Commons already knows that is relevant,
-        so read it before answering. Every message and reply is kept word for word. conversation = a stable id for
-        this chat, if you have one."""
+        """Chat apps without hooks: call on EVERY turn, before answering: turn(user_message, reply=<your previous reply>). Stores both word for word and returns what Commons already knows about the message."""
         aid = me(agent, api_key)
         import time as _t
         pl = {"session_id": conversation or f"{aid}:{_t.strftime('%Y%m%d', _t.gmtime())}", "project": project or None}
@@ -199,11 +194,7 @@ def register_v8(mcp, store, who):
     @mcp.tool()
     def start_work(what: str, project: str = "", paths: list[str] | None = None, force: bool = False, reason: str = "",
                    agent: str = "", api_key: str = "") -> str:
-        """Call before starting ANY task, including ones the user gives you directly. Commons checks it against what
-        other agents are doing now and what was finished in the last 30 days. ok=false + busy: someone has it, so don't
-        start (coordinate with msg_send, or tell the user who has it). ok=false + done: read that work and build on
-        it; force=true + reason only for a real follow-up. ok=true: it's yours until finish_work or handoff.
-        paths: files/dirs/resources you'll change (overlap on a path counts as the same work)."""
+        """Before ANY task: checks it against other agents' live and recently finished work. ok=false + busy: someone has it, don't start. ok=false + done: build on it (force=true + reason only for a real follow-up). ok=true: yours until finish_work or handoff; `related` lists connected memories to update. paths: files or resources you'll change."""
         from . import work as W
         return _js(W.start(store, me(agent, api_key), what, project or None, paths, force, reason))
 
@@ -230,10 +221,7 @@ def register_v8(mcp, store, who):
     @mcp.tool()
     def use_credential(credential: str, url: str, justification: str, method: str = "GET", body: str = "",
                        content_type: str = "", agent: str = "", api_key: str = "") -> str:
-        """Call a service with one of the user's keys without seeing it: Commons makes the HTTP call and returns the
-        response. justification = what you need it for (the user's ask or your task); Commons' decision agent judges
-        it: sound reads are allowed, writes need the user's request behind them, and anything destructive, costly or
-        that messages people goes to the user first (verdict waiting_for_user; the answer arrives in msg_recv)."""
+        """Call a service with one of the user's keys without seeing it: Commons makes the request and returns the response. justification = what you need it for; the decision agent allows sound reads, writes need the user's request, anything risky goes to the user (verdict waiting_for_user, answer arrives in msg_recv)."""
         from . import vault as V
         return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
 

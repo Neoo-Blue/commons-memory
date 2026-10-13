@@ -111,6 +111,9 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Import embedding | Each import call embedded the whole backlog | `embed_ids`: only its own rows | review apply 17 min -> seconds per batch |
 | Free-text contradictions | Only structured facts (subject/predicate) were checked | Librarian asks TypeSafe about each new note vs its 3 nearest (precision 1.00 / recall 0.97 on 96 pairs) | `test_librarian_flags_free_text_contradictions_once` |
 
+### Fixed since v0.9
+- `add_item` is one transaction (v0.18): a crash can no longer leave a memory without its index, vector or graph links.
+
 ### Still open after v0.9
 | Risk / gap | Why |
 |---|---|
@@ -124,7 +127,6 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |
 | Unlisted tools | Some clients only call listed tools; they reach the others through `call`. |
 | Postgres tsquery with operator-like words | Reported by review; the full suite now passes on Postgres 17, but this case has no dedicated test. |
-| `add_item` is not one transaction | A crash between statements can leave a memory without its graph links. |
 
 ## Part 2: Still open, and why
 

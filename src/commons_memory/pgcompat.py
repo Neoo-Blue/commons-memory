@@ -202,6 +202,11 @@ class PgDB:
         self._cache[sql] = out
         return out
 
+    @property
+    def in_transaction(self) -> bool:  # same meaning as sqlite3.Connection.in_transaction
+        from psycopg.pq import TransactionStatus
+        return self.conn.info.transaction_status != TransactionStatus.IDLE
+
     def execute(self, sql: str, params=()) -> _Cur:
         with self.lock:
             q, ret = self._translate(sql)

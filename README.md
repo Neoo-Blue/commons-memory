@@ -39,7 +39,7 @@ commons search "how do payments retry"
 # 4. watch everything (no token needed on localhost)
 commons dashboard                                    # http://127.0.0.1:8766
 ```
-Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the ~20 core tools (about 3k tokens); `tools(query)` finds the other 130 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
+Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the 28 core tools (about 4.4k tokens); `tools(query)` finds the other 150 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
 
 ## Feature tour
 | Area | What you get | Learn more |
@@ -47,14 +47,15 @@ Connect a second AI the same way and it can see the first one's memory immediate
 | **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · `context=N` returns the turns around each hit and relative dates resolve against each memory's own date ("yesterday (7 May 2023)") · free-text contradiction flags (TypeSafe) · auto-capture hooks for Claude Code/Codex/Gemini/Cursor that keep every message and reply verbatim plus typed observations, and a `turn` hook for chat apps without hooks ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
 | **Project board** | Every request you make, in your words, with the targets (metric, goal, current), expectations, actions and deliveries under it, layer by layer (`project / ui/dashboard`). Done needs evidence, dropped needs a reason, and asking twice is counted. It leads every agent's check-in, so nothing you asked for is lost to context compaction or an agent switch. Agents' questions for you wait under "Needs you" and your answer goes straight back to them | [docs/tools.md](docs/tools.md) |
 | **No duplicate work** | `start_work` checks every task against what other agents are doing now and what was finished, so two agents never build the same thing and nobody redoes finished work; hooks run the same check on every message. Each agent gets the Commons routine on its first check-in, so you never have to explain it | [PROMPT.md](PROMPT.md) |
-| **Credential vault** | Commons stores your API keys encrypted and makes calls for agents, so no agent ever sees a key; a decision agent rules on each request (sound reads allowed, writes need your request behind them, anything destructive comes to you), and a key only ever goes to its own service | [CHANGELOG.md](CHANGELOG.md) |
+| **Credential vault** | Commons stores your API keys and logins encrypted and makes calls for agents, so no agent ever sees a key, and a key only ever goes to its own service. A decision agent rules on each request: sound reads are allowed, writes need your request behind them, anything destructive or costly comes to you. It is an order you choose (TypeSafe, any provider you have a key for, a live connected agent on its own subscription, then you), and a phone notification with Yes / No buttons lets you answer anywhere. Agents creating accounts get a generated username and password from the vault | [CHANGELOG.md](CHANGELOG.md) |
+| **Team awareness** | A live Team now view (who is working, blocked, done or waiting on you) · every release tells all agents what changed and what to adapt · handoffs carry a commit Commons checks on GitHub · failed CI runs, new issues and new PRs (GitHub watcher or webhook) become jobs for the best live agent | [CHANGELOG.md](CHANGELOG.md) |
 | **Continuity** | Sessions, checkpoints, handoffs that resume in another AI · layered context packs (L0 gist → L3 full) so the next AI doesn't re-pay tokens · decisions with rationale and `why()` · leftovers and recurring jobs | [docs/guide.md](docs/guide.md) |
 | **Teamwork** | Submit a task and get a DAG: plan → parallel parts → cross-review (author ≠ reviewer) → debate/consensus → merge. Quality gates, budgets, leases with automatic reassignment, an escalation ladder, routing to the right agent + model + effort, multi-project scheduling, task breakdown view | [docs/guide.md](docs/guide.md), [docs/multitasking.md](docs/multitasking.md) |
 | **Limits & schedules** | Each agent's 5-hour and weekly windows (reported, or synced from aiusage), a reserve learned from your own usage, work routed only to agents with headroom, pause with a checkpoint and resume after the reset · every agent's scheduled tasks with their acceptance bar, taken over by another agent when the owner misses a run or runs out of quota · Capacity page | [docs/guide.md](docs/guide.md) |
 | **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS). `summon` calls every agent at once and reports who is ready; `commons agent daemon --preset claude --install` starts a CLI agent within a second of new work | [docs/messaging.md](docs/messaging.md) |
 | **Skills & tools** | Shared skill pool with versioning, review gate and rollback · MCP hub that proxies upstream servers with per-agent policy and human approval for destructive tools · research · Commons Drive (versioned shared files; S3, WebDAV, SFTP…) | [docs/drive.md](docs/drive.md) |
 | **You** | Preferences learned once and applied by every AI · retro learning from your past Claude/ChatGPT/Codex/Cursor history (review queue) · `commons import claude-mem|mem0|claude-memory|sesame [--curate]` with an AI manager that keeps, merges or drops each item | [docs/retro-learning.md](docs/retro-learning.md) |
-| **Operations** | Dashboard (20+ pages, SSE live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
+| **Operations** | Setup page with a first-run checklist (keys, decision order, credentials, features) · `commons setup` connects 17 AI clients in one command and `commons doctor --repair` fixes a broken connection · dashboard (30 pages, live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
 
 ## Architecture
 ```mermaid
@@ -189,7 +190,7 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (v0.9.0)
+## Benchmarks (measured on v0.9.0)
 Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
 results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
@@ -199,7 +200,7 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 | LoCoMo retrieval | evidence-session any@10 | **97.4%** (v0.8: 95.8) |
 | LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.8%** with `context=2` and date resolution (69.5% for hits alone); no LLM at write time |
 | Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
-| Tool schema an AI pays for each session | tokens | **2,970** for the core profile (v0.8: 33,057) |
+| Tool schema an AI pays for each session | tokens | **4,411** for the core profile in v0.17 (28 tools; 2,970 with 21 tools in v0.9; v0.8: 33,057) |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
 **Head-to-head, rivals run here on the same LoCoMo data** (details in [benchmarks/README.md](benchmarks/README.md)):

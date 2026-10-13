@@ -45,10 +45,7 @@ def register_v7(mcp, store, who):
     @mcp.tool()
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
                  project: str = "", agent: str = "", api_key: str = "") -> str:
-        """Send a direct (to=agent name) or broadcast (to='*') message. type: message|task|question|review|fyi.
-        type=task to one agent becomes a tracked job: it goes to that agent if it is live, otherwise to the best live
-        agent, shows as a running job, and its result comes back to you in msg_recv. Other types say whether the
-        recipient is live. Either way, the reply shows what Commons already knows about it (do it yourself if you can)."""
+        """Message one agent (to=name) or all (to='*'). type: message|task|question|review|fyi. type=task becomes a tracked job (routed to a live agent if the recipient isn't, result returned to you). The reply also shows what Commons already knows about it."""
         from .messaging import recipient_status
         sender = me(agent, api_key)
         if type == "task" and to != "*" and store.get_agent(to):  # a hand-off is tracked work, not just mail
