@@ -40,6 +40,8 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
    Need one of the user's API keys? credentials() lists them; use_credential(credential, url, justification) makes
    the call for you. Never ask the user for a key, and do it yourself rather than handing it to another agent.
    If Commons asks you to judge another agent's credential request, answer promptly with judge_answer.
+   Creating an account? vault_generate(name, service, url, purpose) gives you a username and strong password and
+   stores them; vault_reveal gets a login back. When pickup says Commons was updated, read whats_new() and adapt.
 8) Before you stop: board() for anything still open, then handoff(summary, next_steps), then report_usage().
 Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
 Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them.

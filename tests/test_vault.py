@@ -223,3 +223,23 @@ def test_a_connected_agent_can_be_the_decision_agent(store, svc, monkeypatch):
     assert store.q("SELECT reason FROM vault_decisions ORDER BY ts DESC LIMIT 1")[0]["reason"] == "a read with a sound reason"
     monkeypatch.setenv("COMMONS_AGENT_JUDGE_WAIT", "1")                     # nobody answers: falls through to you
     assert V.use(store, asker, "plex", "GET", base + "/y", "another question from the user today")["verdict"] in ("allowed", "waiting_for_user")
+
+
+def test_vault_generates_and_keeps_account_logins(store, svc, monkeypatch):
+    base, _ = svc
+    a, other = store.ensure_agent("signup-bot"), store.ensure_agent("nosy")
+    g = V.generate(store, a, "newsite_login", "newsite", base, purpose="the user asked for a NewSite account")
+    pw = g["password"]
+    assert len(pw) == 24 and any(c.isupper() for c in pw) and any(c.islower() for c in pw) and any(c.isdigit() for c in pw)
+    assert any(c in V.SYMBOLS for c in pw) and g["username"].startswith("newsite")
+    row = next(c for c in V.listing(store) if c["credential"] == "newsite_login")
+    assert row["kind"] == "login" and row["username"] == g["username"] and pw not in json.dumps(V.listing(store))
+    assert V.reveal(store, a, "newsite_login", "signing in again to finish email verification")["password"] == pw
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    from commons_memory import settings
+    settings.put(store, "judge_chain", ["ask"])
+    r = V.reveal(store, other, "newsite_login", "I want to look at that account for reasons")
+    assert r["verdict"] == "waiting_for_user" and "password" not in r          # someone else: the user decides
+    V.add(store, "apikey", "secret-api-key-1", "svc", [base], {"bearer": True})
+    with pytest.raises(CommonsError, match="never shown"):
+        V.reveal(store, a, "apikey", "I need the raw API key for a script")

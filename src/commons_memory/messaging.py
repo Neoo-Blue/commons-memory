@@ -42,7 +42,7 @@ from .ids import new_id, now
 from .redact import redact
 from .store import CommonsError, Store
 
-MSG_TYPES = ("message", "task", "question", "review", "fyi", "handoff")
+MSG_TYPES = ("message", "task", "question", "review", "fyi", "handoff", "release")
 EVENTS = ("message", "task", "inbox", "handoff", "review", "escalation", "schedule", "test")
 CHANNEL_KINDS = ("webhook", "ntfy", "pushover", "slack", "discord", "telegram", "email", "command")
 ONLINE_S, IDLE_S = 90, 900

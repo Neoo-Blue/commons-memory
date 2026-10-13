@@ -238,6 +238,28 @@ def register_v8(mcp, store, who):
         return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
 
     @mcp.tool()
+    def vault_generate(name: str, service: str, url: str, purpose: str, username: str = "", length: int = 24,
+                       symbols: bool = True, agent: str = "", api_key: str = "") -> str:
+        """Creating an account? Get a username and a strong password from the vault, which stores them. The password
+        is shown this once: use it to finish the sign-up. url = the site, purpose = what the account is for (the
+        user's ask). Leave username empty to have one generated, or pass the email/handle you'll register with."""
+        from . import vault as V
+        return _js(V.generate(store, me(agent, api_key), name, service, url, username, length, symbols, purpose))
+
+    @mcp.tool()
+    def vault_reveal(name: str, justification: str, agent: str = "", api_key: str = "") -> str:
+        """Get a stored login (username + password) back, e.g. to sign in again. Yours for 24 hours after you created
+        it; otherwise the decision agent or the user decides. API keys are never revealed (use use_credential)."""
+        from . import vault as V
+        return _js(V.reveal(store, me(agent, api_key), name, justification))
+
+    @mcp.tool()
+    def whats_new(agent: str = "", api_key: str = "") -> str:
+        """What changed in Commons since you last looked, and what you must adapt (from the release channel)."""
+        from .releases import whats_new as _wn
+        return _js(_wn(store, me(agent, api_key)))
+
+    @mcp.tool()
     def judge_answer(request_id: str, legit: float, destructive: float = 0.0, user_backed: float = 0.0, reason: str = "",
                      agent: str = "", api_key: str = "") -> str:
         """Answer a credential-request judgment Commons sent you (you are the decision agent for it): the probability

@@ -113,7 +113,9 @@ def register_v2(mcp, store, who):
         from .server import playbook_once
         aid = me(agent, api_key, write=False)
         from .handover import nudge
-        return playbook_once(store, aid) + nudge(store, aid) + orch.pickup(aid, project or None, max_tokens)["text"]
+        from .releases import nudge as rnudge
+        return (playbook_once(store, aid) + rnudge(store, aid) + nudge(store, aid)
+                + orch.pickup(aid, project or None, max_tokens)["text"])
 
     @mcp.tool()
     def add_leftover(text: str, task_type: str = "general", priority: int = 1, project: str = "", source_id: str = "",

@@ -2,6 +2,22 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.15.0: the vault makes accounts, and every release tells agents what to adapt
+- **Password generator in the vault.** An agent creating an account calls `vault_generate(name, service, url,
+  purpose)`: the vault creates a username (or uses the one given) and a strong 24-character password, stores both
+  encrypted, and returns them once so the agent can finish the sign-up. `vault_reveal` gives a login back: to its
+  creator for 24 hours, to anyone else only with the decision agent's or your yes. API keys are still never revealed.
+  The Setup page lists logins with their username, never the password.
+- **Release channel.** When a new version starts on the hub, Commons tells every agent once (message type
+  `release`) what changed and what it must adapt, taken from this changelog, which now ships inside the package.
+  `whats_new()` returns it any time, and `pickup()` reminds an agent until it has read it.
+- **For agents:**
+  - Creating an account: call vault_generate for the username and password; never invent or reuse one.
+  - When pickup says Commons was updated, call whats_new() and adapt.
+  - If Commons asks you to judge another agent's credential request, answer with judge_answer.
+  - Need one of the user's keys? credentials(), then use_credential(...); never ask the user or another agent for a
+    raw key.
+
 ## v0.14.0: onboarding, a decision chain you choose, and OpenCode
 - **Setup page** (dashboard, Admin > Setup) with a first-run checklist, also flagged on the Overview until done:
   - provider keys for TypeSafe (Jev), Anthropic, OpenAI, Google, xAI, OpenRouter, or a local Ollama, stored
@@ -21,6 +37,10 @@ All notable changes, newest first. The README describes the current release only
 - **Zero-config vault**: with no `COMMONS_VAULT_KEY`, Commons creates a private key file (0600) next to the database
   on first use; `COMMONS_VAULT_KEY_FILE` points it at a Docker secret to keep it off the data volume.
 - **docker-compose.yml** in the repo, with every option explained; README has an Onboarding section.
+- **For agents:**
+  - Hand over everything you hold: call handover_status() and finish what it lists.
+  - Call start_work before any task; finish_work lists the connected memories and docs your change may have
+    outdated, so update them.
 - **OpenCode** is a first-class client: `commons setup --client opencode` (remote MCP in
   `~/.config/opencode/opencode.json`, instructions in `~/.config/opencode/AGENTS.md`, `opencode run` for instant
   wake), and an OpenCode tab on the Connect page.

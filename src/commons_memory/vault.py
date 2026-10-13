@@ -50,7 +50,8 @@ QUESTIONS = {
 def migrate(db) -> None:
     db.executescript(SCHEMA)
     from .facts import add_columns
-    add_columns(db, [("vault_creds", "deposited_by", "TEXT")])
+    add_columns(db, [("vault_creds", "deposited_by", "TEXT"), ("vault_creds", "username", "TEXT"),
+                     ("vault_creds", "kind", "TEXT")])
 
 
 def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
@@ -155,6 +156,83 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     return {"name": name, "service": service, "base_urls": urls, "risk": risk, "stored": True}
 
 
+SYMBOLS = "-_.!@#%^*+="
+
+
+def make_password(length: int = 24, symbols: bool = True) -> str:
+    """A strong random password with lower, upper, digit (and symbol) characters; no quotes, spaces or backslashes."""
+    import secrets
+    import string
+    n = max(16, min(int(length or 24), 128))
+    alphabet = string.ascii_letters + string.digits + (SYMBOLS if symbols else "")
+    while True:
+        p = "".join(secrets.choice(alphabet) for _ in range(n))
+        if any(c.islower() for c in p) and any(c.isupper() for c in p) and any(c.isdigit() for c in p) \
+                and (not symbols or any(c in SYMBOLS for c in p)):
+            return p
+
+
+def generate(s: Store, agent_id: str, name: str, service: str, url: str, username: str = "", length: int = 24,
+             symbols: bool = True, purpose: str = "") -> dict:
+    """An agent creating an account gets a username and a strong password from the vault, which keeps them. The
+    password is returned this once so the agent can finish the sign-up; later it is used through Commons, or read
+    again with reveal() (the creator for 24 hours, anyone else only with the decision agent's or the user's yes)."""
+    import secrets
+    r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
+    if r and r[0]["deposited_by"] != agent_id:
+        raise CommonsError(f"{name} is already in the vault; pick another name")
+    if not (purpose or "").strip():
+        raise CommonsError("say what the account is for (purpose), e.g. the user's ask")
+    username = (username or "").strip() or (re.sub(r"[^a-z0-9]", "", service.lower())[:12] or "user") + secrets.token_hex(3)
+    password = make_password(length, symbols)
+    add(s, name, password, service, [url], {"basic": username}, f"{service} login: {purpose}"[:300], "high")
+    s.x("UPDATE vault_creds SET username=?, kind='login', deposited_by=? WHERE name=?", (username, agent_id, name))
+    s.x("INSERT INTO vault_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (new_id("vdc"), agent_id, name, "GENERATE", url[:1000], purpose[:1000], "write", "generated", "{}",
+         "new login created by the vault", None, now()))
+    s.audit(agent_id, "vault.generate", name, {"service": service, "username": username})
+    return {"credential": name, "username": username, "password": password, "url": url,
+            "note": "Shown this once: use it now to create the account. Afterwards Commons can use it for you, and "
+                    "vault_reveal gives it back (to you for 24 hours, otherwise with the decision agent's yes)."}
+
+
+def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
+    """Give a stored login (username + password) back to an agent. API keys are never revealed: they're only used
+    through use_credential."""
+    r = s.q("SELECT * FROM vault_creds WHERE name=?", (name,))
+    if not r:
+        raise CommonsError(f"unknown credential {name!r}")
+    cred = dict(r[0])
+    if cred.get("kind") != "login":
+        raise CommonsError("only logins can be revealed; API keys are used through use_credential and never shown")
+    if len((justification or "").strip()) < 15:
+        raise CommonsError("justify the request: what you need the login for")
+    url = json.loads(cred["base_urls"])[0]
+    own = cred["deposited_by"] == agent_id and now() - (cred["updated_at"] or 0) < 86400
+    g = None if own else _grant(s, agent_id, name, "REVEAL", url)
+    d = ({"verdict": "allow", "scope": "write", "scores": {}, "via": "creator", "reason": "the agent that created it, within a day"}
+         if own else {"verdict": "allow", "scope": "write", "scores": {}, "via": "grant", "reason": f"within grant {g['id']}"}
+         if g else judge(s, agent_id, cred, "REVEAL", url, justification))
+    did, qid = new_id("vdc"), None
+    if d["verdict"] == "ask_user":
+        from . import board as B
+        qid = B.add(s, "question", f"[vault {did}] Reveal your {cred['service']} login ({cred['username']}) to "
+                                   f"{s.label(agent_id)[1]}? Their reason: {justification[:300]}. Answer yes or no.",
+                    project="commons-dev", path="vault", agent_id=agent_id)["id"]
+    s.x("INSERT INTO vault_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (did, agent_id, name, "REVEAL", url, justification[:1000], "write", d["verdict"], json.dumps(d["scores"]),
+         d["reason"], qid, now()))
+    s.audit(agent_id, f"vault.reveal.{d['verdict']}", name, {"decision": did})
+    if d["verdict"] == "deny":
+        return {"verdict": "denied", "reason": d["reason"]}
+    if d["verdict"] == "ask_user":
+        return {"verdict": "waiting_for_user", "question_id": qid, "reason": d["reason"]}
+    if g:
+        s.x("UPDATE vault_grants SET uses=uses+1 WHERE id=?", (g["id"],))
+    return {"verdict": "allowed", "credential": name, "username": cred["username"], "password": _value(s, name),
+            "url": url}
+
+
 def remove(s: Store, name: str) -> dict:
     s.x("DELETE FROM vault_creds WHERE name=?", (name,))
     s.x("DELETE FROM vault_grants WHERE cred=?", (name,))
@@ -164,8 +242,10 @@ def remove(s: Store, name: str) -> dict:
 
 def listing(s: Store) -> list[dict]:
     return [{"credential": r["name"], "service": r["service"], "description": r["description"],
-             "base_urls": json.loads(r["base_urls"]), "risk": r["risk"], "stored": bool(r["secret"])}
-            for r in s.q("SELECT name, service, description, base_urls, risk, secret FROM vault_creds ORDER BY name")]
+             "base_urls": json.loads(r["base_urls"]), "risk": r["risk"], "stored": bool(r["secret"]),
+             "kind": r["kind"] or "api_key", **({"username": r["username"]} if r["username"] else {})}
+            for r in s.q("SELECT name, service, description, base_urls, risk, secret, kind, username FROM vault_creds "
+                         "ORDER BY name")]
 
 
 # ------------------------------------------------------------------------------------------------ decision agent
