@@ -64,6 +64,11 @@ def _judge_ready(s: Store, entry: str) -> bool:
     return bool(model) and bool(s.q("SELECT 1 FROM providers WHERE name=? AND enabled=1", (model.split("/")[0],)))
 
 
+def _pin(s: Store) -> bool:
+    from .approvals import has_pin
+    return has_pin(s)
+
+
 def status(s: Store) -> dict:
     import os
     from .handover import status as hstatus
@@ -93,6 +98,9 @@ def status(s: Store) -> dict:
     connected = [a for a in agents if a["connected"]]
     steps = [
         {"step": "Vault ready (keys stored encrypted)", "done": vault_ok, "detail": V.key_source(s) if vault_ok else vault_err},
+        {"step": "Approval PIN set (only you can approve key use)", "done": _pin(s),
+         "detail": "open /approve/pin on this dashboard (the first PIN needs the setup code from the hub's log: "
+                   "`docker logs commons | grep 'setup code'`), or run `commons approvals set-pin` on the hub"},
         {"step": "Decision agent can answer", "done": any(j["ready"] and j["entry"] != "ask" for j in judges),
          "detail": "add a TypeSafe or LLM provider key, or keep 'ask' and decide every credential use yourself"},
         {"step": "Credentials added for your services", "done": bool(user_creds), "detail": f"{len(user_creds)} in the vault"},

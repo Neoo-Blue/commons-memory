@@ -15,6 +15,8 @@ Every decision is logged with its scores and reason.
 """
 from __future__ import annotations
 
+import contextvars
+import hashlib
 import json
 import os
 import re
@@ -51,7 +53,7 @@ def migrate(db) -> None:
     db.executescript(SCHEMA)
     from .facts import add_columns
     add_columns(db, [("vault_creds", "deposited_by", "TEXT"), ("vault_creds", "username", "TEXT"),
-                     ("vault_creds", "kind", "TEXT")])
+                     ("vault_creds", "kind", "TEXT"), ("vault_decisions", "pending", "TEXT")])
 
 
 def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
@@ -86,9 +88,9 @@ def key_source(s: Store) -> str:
 
 
 def _key_file(s: Store) -> str:
-    return os.environ.get("COMMONS_VAULT_KEY_FILE") or os.path.join(os.path.dirname(os.path.abspath(s.path)) if
-                                                                  "://" not in str(s.path) else os.path.expanduser("~/.commons"),
-                                                                  "vault.key")
+    on_disk = "://" not in str(s.path) and str(s.path) != ":memory:"  # else the key would land in the working directory
+    return os.environ.get("COMMONS_VAULT_KEY_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(s.path)) if on_disk else os.path.expanduser("~/.commons"), "vault.key")
 
 
 def _aes(s: Store):
@@ -147,8 +149,8 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
         raise CommonsError("give at least one http(s) base URL the key may be sent to")
     if not any(k in auth for k in ("header", "query", "bearer", "basic")):
         raise CommonsError("auth needs header, query, bearer or basic")
-    if risk not in ("low", "normal", "high"):
-        raise CommonsError("risk is low, normal or high")
+    if risk not in ("low", "normal", "high", "always"):
+        raise CommonsError("risk is low, normal, high or always (always: every use allowed without asking)")
     s.x("INSERT OR REPLACE INTO vault_creds(name,service,description,base_urls,auth,risk,secret,created_at,updated_at) "
         "VALUES(?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM vault_creds WHERE name=?),?),?)",
         (name, service, description, json.dumps(urls), json.dumps(auth), risk, _seal(s, name, value), name, now(), now()))
@@ -187,7 +189,7 @@ def generate(s: Store, agent_id: str, name: str, service: str, url: str, usernam
     password = make_password(length, symbols)
     add(s, name, password, service, [url], {"basic": username}, f"{service} login: {purpose}"[:300], "high")
     s.x("UPDATE vault_creds SET username=?, kind='login', deposited_by=? WHERE name=?", (username, agent_id, name))
-    s.x("INSERT INTO vault_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    s.x("INSERT INTO vault_decisions(id,agent_id,cred,method,url,justification,scope,verdict,scores,reason,question_id,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (new_id("vdc"), agent_id, name, "GENERATE", url[:1000], purpose[:1000], "write", "generated", "{}",
          "new login created by the vault", None, now()))
     s.audit(agent_id, "vault.generate", name, {"service": service, "username": username})
@@ -219,7 +221,8 @@ def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
         qid = B.add(s, "question", f"[vault {did}] Reveal your {cred['service']} login ({cred['username']}) to "
                                    f"{s.label(agent_id)[1]}? Their reason: {justification[:300]}. Answer yes or no.",
                     project="commons-dev", path="vault", agent_id=agent_id)["id"]
-    s.x("INSERT INTO vault_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    s.x("INSERT INTO vault_decisions(id,agent_id,cred,method,url,justification,scope,verdict,scores,reason,question_id,ts) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (did, agent_id, name, "REVEAL", url, justification[:1000], "write", d["verdict"], json.dumps(d["scores"]),
          d["reason"], qid, now()))
     s.audit(agent_id, f"vault.reveal.{d['verdict']}", name, {"decision": did})
@@ -264,6 +267,8 @@ def _context(s: Store, agent_id: str) -> str:
 def judge(s: Store, agent_id: str, cred: dict, method: str, url: str, justification: str, body: str = "") -> dict:
     """{verdict: allow|deny|ask_user, scope, scores, via, reason} for one credential use."""
     scope = "read" if method in READ else "write"
+    if cred.get("risk") == "always":  # the user chose "always allow this key" on an approval
+        return {"verdict": "allow", "scope": scope, "scores": {}, "via": "user", "reason": "you always allow this key"}
     state = (f"An AI agent named {s.label(agent_id)[1]} asks to use the user's {cred['service']} credential "
              f"({cred['description'] or cred['name']}).\nRequested call: {method} {url}\n"
              + (f"Request body: {body[:1500]}\n" if body else "")
@@ -278,6 +283,9 @@ def decide(s: Store, agent_id: str, state: str, scope: str, risk: str = "normal"
     qs = QUESTIONS if scope == "write" else {"legit": QUESTIONS["legit"]}
     scores, via = None, None
     from . import settings, typesafe
+    if settings.get(s, "auto_approve_all"):  # the user's choice on Setup, at their own risk; still logged and scoped
+        return {"verdict": "allow", "scope": scope, "scores": {}, "via": "user",
+                "reason": "approve-everything is on (your choice on the Setup page)"}
     from .providers import ProviderLayer
     llm_prompt = (state + "\n\nFor each question give the probability (0-1) that the answer is yes, as JSON with these "
                   "keys only:\n" + json.dumps(qs))
@@ -405,6 +413,8 @@ def _grant(s: Store, agent_id: str, cred: str, method: str, url: str) -> dict | 
             return dict(g)
         if g["scope"] == "write" and g["method"] == method and g["url"] == url and not g["uses"]:
             return dict(g)  # a write grant covers exactly one call
+        if g["scope"] == "write" and g["method"] == method and g["url"].endswith("*") and url.startswith(g["url"][:-1]):
+            return dict(g)  # "approve similar for 1 h": this method on this service until it expires
     return None
 
 
@@ -436,6 +446,9 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
     return {"status": status, "body": redact(text)[0][:60_000], "truncated": len(raw) >= 400_000}
 
 
+_HOST = contextvars.ContextVar("commons_request_host", default="")  # the hub address the agent used: links reuse it
+
+
 def use(s: Store, agent_id: str, credential: str, method: str, url: str, justification: str, body: str = "",
         content_type: str = "") -> dict:
     method = (method or "GET").upper()
@@ -450,33 +463,48 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
         raise CommonsError("justify the request: what you need this call for (the user's ask or your task)")
     from .redact import redact
     justification = redact(justification)[0][:1000]
+    bh = hashlib.sha256((body or "").encode()).hexdigest()
+    for r in s.q("SELECT id, question_id, pending, ts FROM vault_decisions WHERE agent_id=? AND cred=? AND method=? AND url=? AND "
+                 "verdict='user_allowed' AND pending IS NOT NULL AND ts>? ORDER BY ts DESC", (agent_id, credential, method,
+                                                                                            url[:1000], now() - 3600)):
+        pend = json.loads(r["pending"])
+        if pend.get("body_hash") == bh and "result" not in pend and now() - r["ts"] < 300:  # running: don't resend
+            return {"verdict": "running", "decision_id": r["id"], "question_id": r["question_id"],
+                    "reason": "the user approved this and Commons is running it now: "
+                              f"approval_status({r['question_id']!r}, wait=60) gives the result"}
+        st = (pend.get("result") or {}).get("status") or 0
+        if method not in READ and pend.get("body_hash") == bh and 0 < st < 500:  # the approval ran it: never twice
+            return {"verdict": "allowed", "decision_id": r["id"], "reason": "approved by the user and already run"} | pend["result"]
     g = _grant(s, agent_id, credential, method, url)
+    if not g:  # the same request again: point at the question already waiting before paying for another judgement
+        same = [r for r in s.q("SELECT d.id, d.question_id, d.pending FROM vault_decisions d JOIN board b ON "
+                               "b.id=d.question_id WHERE d.agent_id=? AND d.cred=? AND d.method=? AND d.url=? AND "
+                               "b.status IN ('open','doing','blocked') ORDER BY d.ts DESC",
+                               (agent_id, credential, method, url[:1000]))
+                if not r["pending"] or json.loads(r["pending"]).get("body_hash") == bh]  # a new body is a new request
+        if same:
+            return _waiting(s, same[0]["id"], same[0]["question_id"], "this exact request is already waiting for the user")
     d = ({"verdict": "allow", "scope": g["scope"], "scores": {}, "via": "grant", "reason": f"within grant {g['id']}"}
          if g else judge(s, agent_id, cred, method, url, justification, body))
-    did, qid = new_id("vdc"), None
-    if d["verdict"] == "ask_user":  # the same request again: point at the question already waiting, don't add another
-        same = s.q("SELECT d.id, d.question_id FROM vault_decisions d JOIN board b ON b.id=d.question_id WHERE "
-                   "d.agent_id=? AND d.cred=? AND d.method=? AND d.url=? AND b.status IN ('open','doing','blocked') "
-                   "ORDER BY d.ts DESC LIMIT 1", (agent_id, credential, method, url[:1000]))
-        if same:
-            return {"verdict": "waiting_for_user", "decision_id": same[0]["id"], "question_id": same[0]["question_id"],
-                    "reason": "this exact request is already waiting for the user's answer",
-                    "do": "The user has it under Needs you; the answer arrives in msg_recv. Don't ask again."}
+    did, qid, pending = new_id("vdc"), None, None
     if d["verdict"] == "ask_user":
         from . import board as B
+        shown = redact(body or "")[0][:300]
         qid = B.add(s, "question", f"[vault {did}] Allow {s.label(agent_id)[1]} to {method} {url[:200]} with your "
-                                   f"{cred['service']} key? Their reason: {justification[:300]} (Commons: {d['reason']}). "
-                                   "Answer yes or no.", project="commons-dev", path="vault", agent_id=agent_id)["id"]
-    s.x("INSERT INTO vault_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                                   f"{cred['service']} key? Their reason: {justification[:300]} (Commons: {d['reason']})."
+                                   + (f" Body: {shown}" if shown else "") + " Answer yes or no.",
+                    project="commons-dev", path="vault", agent_id=agent_id)["id"]
+        pending = json.dumps({"body": body or "", "content_type": content_type or "", "body_hash": bh})
+    s.x("INSERT INTO vault_decisions(id,agent_id,cred,method,url,justification,scope,verdict,scores,reason,question_id,ts,"
+        "pending) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (did, agent_id, credential, method, url[:1000], justification, d["scope"], d["verdict"], json.dumps(d["scores"]),
-         d["reason"], qid, now()))
+         d["reason"], qid, now(), pending))
     s.audit(agent_id, f"vault.{d['verdict']}", credential, {"decision": did, "method": method, "url": url[:300],
                                                             "via": d.get("via")})
     if d["verdict"] == "deny":
         return {"verdict": "denied", "decision_id": did, "reason": d["reason"]}
     if d["verdict"] == "ask_user":
-        return {"verdict": "waiting_for_user", "decision_id": did, "question_id": qid, "reason": d["reason"],
-                "do": "The user has the question under Needs you; the answer arrives in msg_recv. Then call again."}
+        return _waiting(s, did, qid, d["reason"])
     if not g:
         g = {"id": new_id("vgr")}
         s.x("INSERT INTO vault_grants(id,agent_id,cred,scope,method,url,decision_id,expires_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -484,6 +512,15 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
              now() + (GRANT_S if d["scope"] == "read" else 900)))
     s.x("UPDATE vault_grants SET uses=uses+1 WHERE id=?", (g["id"],))
     return {"verdict": "allowed", "decision_id": did, "reason": d["reason"]} | call(s, cred, method, url, body, content_type)
+
+
+def _waiting(s: Store, did: str, qid: str, reason: str) -> dict:
+    from .approvals import url as approve_url
+    link = approve_url(s, qid, _HOST.get())
+    return {"verdict": "waiting_for_user", "decision_id": did, "question_id": qid, "reason": reason, "approve_url": link,
+            "do": f"Give the user this link to approve it: {link} . A 'yes' typed in your chat can't approve it. "
+                  f"Then approval_status(question_id='{qid}', wait=120): when they approve, Commons runs the request itself "
+                  "and hands you the result, so don't call again."}
 
 
 def answered(s: Store, question_text: str, answer: str) -> None:
@@ -496,13 +533,44 @@ def answered(s: Store, question_text: str, answer: str) -> None:
         return
     d = dict(d[0])
     yes = bool(re.match(r"\s*(y|yes|ok|okay|approve|allow|sure|go)\b", answer or "", re.I))
-    s.x("UPDATE vault_decisions SET verdict=?, reason=? WHERE id=?",
-        ("user_allowed" if yes else "user_denied", f"user answered: {answer[:200]}", d["id"]))
-    if yes:
+    similar = yes and bool(re.search(r"\ball\b|similar", answer or "", re.I))
+    with s.lock:  # only the first answer counts: a double click or a second answer must not run the request again
+        # ts becomes the decision time, so the result stays reusable for an hour after the approval, not the ask
+        won = s.db.execute("UPDATE vault_decisions SET verdict=?, reason=?, ts=? WHERE id=? AND verdict='ask_user'",
+                           ("user_allowed" if yes else "user_denied", f"user answered: {answer[:200]}", now(),
+                            d["id"])).rowcount
+    if won != 1:
+        return
+    pend = json.loads(d.get("pending") or "null")
+    if similar:  # this method on this service for an hour: a multi-step setup needs one tap
+        p = urllib.parse.urlparse(d["url"])
+        s.x("INSERT INTO vault_grants(id,agent_id,cred,scope,method,url,decision_id,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+            (new_id("vgr"), d["agent_id"], d["cred"], d["scope"], d["method"], f"{p.scheme}://{p.netloc}/*", d["id"],
+             now() + 3600))
+    elif yes and (pend is None or d["method"] in READ):  # an older question, or a read the agent may fetch fresh
         s.x("INSERT INTO vault_grants(id,agent_id,cred,scope,method,url,decision_id,expires_at) VALUES(?,?,?,?,?,?,?,?)",
             (new_id("vgr"), d["agent_id"], d["cred"], d["scope"], d["method"], d["url"], d["id"],
              now() + (GRANT_S if d["scope"] == "read" else 3600)))
-    s.audit(None, "vault.user_" + ("allow" if yes else "deny"), d["cred"], {"decision": d["id"]})
+    s.audit(None, "vault.user_" + ("allow" if yes else "deny"), d["cred"], {"decision": d["id"], "similar": similar})
+    if yes and pend is not None:  # run the approved request now and hand the result to the agent: no retry needed
+        cred = s.q("SELECT * FROM vault_creds WHERE name=?", (d["cred"],))
+        try:
+            res = call(s, dict(cred[0]), d["method"], d["url"], pend["body"], pend.get("content_type", "")) if cred else \
+                {"status": None, "error": "credential removed"}
+        except Exception as e:  # noqa: BLE001 - tell the agent rather than lose the approval
+            res = {"status": None, "error": str(e)[:300]}
+        pend["result"] = res
+        s.x("UPDATE vault_decisions SET pending=? WHERE id=?", (json.dumps(pend), d["id"]))
+        if not 0 < (res.get("status") or 0) < 500:  # the service never really answered: allow one retry of this call
+            s.x("INSERT INTO vault_grants(id,agent_id,cred,scope,method,url,decision_id,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+                (new_id("vgr"), d["agent_id"], d["cred"], d["scope"], d["method"], d["url"], d["id"], now() + 3600))
+    if d.get("agent_id"):
+        from .messaging import Messaging
+        text = (f"The user {'approved' if yes else 'denied'} {d['method']} {d['url'][:200]}"
+                + (f"; Commons ran it: HTTP {pend['result'].get('status')}\n{str(pend['result'].get('body') or pend['result'].get('error') or '')[:3000]}"
+                   if yes and pend is not None else ""))
+        Messaging(s).send(None, d["agent_id"], text, mtype="message", subject=f"vault: {'approved' if yes else 'denied'}",
+                          meta={"vault_decision": d["id"], "question": d["question_id"]})
 
 
 def decisions(s: Store, limit: int = 50) -> list[dict]:

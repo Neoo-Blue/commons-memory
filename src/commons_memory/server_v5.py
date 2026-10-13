@@ -11,10 +11,10 @@ def _js(o):
     return json.dumps(o, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
-def register_v5(mcp, store, who):
-    from .auth import ACL, ANON, PRINCIPAL
-    from .escalation import Escalator, notifications
-    from .trust import Trust
+def make_admin(store, who):
+    """admin(project, agent, api_key) -> agent id, or raises: the local owner, a COMMONS_ADMIN_AGENTS agent, or a
+    project admin. Guards tools that change who can see or spend what."""
+    from .auth import PRINCIPAL
 
     def admin(project: str | None, agent: str, api_key: str) -> str | None:
         aid, _ = who(agent, api_key)
@@ -38,6 +38,16 @@ def register_v5(mcp, store, who):
                     return aid
         raise CommonsError("admin rights required: be a project admin (acl_grant role=admin), be listed in "
                            "COMMONS_ADMIN_AGENTS, or be the sole author of a project that has no ACL yet")
+
+    return admin
+
+
+def register_v5(mcp, store, who):
+    from .auth import ACL, ANON, PRINCIPAL
+    from .escalation import Escalator, notifications
+    from .trust import Trust
+
+    admin = make_admin(store, who)
 
     @mcp.tool()
     def acl_grant(project: str, grantee: str, role: str = "read", agent: str = "", api_key: str = "") -> str:

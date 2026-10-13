@@ -1,5 +1,6 @@
-"""Code indexer: files, symbols, imports and calls for Python (ast) and JS/TS (tree-sitter when installed —
-`pip install commons-memory[code]` — else a lightweight regex parser).
+"""Code indexer: files, symbols, imports and calls for Python (ast), JS/TS (tree-sitter when installed —
+`pip install commons-memory[code]` — else a lightweight regex parser) and Go, Rust, Java, Ruby, C, C++ and C#
+(tree-sitter; a language whose grammar is not installed is skipped).
 
 Call targets are *resolved*: same-file definitions, imported bindings (`from x import f as g`, `import {f as g} from
 './x'`, `const m = require('./x')`, namespace imports), `self.`/`this.` methods of the enclosing class, then a globally
@@ -21,6 +22,23 @@ from .store import Store
 
 PY_EXT = {".py"}
 JS_EXT = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+# meta.lang for every indexed extension. JS and TS share "js" (the regex fallback is one parser).
+_EXT_LANG = {
+    ".py": "python",
+    ".js": "js", ".jsx": "js", ".mjs": "js", ".cjs": "js", ".ts": "js", ".tsx": "js",
+    ".go": "go", ".rs": "rust", ".java": "java", ".rb": "ruby",
+    ".c": "c", ".h": "c",
+    ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
+    ".cs": "csharp",
+}
+# Grammar key. ".ts"/".tsx" differ from meta.lang; ".h" is C and ".hh"/".hpp" are C++.
+_EXT_TS = {
+    ".js": "js", ".jsx": "js", ".mjs": "js", ".cjs": "js", ".ts": "ts", ".tsx": "tsx",
+    ".go": "go", ".rs": "rust", ".java": "java", ".rb": "ruby",
+    ".c": "c", ".h": "c",
+    ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
+    ".cs": "csharp",
+}
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".tox", ".mypy_cache",
              ".pytest_cache", ".next", "coverage", "site-packages"}
 MAX_FILE_BYTES = 512_000
@@ -45,7 +63,7 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
                 for fn in sorted(filenames):
                     path = Path(dirpath) / fn
                     ext = path.suffix.lower()
-                    if ext not in PY_EXT | JS_EXT:
+                    if ext not in _EXT_LANG:
                         continue
                     if path.stat().st_size > MAX_FILE_BYTES:
                         stats["skipped"] += 1
@@ -56,7 +74,7 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
                     except OSError:
                         stats["skipped"] += 1
                         continue
-                    fid = store.upsert_entity("file", rel, pid, rel, meta={"lang": "python" if ext in PY_EXT else "js",
+                    fid = store.upsert_entity("file", rel, pid, rel, meta={"lang": _EXT_LANG[ext],
                                                                             "lines": src.count("\n") + 1})
                     store.relate(pid, fid, "contains")
                     stats["files"] += 1
@@ -69,12 +87,15 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
                             if mod.startswith(part):
                                 modules[mod[len(part):]] = fid
                         _index_python(store, pid, fid, rel, src, symtab, pending_calls, pending_imports, stats, ctx)
+                    elif ext in JS_EXT:
+                        if _ts_parser(ext) is not None:
+                            _index_js_ts(store, pid, fid, rel, src, ext, symtab, pending_calls, pending_imports, stats, ctx)
+                            stats["parser_js"] = "tree-sitter"
+                        else:
+                            _index_js(store, pid, fid, rel, src, symtab, pending_calls, pending_imports, stats, ctx)
+                            stats["parser_js"] = "regex"
                     elif _ts_parser(ext) is not None:
-                        _index_js_ts(store, pid, fid, rel, src, ext, symtab, pending_calls, pending_imports, stats, ctx)
-                        stats["parser_js"] = "tree-sitter"
-                    else:
-                        _index_js(store, pid, fid, rel, src, symtab, pending_calls, pending_imports, stats, ctx)
-                        stats["parser_js"] = "regex"
+                        _index_ts_lang(store, pid, fid, rel, src, _EXT_TS[ext], symtab, pending_calls, pending_imports, stats, ctx)
             # resolve imports to files where possible, else to module entities
             for fid, target in pending_imports:
                 dst = modules.get(target) or modules.get(_resolve_rel(store, fid, target)) or \
@@ -384,22 +405,34 @@ def _index_js(store, pid, fid, rel, src, symtab, pending_calls, pending_imports,
 _TS_CACHE: dict[str, object] = {}
 
 
+_TS_GRAMMAR = {
+    "js": ("tree_sitter_javascript", "language"),
+    "ts": ("tree_sitter_typescript", "language_typescript"),
+    "tsx": ("tree_sitter_typescript", "language_tsx"),
+    "go": ("tree_sitter_go", "language"),
+    "rust": ("tree_sitter_rust", "language"),
+    "java": ("tree_sitter_java", "language"),
+    "ruby": ("tree_sitter_ruby", "language"),
+    "c": ("tree_sitter_c", "language"),
+    "cpp": ("tree_sitter_cpp", "language"),
+    "csharp": ("tree_sitter_c_sharp", "language"),
+}
+
+
 def _ts_parser(ext: str):
-    if os.environ.get("COMMONS_TREE_SITTER", "1") != "1" or ext not in JS_EXT:
+    if os.environ.get("COMMONS_TREE_SITTER", "1") != "1":
         return None
-    key = {".ts": "ts", ".tsx": "tsx"}.get(ext, "js")
+    key = _EXT_TS.get(ext)
+    if key is None:
+        return None
     if key in _TS_CACHE:
         return _TS_CACHE[key]
     try:
         from tree_sitter import Language, Parser
-        if key == "js":
-            import tree_sitter_javascript as m
-            lang = Language(m.language())
-        else:
-            import tree_sitter_typescript as m
-            lang = Language(m.language_typescript() if key == "ts" else m.language_tsx())
-        _TS_CACHE[key] = Parser(lang)
-    except Exception:  # noqa: BLE001 - optional dependency
+        mod_name, fn = _TS_GRAMMAR[key]
+        mod = __import__(mod_name)
+        _TS_CACHE[key] = Parser(Language(getattr(mod, fn)()))
+    except Exception:  # noqa: BLE001 - optional dependency, or the grammar package is not installed
         _TS_CACHE[key] = None
     return _TS_CACHE[key]
 
@@ -543,6 +576,307 @@ def _index_js_ts(store, pid, fid, rel, src, ext, symtab, pending_calls, pending_
                     defs.setdefault("default", defs[_t(nm)])
                 elif c.type == "identifier" and _t(c) in defs:
                     defs.setdefault("default", defs[_t(c)])
+
+
+# ---------------------------------------------------------------------------- tree-sitter (Go, Rust, Java, Ruby, C, C++, C#)
+# One walker. The table is node types; names, calls and imports differ enough that each language has a small extractor.
+_TS_LANGS = {
+    "go": {"containers": frozenset({"type_spec"}),
+           "functions": frozenset({"function_declaration", "method_declaration", "method_elem"}),
+           "calls": frozenset({"call_expression"}), "imports": frozenset({"import_spec"})},
+    "rust": {"containers": frozenset({"struct_item", "enum_item", "union_item", "trait_item", "impl_item"}),
+             "functions": frozenset({"function_item"}),
+             "calls": frozenset({"call_expression"}), "imports": frozenset({"use_declaration"})},
+    "java": {"containers": frozenset({"class_declaration", "interface_declaration", "enum_declaration",
+                                      "record_declaration", "annotation_type_declaration"}),
+             "functions": frozenset({"method_declaration", "constructor_declaration"}),
+             "calls": frozenset({"method_invocation", "object_creation_expression"}),
+             "imports": frozenset({"import_declaration"})},
+    "ruby": {"containers": frozenset({"class", "module", "singleton_class"}),
+             "functions": frozenset({"method", "singleton_method"}),
+             "calls": frozenset({"call", "command", "command_call"}), "imports": frozenset()},
+    "c": {"containers": frozenset({"struct_specifier", "union_specifier", "enum_specifier"}),
+          "functions": frozenset({"function_definition"}),
+          "calls": frozenset({"call_expression"}), "imports": frozenset({"preproc_include"})},
+    "cpp": {"containers": frozenset({"struct_specifier", "union_specifier", "enum_specifier", "class_specifier"}),
+            "functions": frozenset({"function_definition"}),
+            "calls": frozenset({"call_expression"}), "imports": frozenset({"preproc_include"})},
+    "csharp": {"containers": frozenset({"class_declaration", "interface_declaration", "struct_declaration",
+                                        "enum_declaration", "record_declaration"}),
+               "functions": frozenset({"method_declaration", "constructor_declaration", "local_function_statement"}),
+               "calls": frozenset({"invocation_expression"}), "imports": frozenset({"using_directive"})},
+}
+_TYPE_NODES = {"type_identifier", "identifier", "namespace_identifier", "constant"}
+_SIMPLE_RECV = {"identifier", "type_identifier", "this", "self", "super"}
+_DECL_WRAP = {"pointer_declarator", "reference_declarator", "parenthesized_declarator"}
+
+
+def _ok_name(name: str) -> bool:
+    return bool(name) and "\n" not in name and "{" not in name and len(name) < 200
+
+
+def _bare_type(node) -> str:
+    """Innermost type name: `*Server`, `Foo<T>`, `Box<int>` and `pkg.Server` all yield the type itself."""
+    if node is None:
+        return ""
+    if node.type in _TYPE_NODES:
+        return _t(node)
+    if node.type in ("generic_type", "template_type"):
+        return _bare_type(node.child_by_field_name("type") or node.child_by_field_name("name"))
+    if node.type in ("scoped_identifier", "qualified_identifier", "scoped_type_identifier", "qualified_type"):
+        return _bare_type(node.child_by_field_name("name"))
+    named = node.child_by_field_name("name")
+    if named is not None and named.type in _TYPE_NODES:
+        return _t(named)
+    for c in node.children:
+        if c.is_named:
+            got = _bare_type(c)
+            if got:
+                return got
+    return ""
+
+
+def _recv(node) -> str:
+    """Method-call receiver: a bare identifier (or self/this), otherwise '?'."""
+    if node is not None and node.type in _SIMPLE_RECV:
+        return _t(node)
+    return "?"
+
+
+def _string_content(node) -> str:
+    if node is None:
+        return ""
+    if node.type == "system_lib_string":
+        return _t(node).strip("<> \t")
+    if node.type in ("string_content", "interpreted_string_literal_content", "raw_string_literal_content"):
+        return _t(node)
+    for c in node.children:
+        got = _string_content(c)
+        if got:
+            return got
+    return ""
+
+
+def _container_name(lang: str, node) -> str:
+    if lang == "go":
+        kind = node.child_by_field_name("type")
+        if kind is None or kind.type not in ("struct_type", "interface_type"):
+            return ""
+        return _t(node.child_by_field_name("name"))
+    if lang == "rust" and node.type == "impl_item":
+        return _bare_type(node.child_by_field_name("type"))
+    if lang in ("c", "cpp") and node.child_by_field_name("body") is None:
+        return ""  # `struct Server *s` is a reference, not a definition
+    return _t(node.child_by_field_name("name"))
+
+
+def _func_parts(lang: str, node) -> tuple[str, str | None]:
+    """(name, enclosing type from the declaration itself). The type is set for Go receivers and C++ `Type::method`."""
+    if lang == "go" and node.type == "method_declaration":
+        recv = node.child_by_field_name("receiver")
+        typ = ""
+        for c in recv.children if recv is not None else []:
+            if c.type == "parameter_declaration":
+                typ = _bare_type(c.child_by_field_name("type"))
+                break
+        return _t(node.child_by_field_name("name")), typ or None
+    if lang in ("c", "cpp") and node.type == "function_definition":
+        return _c_func_name(node)
+    return _t(node.child_by_field_name("name")), None
+
+
+def _c_func_name(node) -> tuple[str, str | None]:
+    decl = node.child_by_field_name("declarator")
+    while decl is not None and decl.type in _DECL_WRAP:
+        decl = decl.child_by_field_name("declarator")
+    if decl is None or decl.type != "function_declarator":
+        return "", None
+    inner = decl.child_by_field_name("declarator")
+    while inner is not None and inner.type in _DECL_WRAP:
+        inner = inner.child_by_field_name("declarator")
+    if inner is None:
+        return "", None
+    if inner.type == "destructor_name":
+        ident = next((c for c in inner.children if c.type == "identifier"), None)
+        return ("~" + _t(ident)) if ident is not None else "", None
+    if inner.type in ("qualified_identifier", "scoped_identifier"):
+        scope = _bare_type(inner.child_by_field_name("scope"))
+        return _t(inner.child_by_field_name("name")), scope or None
+    if inner.type == "operator_name":
+        return _t(inner).replace(" ", ""), None
+    if inner.type in ("identifier", "field_identifier"):
+        return _t(inner), None
+    return _t(inner), None
+
+
+def _call_parts(lang: str, node) -> tuple[str, str | None]:
+    if lang == "java":
+        if node.type == "object_creation_expression":
+            return _bare_type(node.child_by_field_name("type")), None
+        name = node.child_by_field_name("name")
+        obj = node.child_by_field_name("object")
+        return (_t(name), None if obj is None else _recv(obj)) if name is not None else ("", None)
+    if lang == "csharp":
+        f = node.child_by_field_name("function")
+        if f is None:
+            return "", None
+        if f.type == "identifier":
+            return _t(f), None
+        if f.type == "member_access_expression":
+            return _t(f.child_by_field_name("name")), _recv(f.child_by_field_name("expression"))
+        return "", None
+    if lang == "ruby":
+        method = node.child_by_field_name("method")
+        if method is None or _t(method) in ("require", "require_relative"):
+            return "", None
+        recv = node.child_by_field_name("receiver")
+        return _t(method), None if recv is None else _recv(recv)
+    f = node.child_by_field_name("function")
+    if f is None:
+        return "", None
+    if f.type == "identifier":
+        return _t(f), None
+    if f.type == "selector_expression":  # Go: fmt.Println
+        return _t(f.child_by_field_name("field")), _recv(f.child_by_field_name("operand"))
+    if f.type == "field_expression":  # Rust obj.m, C/C++ obj.m / obj->m
+        obj = f.child_by_field_name("value") or f.child_by_field_name("argument")
+        return _t(f.child_by_field_name("field")), _recv(obj)
+    if f.type in ("scoped_identifier", "qualified_identifier"):
+        path = f.child_by_field_name("path") or f.child_by_field_name("scope")
+        return _t(f.child_by_field_name("name")), _recv(path)
+    if f.type == "generic_function":
+        inner = f.child_by_field_name("function")
+        if inner is not None and inner.type == "identifier":
+            return _t(inner), None
+    return "", None
+
+
+def _import_module(lang: str, node) -> str:
+    if lang == "ruby":
+        if node.type not in ("call", "command", "command_call"):
+            return ""
+        method = node.child_by_field_name("method")
+        if method is None or _t(method) not in ("require", "require_relative"):
+            return ""
+        return _string_content(node.child_by_field_name("arguments"))
+    if node.type not in _TS_LANGS[lang]["imports"]:
+        return ""
+    if lang == "go":
+        return _string_content(node.child_by_field_name("path"))
+    if lang == "rust":
+        arg = node.child_by_field_name("argument")
+        return " ".join(_t(arg).split()) if arg is not None else ""
+    if lang == "java":
+        for c in node.children:
+            if c.type in ("scoped_identifier", "identifier"):
+                return _t(c)
+        return ""
+    if lang == "csharp":
+        quals = [c for c in node.children if c.type == "qualified_name"]
+        if quals:
+            return _t(quals[-1])
+        ids = [c for c in node.named_children if c.type == "identifier"]
+        return _t(ids[-1]) if ids else ""
+    if lang in ("c", "cpp"):
+        return _string_content(node.child_by_field_name("path"))
+    return ""
+
+
+def _index_ts_lang(store, pid, fid, rel, src, lang, symtab, pending_calls, pending_imports, stats, ctx):
+    spec = _TS_LANGS.get(lang)
+    parser = _ts_parser_key(lang)
+    if spec is None or parser is None:
+        return
+    tree = parser.parse(src.encode())
+    defs = ctx["defs"].setdefault(fid, {})
+    defined: set[str] = set()
+    class_by_name: dict[str, str] = {}
+    func_types, cont_types, call_types = spec["functions"], spec["containers"], spec["calls"]
+
+    def define(typ, name, node, parent):
+        if not _ok_name(name) or name in defined:
+            return defs.get(name)
+        eid = store.upsert_entity(typ, name, pid, rel, node.start_point[0] + 1, {"end_line": node.end_point[0] + 1})
+        store.relate(parent, eid, "defines")
+        symtab.setdefault(name.split(".")[-1], []).append(eid)
+        defs[name] = eid
+        defined.add(name)
+        short = name.split(".")[-1]
+        if short != name:  # bare `helper()` in the same file (Java, C#, C++ methods) resolves locally
+            defs.setdefault(short, eid)
+        stats["symbols"] += 1
+        return eid
+
+    def containers(node, parent_eid):
+        if node.type in cont_types:
+            name = _container_name(lang, node)
+            if name:
+                cid = define("class", name, node, parent_eid)
+                if cid:
+                    class_by_name.setdefault(name, cid)
+                    for c in node.children:
+                        containers(c, cid)
+                    return
+        for c in node.children:
+            containers(c, parent_eid)
+
+    def calls_in(node, owner, cls):
+        stack = list(node.children)
+        while stack:
+            n = stack.pop()
+            if n.type in func_types or n.type in cont_types:
+                continue  # nested function or type owns its own calls
+            if n.type in call_types:
+                name, recv = _call_parts(lang, n)
+                if _ok_name(name):
+                    pending_calls.append((owner, name, recv, fid, cls))
+            stack.extend(n.children)
+
+    def walk(node, parent_eid, container, member):
+        # tree-sitter Node wrappers are not stable under id(), so a container is recognized by its type
+        if node.type in cont_types:
+            name = _container_name(lang, node)
+            if name:
+                cid = class_by_name.get(name, parent_eid)
+                for c in node.children:
+                    walk(c, cid, name, True)
+                return
+        if node.type in func_types:
+            fname, override = _func_parts(lang, node)
+            if not _ok_name(fname):
+                return
+            if override:
+                qual, typ, cls, parent = f"{override}.{fname}", "method", override, class_by_name.get(override, parent_eid)
+            elif member and container:
+                qual, typ, cls, parent = f"{container}.{fname}", "method", container, parent_eid
+            else:
+                qual, typ, cls, parent = fname, "function", None, parent_eid
+            eid = define(typ, qual, node, parent)
+            if eid:
+                calls_in(node, eid, cls)
+                for c in node.children:
+                    walk(c, eid, None, False)
+            return
+        mod = _import_module(lang, node)
+        if mod:
+            pending_imports.append((fid, mod))
+            if lang == "ruby":  # require "x" do def inner; end end — the block is a child of the call
+                for c in node.children:
+                    walk(c, parent_eid, container, member)
+            return
+        for c in node.children:
+            walk(c, parent_eid, container, member)
+
+    containers(tree.root_node, fid)
+    walk(tree.root_node, fid, None, False)
+
+
+def _ts_parser_key(lang: str):
+    """Parser for a grammar key. `_ts_parser` is keyed by extension; several extensions share one grammar."""
+    for ext, key in _EXT_TS.items():
+        if key == lang:
+            return _ts_parser(ext)
+    return None
 
 
 def code_symbols(store: Store, name: str = "", project: str | None = None, types: list[str] | None = None,

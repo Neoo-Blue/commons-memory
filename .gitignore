@@ -12,3 +12,4 @@ graph.html
 secrets/
 commons.env
 secrets/
+vault.key

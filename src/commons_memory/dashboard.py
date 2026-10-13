@@ -531,7 +531,7 @@ def make_handler(api: API, token: str | None):
             viewer|admin`). Viewers can read but not POST."""
             users = dashboard_users(api.s)
             if not token and not users:
-                if not _host_allowed(self.headers.get("Host", "")):
+                if not _host_allowed(self.headers.get("Host", ""), api.s):
                     self.deny = (f"unrecognised Host {self.headers.get('Host')!r}: open the dashboard by IP or add the "
                                  "name to COMMONS_DASHBOARD_HOSTS (tokenless dashboards refuse other names: DNS rebinding)")
                     return False
@@ -608,9 +608,20 @@ def make_handler(api: API, token: str | None):
             self.end_headers()
             self.wfile.write(data)
 
+        def _approver(self) -> bool:
+            from .approvals import session_ok
+            for part in self.headers.get("Cookie", "").split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == "commons_approver" and session_ok(api.s, v):
+                    return True
+            return False
+
         def do_GET(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path.startswith("/approve/") and _host_allowed(self.headers.get("Host", ""), api.s):
+                from .approvals import render
+                return self._send(200, render(api.s, u.path.split("/")[2], self._approver()), "text/html; charset=utf-8")
             if not self._authed(q):
                 return self._send(401, {"error": getattr(self, "deny", None) or "token required (?token=...)"})
             secure = "; Secure" if getattr(self.server, "tls", False) else ""
@@ -659,6 +670,30 @@ def make_handler(api: API, token: str | None):
                     return self._send(200, quick_answer(api.s, b.get("id", ""), b.get("answer", ""), b.get("sig", "")))
                 except (CommonsError, ValueError) as e:
                     return self._send(403, {"error": str(e)})
+            if u.path.startswith("/approve/") and self.headers.get("X-Commons") == "1" \
+                    and _host_allowed(self.headers.get("Host", ""), api.s):
+                from . import approvals as AP
+                try:
+                    b = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                    # ponytail: behind a tunnel every remote browser shares the proxy's address, so they share one
+                    # lockout; the owner on the LAN still has their own
+                    client = str(self.client_address[0])
+                    if u.path == "/approve/unlock":
+                        out = AP.unlock(api.s, str(b.get("pin") or ""), client)
+                    elif b.get("set_pin"):
+                        out = AP.set_pin(api.s, str(b["set_pin"]), current=str(b.get("current") or ""),
+                                         code=str(b.get("code") or ""), client=client)
+                    else:
+                        cookie = next((v for k, _, v in (p.strip().partition("=") for p in
+                                       self.headers.get("Cookie", "").split(";")) if k == "commons_approver"), "")
+                        out = AP.answer(api.s, u.path.split("/")[2], b.get("choice", ""), str(b.get("pin") or ""),
+                                        cookie, client)
+                    secure = "; Secure" if getattr(self.server, "tls", False) or \
+                        self.headers.get("X-Forwarded-Proto") == "https" else ""
+                    return self._send(200, out, extra={"Set-Cookie": f"commons_approver={AP.session_token(api.s)}; HttpOnly; "
+                                                               f"SameSite=Strict; Path=/; Max-Age={AP.SESSION_S}{secure}"})
+                except (CommonsError, ValueError) as e:
+                    return self._send(403, {"error": str(e)})
             if not self._authed(q):
                 return self._send(401, {"error": getattr(self, "deny", None) or "token required"})
             if self.headers.get("X-Commons") != "1":
@@ -668,13 +703,34 @@ def make_handler(api: API, token: str | None):
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
                 self._ctx()
+                from . import approvals as AP
+                if u.path.startswith(OWNER_ONLY) and AP.has_pin(api.s) and not self._approver():
+                    return self._send(403, {"error": "this change needs your approval PIN", "need_pin": True})
+                if u.path == "/api/setup/setting" and body.get("key") == "auto_approve_all" and body.get("value") \
+                        and body.get("value") not in ("0", "false", "off") and not AP.has_pin(api.s):
+                    return self._send(403, {"error": "set your approval PIN first (open /approve/pin): approving "
+                                                     "everything must stay a switch only you can flip",
+                                            "approve_url": "/approve/pin"})
+                if u.path == "/api/board/answer" and not self._approver():
+                    from .approvals import needs_proof
+                    from . import board as B
+                    if needs_proof(B.get(api.s, body.get("id", "")).get("text", "")):
+                        return self._send(403, {"error": "key approvals need you: open /approve/" + body.get("id", ""),
+                                                "approve_url": "/approve/" + body.get("id", "")})
                 return self._send(200, api.post(u.path, body))
             except (CommonsError, KeyError, ValueError) as e:
                 return self._send(400, {"error": str(e)})
     return H
 
 
-def _host_allowed(host_hdr: str) -> bool:
+# changes an agent on the LAN could use to approve itself, reach a key, or mint a key: once a PIN exists they need the
+# browser the owner unlocked with it
+OWNER_ONLY = ("/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
+              "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
+              "/api/librarian/config", "/api/skill/review", "/api/killswitch")
+
+
+def _host_allowed(host_hdr: str, s: Store | None = None) -> bool:
     """A tokenless dashboard trusts the network, so it must not answer a page from another site that re-pointed its
     own DNS name at us (DNS rebinding). Rebinding always arrives under the attacker's hostname, so accept IP
     literals, localhost, this machine's names, and COMMONS_DASHBOARD_HOSTS / COMMONS_PUBLIC_URL hosts."""
@@ -693,6 +749,11 @@ def _host_allowed(host_hdr: str) -> bool:
     pub = urlparse(os.environ.get("COMMONS_PUBLIC_URL", "")).hostname
     if pub:
         names.add(pub.lower())
+    if s is not None:  # the address the owner set on Setup (a tunnel or proxy hostname) needs no extra env var
+        from . import settings
+        dash = urlparse(settings.get(s, "dashboard_url") or "").hostname
+        if dash:
+            names.add(dash.lower())
     return h in names or h.endswith(".localhost") or h.endswith(".ts.net")
 
 
@@ -796,6 +857,12 @@ def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, backg
     srv = make_server(store, host, port, token, tls_cert, tls_key)
     from .background import start_background
     start_background(store)
+    from . import approvals as AP
+    if not AP.has_pin(store):  # only someone who can read this hub's own log can choose the first approval PIN
+        import sys
+        print(f"Commons approval setup code: {AP.setup_code(store)}  (enter it on the dashboard's Setup page or any "
+              "approval link to choose your approval PIN; `commons approvals code` on this host shows it again)",
+              file=sys.stderr, flush=True)
     if background:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         return srv
@@ -956,7 +1023,9 @@ if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get(
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const J=v=>E(JSON.stringify(v??""));
 const api=p=>fetch("/api/"+p,{credentials:"same-origin"}).then(r=>r.json());
-const postRaw=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
+const postRaw=(p,b)=>fetch("/api/"+p,{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json()).then(async r=>{if(!(r&&r.need_pin))return r;const u=await pinUnlock();return u===true?postRaw(p,b):{error:u||r.error}});
+function pinUnlock(){return new Promise(res=>{let d=document.getElementById("pinDlg");if(!d){d=document.createElement("dialog");d.id="pinDlg";d.innerHTML=`<form method="dialog" style="display:grid;gap:12px;max-width:340px"><h3 style="margin:0">Your approval PIN</h3><p class="mut sm" style="margin:0">Keys, providers, approvals and policies only change from a browser you unlocked with your PIN. This one stays unlocked for 12 hours.</p><input id="pinIn" type="password" inputmode="numeric" autocomplete="current-password" aria-label="approval PIN" style="min-height:44px;font-size:18px"><div style="display:flex;gap:8px"><button class="pri" value="ok" style="min-height:44px;flex:1">Unlock</button><button value="cancel" formnovalidate style="min-height:44px">Cancel</button></div></form>`;document.body.appendChild(d)}
+d.onclose=async()=>{const pin=document.getElementById("pinIn").value;document.getElementById("pinIn").value="";if(d.returnValue!=="ok"||!pin)return res("");const r=await fetch("/approve/unlock",{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify({pin})}).then(r=>r.json()).catch(e=>({error:String(e)}));res(r.error?r.error:true)};d.returnValue="";d.showModal()})}
 const bUp=(id,status)=>{const ev=$("#ev_"+id),cu=$("#cu_"+id);post("board/update",{id,status,evidence:ev&&ev.value||"",current:cu&&cu.value||""})};
 const suProv=k=>{const el=$("#pk_"+k),v=el?el.value.trim():"";post("setup/provider",k=="ollama"?{kind:k,base_url:v}:{kind:k,key:v})};
 const suMove=(i,d)=>{const c=window.suChain,j=i+d;[c[i],c[j]]=[c[j],c[i]];render()};
@@ -1096,7 +1165,7 @@ const mark={open:"○",doing:"◐",blocked:"⊘",done:"●",dropped:"–"};
 const row=(x,dep)=>`<div class="brow ${x.status}" style="--dep:${dep}"><span class="bmk" title="${x.status}">${mark[x.status]||"○"}</span><span class="pill ${x.kind=="ask"?"new":x.status}">${x.kind}</span><div class="btx"><div>${x.kind=="target"&&(x.metric||x.goal)?`<b>${E(x.metric||"")}</b> goal <b>${E(x.goal||"?")}</b> · now <b>${E(x.current||"?")}</b> · `:""}${E(x.text)}${x.repeats?` <span class="pill failed">asked ${x.repeats+1}×</span>`:""}</div>${x.evidence?`<div class="mut sm">${x.status=="dropped"?"why":"evidence"}: ${E(x.evidence)}</div>`:""}<div class="mut sm">${[x.id,x.source,(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div>${x.kind=="question"&&OPEN.includes(x.status)?`<div class="bact"><a class="pill blocked" href="#Board" onclick="setTimeout(()=>$('#an_${x.id}').focus(),50)">answer in Needs you</a></div>`:OPEN.includes(x.status)?`<div class="bact"><input id="ev_${x.id}" placeholder="evidence / reason" aria-label="evidence or reason for ${E(x.id)}">${x.kind=="target"?`<input id="cu_${x.id}" placeholder="now…" size=8 aria-label="current value">`:""}<button onclick="bUp('${x.id}','doing')">Start</button><button class="pri" onclick="bUp('${x.id}','done')">Done</button><button class="bad" onclick="bUp('${x.id}','dropped')">Drop</button></div>`:`<div class="bact"><button onclick="bUp('${x.id}','open')">Reopen</button></div>`}</div>`;
 const walk=(p,dep)=>(kids[p]||[]).filter(live).map(x=>row(x,dep)+walk(x.id,dep+1)).join("");
 const qs=d.items.filter(x=>x.kind=="question"&&OPEN.includes(x.status)&&(!pj||x.project==pj));
-const needs=qs.length?`<div class="card needs"><h3>Needs you <span class="pill blocked">${qs.length}</span> <span class="mut sm">agents are waiting on these answers; your reply goes straight to the asking agent.</span></h3>${qs.map(x=>`<div class="nq"><div><b>${E(x.text)}</b><div class="mut sm">${[x.source,x.project,x.parent&&by[x.parent]?"holds up: "+by[x.parent].text.slice(0,120):"",(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div><div class="bact"><textarea id="an_${x.id}" rows="2" placeholder="your answer" aria-label="answer to ${E(x.text.slice(0,60))}"></textarea><button class="pri" onclick="bAns('${x.id}')">Answer</button></div></div>`).join("")}</div>`:"";
+const needs=qs.length?`<div class="card needs"><h3>Needs you <span class="pill blocked">${qs.length}</span> <span class="mut sm">agents are waiting on these answers; your reply goes straight to the asking agent.</span></h3>${qs.map(x=>`<div class="nq"><div><b>${E(x.text)}</b><div class="mut sm">${[x.source,x.project,x.parent&&by[x.parent]?"holds up: "+by[x.parent].text.slice(0,120):"",(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div>${/\[(vault|mcp) /.test(x.text)?`<div class="bact"><a class="pill blocked" style="min-height:44px;display:inline-flex;align-items:center;padding:0 16px" href="/approve/${E(x.id)}">Review &amp; approve</a></div>`:`<div class="bact"><textarea id="an_${x.id}" rows="2" placeholder="your answer" aria-label="answer to ${E(x.text.slice(0,60))}"></textarea><button class="pri" onclick="bAns('${x.id}')">Answer</button></div>`}</div>`).join("")}</div>`:"";
 let last="",tree="";(kids[""]||[]).filter(live).forEach(x=>{const h=(x.project||"no project")+(x.path?" / "+x.path:"");if(h!=last){tree+=`<h4 class="bhead">${E(h)}</h4>`;last=h}tree+=row(x,0)+walk(x.id,1)});
 return `<div class="grid4"><div class="card stat hero"><div class="mut">Open asks</div><div class="big">${openAsks.length}</div></div><div class="card stat"><div class="mut">Asked twice or more</div><div class="big ${rep?"failed":""}">${rep}</div></div><div class="card stat"><div class="mut">Targets met</div><div class="big">${tg.filter(x=>x.status=="done").length}/${tg.length}</div></div><div class="card stat"><div class="mut">Delivered</div><div class="big">${d.items.filter(x=>x.status=="done").length}</div></div></div>
 ${needs}<div class="card"><h3>Board <span class="mut sm">everything asked, measured and delivered, per project and layer. Agents read it in every pickup.</span></h3>
@@ -1142,7 +1211,7 @@ return `<div class="card"><h3>Set up Commons <span class="pill ${d.done==d.total
 <div class="card"><h3>3 · Your credentials <span class="mut sm">agents use them through Commons (use_credential) and never see them</span></h3>
 ${d.credentials.length?`<table><tr><th>name</th><th>service</th><th>only sent to</th><th>risk</th><th>from</th><th></th></tr>${d.credentials.map(c=>`<tr><td><b>${E(c.credential)}</b>${c.kind=="login"?` <span class="pill new">login</span><div class="mut sm">user: ${E(c.username||"")}</div>`:""}</td><td>${E(c.service)}</td><td class="mut">${E(c.base_urls.join(", "))}</td><td>${pill(c.risk)}</td><td class="mut">${E(c.from)}</td><td><button class="bad" onclick="confirm(${J("Remove "+c.credential+" from the vault?")})&&post('vault/rm',{name:${J(c.credential)}})">Remove</button></td></tr>`).join("")}</table>`:empty("🔐","No credentials yet","<div>Add one below, or let agents hand theirs over with vault_deposit.</div>")}
 <details class="badd"><summary>Add a credential</summary><div class="bfil"><input id="vn" placeholder="name, e.g. radarr"><input id="vs" placeholder="service"><input id="vu" placeholder="base URL it may be sent to" size=30><select id="va" aria-label="how the key is sent"><option value="header:X-Api-Key">header X-Api-Key</option><option value="bearer">Bearer token</option><option value="query:apikey">query ?apikey=</option><option value="header:X-Plex-Token">header X-Plex-Token</option><option value="basic:">Basic (user + password)</option></select><input id="vb" placeholder="user (Basic only)" size=12><select id="vr" aria-label="risk"><option value="normal">normal risk</option><option value="low">low risk</option><option value="high">high risk (every write asks you)</option></select><input id="vd" placeholder="description" size=22><input id="vv" type="password" placeholder="value" autocomplete="off"><button class="pri" onclick="suCred()">Store</button></div></details></div>
-<div class="card"><h3>4 · Features <span class="mut sm">all recommended; untick what you don't want</span></h3><div class="cxsteps">${d.settings.filter(x=>typeof x.default=="boolean").map(x=>`<label class="cxstep"><input type="checkbox" ${x.value?"checked":""} onchange="post('setup/setting',{key:'${x.key}',value:this.checked})"> ${E(x.help)} <span class="pill done">recommended</span></label>`).join("")}</div>
+<div class="card"><h3>4 · Features <span class="mut sm">all recommended; untick what you don't want</span></h3><div class="cxsteps">${d.settings.filter(x=>typeof x.default=="boolean").map(x=>`<label class="cxstep"><input type="checkbox" ${x.value?"checked":""} onchange="post('setup/setting',{key:'${x.key}',value:this.checked})"> ${E(x.help)} ${x.risky?'<span class="pill pending">your risk</span>':'<span class="pill done">recommended</span>'}</label>`).join("")}</div>
 ${d.settings.filter(x=>typeof x.default=="number").map(x=>`<p><label>${E(x.help)} <input type="number" min="0" max="90" value="${x.value}" style="width:72px" onchange="post('setup/setting',{key:'${x.key}',value:this.value})"></label></p>`).join("")}
 ${d.settings.filter(x=>typeof x.default=="string").map(x=>`<p><label>${E(x.help)}<br><input value="${E(x.value)}" size="46" placeholder="https://" onchange="post('setup/setting',{key:'${x.key}',value:this.value})"></label></p>`).join("")}
 <p><label>GitHub repos to watch (owner/name, comma separated): a failed CI run, new issue or new PR becomes a job for the best live agent<br><input value="${E(d.github_watch.join(", "))}" size="46" placeholder="Neoo-Blue/commons-memory" onchange="post('setup/setting',{key:'github_watch',value:this.value})"></label></p>

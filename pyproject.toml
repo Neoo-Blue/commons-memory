@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "commons-memory"
-version = "0.23.0"
+version = "0.24.0"
 description = "Unified cross-AI memory: one MCP hub for shared memory, code graph, handoffs, reasoning logs and safe secret references."
 dynamic = ["readme"]
 license = "MIT"
@@ -17,7 +17,18 @@ dependencies = ["mcp>=1.12,<2"]
 embed = ["fastembed>=0.3"]
 postgres = ["psycopg[binary]>=3.1"]
 encryption = ["sqlcipher3-binary>=0.5; platform_system == 'Linux'", "cryptography>=42"]
-code = ["tree-sitter>=0.23", "tree-sitter-javascript>=0.23", "tree-sitter-typescript>=0.23"]
+code = [
+  "tree-sitter>=0.23",
+  "tree-sitter-javascript>=0.23",
+  "tree-sitter-typescript>=0.23",
+  "tree-sitter-c>=0.23",
+  "tree-sitter-c-sharp>=0.23",
+  "tree-sitter-cpp>=0.23",
+  "tree-sitter-go>=0.23",
+  "tree-sitter-java>=0.23",
+  "tree-sitter-ruby>=0.23",
+  "tree-sitter-rust>=0.23",
+]
 tokens = ["tiktoken>=0.7"]
 otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
 http = ["uvicorn>=0.30"]

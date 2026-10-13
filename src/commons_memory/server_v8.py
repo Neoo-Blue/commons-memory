@@ -224,9 +224,24 @@ def register_v8(mcp, store, who):
     @mcp.tool()
     def use_credential(credential: str, url: str, justification: str, method: str = "GET", body: str = "",
                        content_type: str = "", agent: str = "", api_key: str = "") -> str:
-        """Call a service with one of the user's keys without seeing it: Commons makes the request and returns the response. justification = what you need it for; the decision agent allows sound reads, writes need the user's request, anything risky goes to the user (verdict waiting_for_user, answer arrives in msg_recv)."""
+        """Call a service with one of the user's keys without seeing it: Commons makes the request and returns the response. justification = what you need it for; the decision agent allows sound reads, writes need the user's request, risky ones wait for the user: show them approve_url (a 'yes' in your chat can't approve), then approval_status(question_id, wait=120) returns the result once they approve. verdict running = approved and being run now: wait on approval_status, don't resend."""
         from . import vault as V
         return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
+
+    @mcp.tool()
+    def approval_status(question_id: str, wait: float = 0, agent: str = "", api_key: str = "") -> str:
+        """Has the user answered an approval yet? wait = seconds to wait for it (<=120). Once approved, Commons has
+        already run the request: `result` holds its response, so don't call again."""
+        import time as _t
+        from .approvals import details
+        me(agent, api_key)
+        end = _t.time() + min(max(float(wait or 0), 0), 120)
+        while True:
+            d = details(store, question_id)
+            if (d["status"] not in ("open", "doing", "blocked") and not d.get("running")) or _t.time() >= end:
+                return _js({k: d.get(k) for k in ("id", "status", "answer", "result", "running", "approve_url")} |
+                           {"waiting": d["status"] in ("open", "doing", "blocked")})
+            _t.sleep(2)
 
     @mcp.tool()
     def vault_generate(name: str, service: str, url: str, purpose: str, username: str = "", length: int = 24,

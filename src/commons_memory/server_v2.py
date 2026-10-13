@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from .orchestrator import Orchestrator
+from .server_v5 import make_admin
 from .store import CommonsError
 from .usage import Usage
 
@@ -115,8 +116,11 @@ def register_v2(mcp, store, who):
 
     @mcp.tool()
     def kill_switch(paused: bool, reason: str = "manual kill switch", agent: str = "", api_key: str = "") -> str:
-        """Pause (true) or resume (false) ALL orchestration: no new claims or submissions while paused."""
+        """Pause (true) or resume (false) ALL orchestration: no new claims or submissions while paused. Any agent can
+        pause; resuming takes an admin, so an agent can't undo the owner's stop."""
         me(agent, api_key)
+        if not paused:
+            make_admin(store, who)(None, agent, api_key)
         return _js(orch.set_paused(paused, reason))
 
     # ------------------------------------------------------------ continuity

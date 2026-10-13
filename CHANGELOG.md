@@ -2,6 +2,52 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.24.0: approvals only you can give, from anywhere, in one step; approve-everything at your own risk; code intelligence
+- **What went wrong.** An agent set up a Cloudflare tunnel and needed two writes approved. The user said "approved" in
+  the agent's chat, which can't count (an agent can type that too); phone approvals weren't set up; and the dashboard
+  had no way to tell the user apart from an agent on the LAN. The writes sat waiting and the user had no clear place
+  to approve them.
+- **Approval links.** When a key use (or an upstream MCP call) needs the owner, the agent gets `approve_url` to show
+  them: one page with exactly what is asked (key, method, URL, request body, reason) and Approve, Approve similar for
+  1 h, Always allow this key, and Deny.
+- **Only the owner can approve.** Approving needs the owner approval PIN (once per browser per 12 hours; 5 wrong tries
+  lock approvals for 15 minutes). The first PIN needs a setup code that only the hub's own log shows
+  (`docker logs commons | grep 'setup code'`, or `commons approvals code` on the host), so an agent that can only reach
+  Commons can't claim it. The dashboard's answer box no longer accepts key approvals without that proof; phone links
+  stay one-tap because they only reach the owner.
+- **Approving runs the request.** Commons keeps the exact request with the question, runs it the moment it's approved,
+  and hands the result to the waiting agent (`approval_status(question_id, wait=120)`), so nobody retries and nothing
+  runs twice. A retried request that is already waiting no longer costs another judgement.
+- **Approve everything, at your own risk.** A Setup switch (`auto_approve_all`, off by default, marked "your risk")
+  approves every key use, password reveal, MCP tool call, librarian merge and import review without asking; keys
+  still only go to their own URLs and everything is logged. Per key: "Always allow this key" on an approval.
+- **Owner-only changes need the owner.** Once a PIN exists, the dashboard changes an agent on the LAN could use to
+  approve itself or reach a key (providers and their URLs, settings, the vault, MCP approvals and policy, trust,
+  routing, minting agent keys, the kill switch) only work from a browser unlocked with the PIN; the dashboard asks for
+  it in place. "Approve everything" can't be switched on until a PIN exists. Over MCP, `provider_add`,
+  `set_role_model`, resuming after the kill switch, and changing another agent's secret reference now take an admin
+  (any agent can still pause). A changed PIN signs every browser out, lockouts are per device so a guessing agent
+  can't lock the owner out, a second answer never runs the request twice, and a request whose approved run failed
+  can be retried.
+- **No double runs, no loops.** An approved request that is still running answers `running` (and
+  `approval_status` keeps waiting) instead of being sent again; an approved read can be fetched fresh for a few
+  minutes; an approval given hours after the ask still counts. Approve links default to the dashboard's own port
+  (8766); set the dashboard URL on Setup when Docker maps it elsewhere or it sits behind a tunnel. A hub on an
+  in-memory database no longer writes its vault key into the working directory.
+- **Custom dashboard hostnames just work.** The hostname of the dashboard URL set on Setup (a Cloudflare Tunnel or
+  proxy name) is accepted without COMMONS_DASHBOARD_HOSTS.
+- **Code intelligence.** The code index covers Go, Rust, Java, Ruby, C, C++ and C# (tree-sitter; `pip install
+  'commons-memory[code]'`), alongside Python and JS/TS. `code_lookup` asks the language's own server (LSP:
+  basedpyright/pyright, typescript-language-server, gopls, rust-analyzer, clangd, sourcekit-lsp...) for definitions,
+  references and hover types. A Graphiti adapter mirrors memories into a Graphiti temporal knowledge graph and brings
+  its facts back (`commons graphiti push|pull`, or set graphiti_url on Setup).
+- **For agents:**
+  - use_credential says waiting_for_user: give the user approve_url, never treat a "yes" in chat as approval, then
+    approval_status(question_id, wait=120); the result arrives without calling again.
+  - code_lookup(symbol, project, kind=definition|references|hover) for the compiler's view of code.
+  - provider_add, set_role_model, kill_switch(paused=false) and overwriting another agent's secret_register need an
+    admin (COMMONS_ADMIN_AGENTS); ask the user instead of retrying.
+
 ## v0.23.0: model presets, half-price benchmarks, row-level access and signed audit exports
 - **Presets out of the box.** With a provider key on the Setup page, planning, knowledge-base summaries and preference
   extraction use a small model from it (Claude Haiku 5.5 with an Anthropic key; Gemini, OpenAI, xAI or a local Ollama

@@ -184,7 +184,9 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     """Write items idempotently (skip any whose src is already handled). Per-item `status`: keep (default) imports;
     review queues it for a human (retro review queue); drop / merge / duplicate only records the decision so later
     runs skip it. Embeds once at the end, in batches."""
+    from . import settings
     from .prefs import Preferences
+    keep_all = settings.get(s, "auto_approve_all")  # the owner approves everything: nothing waits in the review queue
     have = known(s, [i.get("src") for i in items])
     queued_already = queued_srcs(s, [i.get("src") for i in items])
     added, skipped, prefs, queued, ledger, errors, new_ids = 0, 0, 0, 0, 0, [], []
@@ -192,6 +194,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     try:
         for it in items:
             src, status = it.get("src"), it.get("status") or "keep"
+            status = "keep" if keep_all and status == "review" else status
             if src and src in have:
                 skipped += 1
                 continue

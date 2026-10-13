@@ -18,6 +18,9 @@ DEFAULTS = {
                    "provider/model you have a key for, agent (the best live agent plans, on its own subscription), "
                    "rules (keyword splitting, always works). Every planner sees who is live, what each agent is good "
                    "at and how much usage it has left."),
+    "auto_approve_all": (False, "Approve everything that would ask me, at my own risk: key uses, password reveals, "
+                                "MCP tool calls, librarian merges and import reviews (keys still go only to their own "
+                                "URLs, and everything is logged)"),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
     "role_presets": (True, "Use a small model from your first provider key (Claude Haiku with an Anthropic key) for "
                            "planning, knowledge-base summaries and preference extraction, unless you set those roles"),
@@ -82,5 +85,8 @@ def put(s: Store, key: str, value) -> dict:
     return {key: value}
 
 
+RISKY = {"auto_approve_all"}  # off by default and shown as "your risk", never as recommended
+
+
 def listing(s: Store) -> list[dict]:
-    return [{"key": k, "value": get(s, k), "default": d, "help": h} for k, (d, h) in DEFAULTS.items()]
+    return [{"key": k, "value": get(s, k), "default": d, "help": h, "risky": k in RISKY} for k, (d, h) in DEFAULTS.items()]

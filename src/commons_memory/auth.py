@@ -266,12 +266,15 @@ class AuthMiddleware:
             _touch(self.s, principal)
         tok_ctx = PRINCIPAL.set(principal or ANON)
         from .toolprofile import REQUESTED
+        from .vault import _HOST
         want = urllib.parse.parse_qs((scope.get("query_string") or b"").decode()).get("tools")
         tools_ctx = REQUESTED.set(want[0]) if want else None
+        host_ctx = _HOST.set(dict(scope.get("headers") or []).get(b"host", b"").decode())  # approval links reuse it
         try:
             return await self.app(scope, receive, send)
         finally:
             PRINCIPAL.reset(tok_ctx)
+            _HOST.reset(host_ctx)
             if tools_ctx is not None:
                 REQUESTED.reset(tools_ctx)
 

@@ -66,7 +66,7 @@ function cxCopy(i){const t=document.getElementById("cxb"+i).innerText;(navigator
 function cxStep(id,on){cx.skip=(cx.skip||[]).filter(k=>k!=id);if(!on)cx.skip.push(id);render()}
 function cxSet(k,v){cx[k]=v;if(k!="url")cx.b=null;render()}
 async function cxKey(){const name=$("#cxn").value.trim(),role=$("#cxr").value,project=$("#cxp").value.trim();if(!name){toast("name required","err");return}
-const r=await fetch("/api/connect/key",{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify({name,role,project,platform:cx.platform,url:cx.url})}).then(r=>r.json());
+const r=await postRaw("connect/key",{name,role,project,platform:cx.platform,url:cx.url});
 if(r.error){toast(r.error,"err");return}Object.assign(cx,{name,role,project,key:r.api_key,b:r.bundle,watch:name});toast("key created for "+name);render();cxWatch()}
 async function cxBundle(){if(cx.key){const r=await fetch("/api/connect/render",{method:"POST",headers:{"X-Commons":"1","Content-Type":"application/json"},body:JSON.stringify({platform:cx.platform,name:cx.name,project:cx.project,url:cx.url,key:cx.key})}).then(r=>r.json());if(!r.error)return r}
 return api(`connect?platform=${encodeURIComponent(cx.platform)}&name=${encodeURIComponent(cx.name)}&project=${encodeURIComponent(cx.project)}&url=${encodeURIComponent(cx.url)}`)}

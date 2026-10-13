@@ -6,6 +6,7 @@ import json
 from .librarian import Librarian
 from .providers import ProviderLayer
 from .research import Research
+from .server_v5 import make_admin
 from .skillpool import SkillPool
 from .store import CommonsError
 from .tree import Tree
@@ -37,6 +38,7 @@ def seed_skills(store) -> None:
 
 def register_v4(mcp, store, who):
     pool, res, pl, lib = SkillPool(store), Research(store), ProviderLayer(store), Librarian(store)
+    admin = make_admin(store, who)
     seed_skills(store)
 
     def me(agent, api_key, write=True):
@@ -130,9 +132,11 @@ def register_v4(mcp, store, who):
 
     # ------------------------------------------------------------ providers & routing
     @mcp.tool()
-    def provider_add(name: str, kind: str, key_ref: str = "", base_url: str = "") -> str:
+    def provider_add(name: str, kind: str, key_ref: str = "", base_url: str = "", agent: str = "",
+                     api_key: str = "") -> str:
         """Connect a model provider (anthropic|openai|openrouter|google|xai|ollama). key_ref is a secret reference
-        like env://OPENROUTER_API_KEY — never paste a raw key."""
+        like env://OPENROUTER_API_KEY — never paste a raw key. Admins only: a provider receives its key."""
+        admin(None, agent, api_key)
         return _js(pl.add_provider(name, kind, key_ref or None, base_url or None))
 
     @mcp.tool()
@@ -151,9 +155,10 @@ def register_v4(mcp, store, who):
         return _js(pl.set_agent_models(me(agent, api_key), models))
 
     @mcp.tool()
-    def set_role_model(role: str, model: str = "") -> str:
+    def set_role_model(role: str, model: str = "", agent: str = "", api_key: str = "") -> str:
         """Set the model for a role: distributor | planner | router | pref_extractor | kb_summarizer | skill_reviewer |
-        grader | librarian (empty = unset; unset roles fall back to distributor, then heuristics)."""
+        grader | librarian (empty = unset; unset roles fall back to distributor, then heuristics). Admins only."""
+        admin(None, agent, api_key)
         return _js(pl.set_role(role, model or None))
 
     @mcp.tool()

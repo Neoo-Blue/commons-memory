@@ -30,6 +30,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_CONTRADICTION_THRESHOLD` | `0.85` | TypeSafe probability at which two notes count as contradicting (default 0.85; precision first) | librarian.py |
 | `COMMONS_DAILY_COST_CAP` | — | USD/day cap across all orchestrated work; jobs pause when hit | usage.py |
 | `COMMONS_DASHBOARD_HOSTS` | — | Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding | dashboard.py |
+| `COMMONS_DASHBOARD_PORT` | `8766` | Dashboard port used to build approval links when no dashboard URL is set on Setup. If Docker maps the dashboard to another host port, or it sits behind a tunnel, set the dashboard URL on Setup instead | approvals.py |
 | `COMMONS_DASHBOARD_REQUIRE_TOKEN` | — | Require the dashboard token even on localhost/LAN/tailnet binds (`1`) | dashboard.py |
 | `COMMONS_DASHBOARD_TOKEN` | — | Admin token for the web dashboard (required for non-loopback binds) | dashboard.py |
 | `COMMONS_DB` | — | Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`) | cli.py, store.py |

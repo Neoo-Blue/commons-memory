@@ -19,6 +19,7 @@ def svc(monkeypatch):
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))  # unread bytes make close() send a reset
             seen.append((self.command, self.path, self.headers.get("X-Plex-Token")))
             body = json.dumps({"added": ["Corpse Bride"], "echo": self.headers.get("X-Plex-Token")}).encode()
             self.send_response(200)
@@ -90,12 +91,15 @@ def test_writes_and_bad_reasons(store, svc, monkeypatch):
     from commons_memory import board as B
     q = B.get(store, w["question_id"])
     assert q["status"] == "blocked" and "DELETE" in q["text"]
+    assert "approve" in w["approve_url"] and "can't approve" in w["do"]           # the agent hands the user a link
     B.answer(store, w["question_id"], "yes, that copy is a duplicate")             # the user approves on the board
+    assert len([x for x in seen if x[0] == "DELETE"]) == 1                        # approving ran it: no retry needed
     _judge(monkeypatch)                                                           # judge not consulted again
     ok = V.use(store, a, "plex", "DELETE", base + "/library/metadata/42", "remove a duplicate movie copy")
-    assert ok["verdict"] == "allowed" and [x for x in seen if x[0] == "DELETE"]
     again = V.use(store, a, "plex", "DELETE", base + "/library/metadata/42", "remove a duplicate movie copy")
-    assert again["verdict"] != "allowed"                                         # one approved write = one call
+    assert ok["verdict"] == again["verdict"] == "allowed" and "already run" in ok["reason"]
+    assert len([x for x in seen if x[0] == "DELETE"]) == 1                        # one approval = one call, ever
+    assert store.q("SELECT 1 FROM messages WHERE recipient=? AND body LIKE '%Commons ran it: HTTP 200%'", (a,))
 
 
 def test_no_judge_means_the_user_decides(store, svc, monkeypatch):

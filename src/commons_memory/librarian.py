@@ -33,6 +33,9 @@ class Librarian:
 
     # ------------------------------------------------------------------ config
     def auto_approve(self) -> bool:
+        from . import settings
+        if settings.get(self.s, "auto_approve_all"):  # the owner approves everything (Setup, their risk)
+            return True
         r = self.s.q("SELECT value FROM meta WHERE key='librarian_auto_approve'")
         return bool(r and r[0]["value"] == "1") or os.environ.get("COMMONS_LIBRARIAN_AUTO_APPROVE") == "1"
 
