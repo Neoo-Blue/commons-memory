@@ -254,6 +254,13 @@ def register_v8(mcp, store, who):
         return _js(V.reveal(store, me(agent, api_key), name, justification))
 
     @mcp.tool()
+    def status_update(state: str, headline: str, bullets: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
+        """Your status card on the dashboard: state = working | blocked | done | needs_you | idle, headline <= 90 chars,
+        up to 5 short bullets. start_work, finish_work and Needs-you questions set it for you."""
+        from .status import put
+        return _js(put(store, me(agent, api_key), state, headline, bullets))
+
+    @mcp.tool()
     def whats_new(agent: str = "", api_key: str = "") -> str:
         """What changed in Commons since you last looked, and what you must adapt (from the release channel)."""
         from .releases import whats_new as _wn

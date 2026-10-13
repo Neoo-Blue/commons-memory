@@ -166,6 +166,8 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
     s.x("INSERT INTO work_claims(id,agent_id,project_id,what,paths,status,reason,vec,started_at) VALUES(?,?,?,?,?,?,?,?,?)",
         (cid, agent_id, s.project_id(project) if project else None, redact(what)[0][:1000], json.dumps(sorted(paths or [])),
          "active", reason or None, pack(v) if v is not None else None, now()))
+    from .status import put as status_put
+    status_put(s, agent_id, "working", what)
     rel = related(s, what, project, paths)
     s.x("UPDATE work_claims SET related=? WHERE id=?", (json.dumps([r["id"] for r in rel]), cid))
     s.audit(agent_id, "work.start", cid, {"what": what[:200], "forced": bool(force)})
@@ -191,6 +193,9 @@ def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status
             if r and rid not in [c["id"] for c in check]:
                 check.append({"id": rid, "kind": r[0]["kind"], "summary": (r[0]["summary"] or "")[:160]})
                 s.relate(i, rid, "may_affect", agent_id=agent_id)
+    if ids:
+        from .status import put as status_put
+        status_put(s, agent_id, "done", (result or "finished").split("\n")[0])
     out = {"closed": ids, "status": status}
     if check and status == "done":
         out |= {"check_related": check,

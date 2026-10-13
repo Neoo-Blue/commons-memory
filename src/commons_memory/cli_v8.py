@@ -5,12 +5,17 @@ import json
 import os
 import sys
 
-NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup"}
+NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
     from .setup import LABELS
+    dr = sub.add_parser("doctor", help="check this AI's whole Commons connection; --repair fixes what is broken")
+    dr.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor | opencode")
+    dr.add_argument("--agent", required=True)
+    dr.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
+    dr.add_argument("--repair", action="store_true")
     st = sub.add_parser("setup", help="connect an AI to Commons completely in one go (MCP, instructions, hooks, "
                                       "instant wake, memory hand-over, verify); every step on unless --no-<step>")
     st.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor | opencode")
@@ -195,6 +200,9 @@ def _import(args) -> int:
 
 def handle_nostore(args) -> int:
     c = args.cmd
+    if c == "doctor":
+        from .setup import doctor
+        return doctor(args.client, args.agent, args.url, args.repair)
     if c == "setup":
         from .setup import STEPS, run
         return run(args.client, args.agent, args.url, {k for k in STEPS if getattr(args, f"no_{k}")})

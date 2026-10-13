@@ -454,6 +454,12 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     event = HARNESS_EVENTS.get(harness, {}).get(hevent) or (hevent if hevent in EVENTS else None)
     if not event:
         return ""
+    if event == "session_start":
+        try:  # keep the always-loaded Commons instructions in step with the installed version
+            from .instructions import refresh
+            refresh()
+        except Exception:  # noqa: BLE001 - never block a session over this
+            pass
     for k in ("prompt", "text"):
         if isinstance(payload.get(k), str):
             payload[k] = strip_private(payload[k])

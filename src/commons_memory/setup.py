@@ -127,3 +127,70 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
     step("verify", verify)
     print("Done. Restart the AI so it loads Commons." if ok else "Finished with failures above; fix them and run again.")
     return 0 if ok else 1
+
+
+def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
+    """Check every part of this AI's Commons connection; --repair re-runs the setup steps that are broken."""
+    import platform
+    from . import __version__
+    from . import instructions as I
+    base = url.rstrip("/").removesuffix("/mcp")
+    keyfile = Path(os.environ.get("COMMONS_HOME") or Path.home() / ".commons") / "agents" / f"{agent}.key"
+    checks: list[tuple[str, bool, str, str]] = []  # (name, ok, detail, setup step that fixes it)
+
+    def add(name, ok, detail="", fix=""):
+        checks.append((name, bool(ok), detail, fix))
+
+    env_key = os.environ.get("COMMONS_API_KEY", "")
+    if env_key:
+        add("key available", True, "from COMMONS_API_KEY (e.g. injected by a secret manager)")
+    else:
+        add("key saved (0600)", keyfile.exists() and oct(keyfile.stat().st_mode)[-3:] == "600", str(keyfile), "key")
+    key = env_key or (keyfile.read_text().strip() if keyfile.exists() else "")
+    try:
+        import urllib.request
+        urllib.request.urlopen(base + "/bus/health", timeout=5).read()
+        hub = True
+    except Exception as e:  # noqa: BLE001
+        hub = False
+        add("hub reachable", False, f"{base}: {e}", "")
+    if hub:
+        add("hub reachable", True, base)
+        try:
+            from .worker import McpClient
+            me = json.loads(McpClient(base + "/mcp", key)._call("whoami", {})) if key else {}
+            add("key accepted", me.get("status") == "commons-ok", f"signed in as {me.get('agent')}", "key")
+        except Exception as e:  # noqa: BLE001
+            add("key accepted", False, str(e)[:120], "key")
+    cfg = {"claude-code": Path.home() / ".claude.json", "cursor": Path.home() / ".cursor" / "mcp.json",
+           "gemini": Path.home() / ".gemini" / "settings.json", "codex": Path.home() / ".codex" / "config.toml",
+           "opencode": Path.home() / ".config" / "opencode" / "opencode.json"}[client]
+    add("MCP server registered", cfg.exists() and base in cfg.read_text(), str(cfg), "mcp")
+    from .server import INSTRUCTIONS
+    files = [Path(os.path.expanduser(p)) for p in I.TARGETS[client]]
+    current = all(f.exists() and INSTRUCTIONS in f.read_text() for f in files)
+    add("master instructions current", current, ", ".join(map(str, files)), "instructions")
+    from .capture import HOOK_TARGETS
+    if client in HOOK_TARGETS:
+        hp = Path(os.path.expanduser(HOOK_TARGETS[client][0]))
+        add("capture hooks installed", hp.exists() and "commons" in hp.read_text() and " hook " in hp.read_text(),
+            str(hp), "hooks")
+    name = f"commons-agent-{agent}"
+    if platform.system() == "Darwin":
+        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+        add("instant wake running", f"dev.commons.{name}" in r.stdout, f"launchd dev.commons.{name}", "wake")
+    elif shutil.which("systemctl"):
+        r = subprocess.run(["systemctl", "--user", "is-active", name], capture_output=True, text=True)
+        add("instant wake running", r.stdout.strip() == "active", f"systemd --user {name}", "wake")
+    print(f"commons doctor: {client} as '{agent}' against {base} (client {__version__})")
+    for n, ok, detail, _fix in checks:
+        print(f"  {'OK  ' if ok else 'FAIL'} {n}" + (f"  ({detail})" if detail else ""))
+    broken = {fix for _n, ok, _d, fix in checks if not ok and fix and fix != "key"}
+    if any(not ok and fix == "key" for _n, ok, _d, fix in checks):
+        print("  fix the key first: `commons setup` asks for it again (delete the key file if it is wrong)")
+    if broken and repair:
+        print(f"repairing: {', '.join(sorted(broken))}")
+        return run(client, agent, url, set(STEPS) - broken - {"verify"})
+    if broken:
+        print(f"run again with --repair to fix: {', '.join(sorted(broken))}")
+    return 0 if all(ok for _n, ok, _d, _f in checks) else 1

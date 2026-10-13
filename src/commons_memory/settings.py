@@ -18,6 +18,9 @@ DEFAULTS = {
     "quota_routing": (True, "Route work only to agents with usage headroom, keeping your reserve"),
     "reserve_pct": (20, "Share of each usage window kept for you, %"),
     "schedule_takeover": (True, "Another agent covers a scheduled run its owner missed"),
+    "phone_ntfy": ("", "Phone approvals: your ntfy topic URL (e.g. https://ntfy.sh/<long-random-topic>); every Needs-you "
+                       "question arrives with Yes / No buttons"),
+    "dashboard_url": ("", "This dashboard's address as your phone reaches it (LAN or tailnet), for the Yes / No buttons"),
 }
 ENV = {"reserve_pct": "COMMONS_QUOTA_RESERVE"}
 
@@ -41,6 +44,10 @@ def put(s: Store, key: str, value) -> dict:
         value = int(value)
         if not 0 <= value <= 90:
             raise CommonsError("reserve_pct is 0-90")
+    elif isinstance(d, str):
+        value = (value or "").strip()
+        if value and not value.startswith(("http://", "https://")):
+            raise CommonsError(f"{key} must be an http(s) URL")
     elif isinstance(d, list):
         value = [v.strip() for v in (value.split(",") if isinstance(value, str) else value) if str(v).strip()]
         bad = [v for v in value if not (v in ("typesafe", "ask") or v.startswith(("role:", "agent:")) or "/" in v)]

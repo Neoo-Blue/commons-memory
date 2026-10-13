@@ -70,6 +70,15 @@ def add(s: Store, kind: str, text: str, *, project: str | None = None, path: str
          t if status in ("done", "dropped") else None))
     s.audit(agent_id, "board.add", bid, {"kind": kind, "path": path})
     notify_mentions(s, bid, text, agent_id)
+    if kind == "question":  # reach the user wherever they are, with one-tap answers
+        try:
+            if agent_id:
+                from .status import put as status_put
+                status_put(s, agent_id, "needs_you", text)
+            from .phone import push_question
+            push_question(s, get(s, bid))
+        except Exception:  # noqa: BLE001
+            pass
     return get(s, bid)
 
 

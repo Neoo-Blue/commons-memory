@@ -32,3 +32,15 @@ def test_prompt_md_is_generated_from_the_master_instructions():
     root = Path(__file__).resolve().parents[1]
     r = subprocess.run([sys.executable, str(root / "scripts" / "gen_prompt.py"), "--check"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_installed_instructions_refresh_when_the_playbook_changes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".grok").mkdir()
+    I.install("grok", url="http://hub:8770/mcp")
+    f = tmp_path / ".grok" / "AGENTS.md"
+    f.write_text(f.read_text().replace("start_work", "OLD_ROUTINE_TOOL"))   # an install from an older version
+    assert str(f) in I.refresh()
+    text = f.read_text()
+    assert "start_work" in text and "OLD_ROUTINE_TOOL" not in text and "http://hub:8770/mcp" in text
+    assert I.refresh() == []                                               # already current: untouched

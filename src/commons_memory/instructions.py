@@ -99,3 +99,27 @@ def install(harness: str = "all", url: str | None = None, agent: str | None = No
             status = _apply(path, None if uninstall else _render(p, text), whole)
             out.append({"ai": h, "file": str(path), "status": status})
     return out
+
+
+def refresh() -> list[str]:
+    """Bring every already-installed Commons block up to date with the current playbook (never installs new ones).
+    The session-start hook calls it, so an AI's always-loaded instructions don't go stale after an upgrade."""
+    from .server import INSTRUCTIONS
+    out, seen = [], set()
+    for h, paths in TARGETS.items():
+        for p in paths:
+            path = Path(os.path.expanduser(p))
+            if path in seen or not path.exists():
+                continue
+            seen.add(path)
+            text = path.read_text()
+            if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(("SKILL.md", ".mdc"))):
+                continue
+            head = re.search(r"connected to Commons( at (\S+))?( as agent `([^`]+)`)?", text)
+            url, agent = (head.group(2), head.group(4)) if head else (None, None)
+            whole = p.endswith(("SKILL.md", ".mdc"))
+            if whole and "Commons" not in text:
+                continue
+            _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole)
+            out.append(str(path))
+    return out

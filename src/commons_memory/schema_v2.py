@@ -216,6 +216,8 @@ def _v5(db):
     work_migrate(db)
     from .vault import migrate as vault_migrate
     vault_migrate(db)
+    from .status import migrate as status_migrate
+    status_migrate(db)
 
 
 _v4e_migrate = migrate

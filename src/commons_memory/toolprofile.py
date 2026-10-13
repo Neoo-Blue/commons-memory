@@ -19,7 +19,7 @@ import os
 
 CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "summon", "resume", "context_load", "search", "expand", "why", "remember",
         "record_decision", "observe_preference", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
-        "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "subtask_pause", "credentials", "use_credential", "vault_generate", "vault_deposit", "whats_new", "handover_status", "set_profile", "tools", "call"]
+        "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "subtask_pause", "credentials", "use_credential", "vault_generate", "vault_deposit", "whats_new", "status_update", "handover_status", "set_profile", "tools", "call"]
 IDENTITY = ("agent", "api_key")
 
 REQUESTED: contextvars.ContextVar[str | None] = contextvars.ContextVar("commons_tools", default=None)

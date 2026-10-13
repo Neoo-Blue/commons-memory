@@ -259,6 +259,10 @@ class API:
                              "secrets": [z["name"] for z in v.get("secrets", []) if not z.get("optional")]}
                             for k, v in sorted(cat["presets"].items())], "catalog_version": cat["catalog_version"]}
 
+    def team(self, q):
+        from .status import team
+        return team(self.s)
+
     def setup(self, q):
         from .onboarding import status
         return status(self.s)
@@ -334,6 +338,10 @@ class API:
         if path == "/api/setup/provider_rm":
             from .onboarding import remove_provider
             return remove_provider(self.s, body.get("kind", ""))
+        if path == "/api/setup/phone_test":
+            from .phone import push
+            return {"sent": push(self.s, "Commons test", "Phone approvals are set up: Needs-you questions will arrive "
+                                                         "here with Yes / No buttons.")}
         if path == "/api/setup/setting":
             from . import settings
             return settings.put(self.s, body.get("key", ""), body.get("value"))
@@ -644,6 +652,13 @@ def make_handler(api: API, token: str | None):
         def do_POST(self):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path == "/api/board/quick" and self.headers.get("X-Commons") == "1":  # phone button: the signature is the auth
+                try:
+                    b = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                    from .phone import quick_answer
+                    return self._send(200, quick_answer(api.s, b.get("id", ""), b.get("answer", ""), b.get("sig", "")))
+                except (CommonsError, ValueError) as e:
+                    return self._send(403, {"error": str(e)})
             if not self._authed(q):
                 return self._send(401, {"error": getattr(self, "deny", None) or "token required"})
             if self.headers.get("X-Commons") != "1":
@@ -854,6 +869,7 @@ input,select{font:inherit;background:var(--card2);color:var(--fg);border:1px sol
 .bfil{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 12px}.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .seg button{border:0;border-radius:0;background:transparent;color:var(--mut)}.seg button.on{background:var(--acc-soft);color:var(--fg)}
 .sus{margin:6px 0 0;padding-left:20px}.sus li{margin:5px 0}.sus li.ok b{color:var(--ok)}.chain{padding-left:22px}.chain li{margin:6px 0}.chain button{padding:2px 9px}.suin input{width:240px}
+.team{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}.tcard{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:4px}.tcard.needs_you{border-color:var(--bad)}.tcard.working{border-color:var(--acc)}.tcard ul{margin:2px 0 0;padding-left:16px}
 .skl{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.sk{display:inline-flex;gap:6px;align-items:center;padding:3px 6px 3px 9px;border:1px solid var(--line);border-radius:9px;font-size:13px}.sk button{padding:3px 10px;font-size:12px}
 @media (max-width:640px){.sk button{min-height:44px}.cxstep{min-height:44px}}
 .cxsteps{display:grid;gap:4px;margin:6px 0 10px}.cxstep{display:flex;gap:8px;align-items:center;cursor:pointer}
@@ -1035,10 +1051,10 @@ function tabs(){$("#tabs").innerHTML=GROUPS.map(([g,ts])=>`<div class="nav-h">${
 function go(t){tab=t;location.hash=encodeURI(t);$("#side").classList.remove("open");render()}
 function bars(rows,key,fmt){const mx=Math.max(1e-9,...rows.map(r=>r[key]));return rows.map(r=>`<tr><td>${E(r.label??r.key)}</td><td style="width:55%"><div class="bar" style="width:${100*r[key]/mx}%"></div></td><td>${fmt(r[key])}</td></tr>`).join("")}
 const V={
-async Overview(){const [o,act,us,ag,su]=await Promise.all([api("overview"),api("activity"),api("usage_series?days=14"),api("agents"),api("setup").catch(()=>null)]);
+async Overview(){const [o,act,us,ag,su,tm]=await Promise.all([api("overview"),api("activity"),api("usage_series?days=14"),api("agents"),api("setup").catch(()=>null),api("team").catch(()=>[])]);
 const cost=[...Array(us.days).keys()].map(d=>Object.values(us.series).reduce((a,v)=>a+v[d],0));
 const st=(k,l,extra="")=>`<div class="card stat"><div class="mut">${l}</div><div class="big">${E(o[k])}</div>${extra}</div>`;
-return `${su&&su.done<su.total?`<div class="card" style="border-color:var(--acc)"><b>Finish setting up Commons</b> <span class="pill pending">${su.done}/${su.total}</span> <span class="mut">next: ${E((su.steps.find(x=>!x.done)||{}).step||"")}</span> <a href="#Setup" onclick="event.preventDefault();go('Setup')">open Setup →</a></div>`:""}<div class="grid grid8"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
+return `${su&&su.done<su.total?`<div class="card" style="border-color:var(--acc)"><b>Finish setting up Commons</b> <span class="pill pending">${su.done}/${su.total}</span> <span class="mut">next: ${E((su.steps.find(x=>!x.done)||{}).step||"")}</span> <a href="#Setup" onclick="event.preventDefault();go('Setup')">open Setup →</a></div>`:""}${tm.length?`<div class="card"><h3>Team now</h3><div class="team">${tm.map(t=>`<div class="tcard ${t.state}"><div><b>${E(t.agent)}</b> <span class="pill ${t.state=="needs_you"?"failed":t.state=="working"?"running":t.state}">${E(t.state.replace("_"," "))}</span> ${t.live?'<span class="dot live" title="woken instantly"></span>':""}</div><div>${E(t.headline||t.working_on||"")}</div>${t.bullets.length?`<ul class="mut sm">${t.bullets.map(b=>`<li>${E(b)}</li>`).join("")}</ul>`:""}<div class="mut sm">${t.since?ago(Math.max(0,(Date.now()-Date.parse(t.since))/1000|0))+" ago":""}</div></div>`).join("")}</div></div>`:""}<div class="grid grid8"><div class="card stat hero"><div class="mut">Spent · 24h</div><div class="big">$${(+o.spent_24h).toFixed(4)}</div>${spark(cost,170,34)}</div>
 ${st("running_jobs","Running jobs")}${st("agents","Agents")}${st("items","Memories",`<div class="mut" style="font-size:11px">tokens/day</div>${spark(us.tokens,150,26)}`)}${st("open_leftovers","Open leftovers")}${st("conflicts","Conflicts")}${st("entities","Graph entities")}${st("relations","Relations")}</div>
 <div class="cols"><div class="card"><h3>Agents now</h3>${ag.length?`<table>${ag.slice(0,10).map(x=>{const st=agentState(x);const cls=st.text==="never seen"?"offline":(x.claims.length?"busy":st.cls);const doing=st.text==="never seen"?'<span class="mut">offline</span>':(x.claims.length?x.claims.map(c=>pill(c.type)+" "+E(c.title.slice(0,40))).join("<br>"):'<span class="mut">idle</span>');return `<tr><td><span class="dot ${cls}" title="${E(cls)}"></span><b>${E(x.name)}</b> <span class="mut">${E(x.platform||"")}</span></td><td>${doing}</td><td class="mut">${E(st.text)}</td></tr>`}).join("")}</table>`:empty("🤖","No agents yet","<div><code>commons connect --agent claude-code --platform claude-code</code></div>")}</div>
 <div class="card"><h3>Live activity</h3>${act.length?`<ul class="feed">${act.map((e,i)=>`<li style="animation-delay:${i*18}ms"><span class="t">${ago(e.ago)}</span><span>${pill(e.type)} ${E(e.text)} ${e.agent?`<span class="mut">· ${E(e.agent)}</span>`:""}</span></li>`).join("")}</ul>`:empty("✨","Quiet so far","<div>Activity from agents, the librarian and MCP calls streams in here.</div>")}</div></div>
@@ -1127,7 +1143,9 @@ return `<div class="card"><h3>Set up Commons <span class="pill ${d.done==d.total
 ${d.credentials.length?`<table><tr><th>name</th><th>service</th><th>only sent to</th><th>risk</th><th>from</th><th></th></tr>${d.credentials.map(c=>`<tr><td><b>${E(c.credential)}</b>${c.kind=="login"?` <span class="pill new">login</span><div class="mut sm">user: ${E(c.username||"")}</div>`:""}</td><td>${E(c.service)}</td><td class="mut">${E(c.base_urls.join(", "))}</td><td>${pill(c.risk)}</td><td class="mut">${E(c.from)}</td><td><button class="bad" onclick="confirm(${J("Remove "+c.credential+" from the vault?")})&&post('vault/rm',{name:${J(c.credential)}})">Remove</button></td></tr>`).join("")}</table>`:empty("🔐","No credentials yet","<div>Add one below, or let agents hand theirs over with vault_deposit.</div>")}
 <details class="badd"><summary>Add a credential</summary><div class="bfil"><input id="vn" placeholder="name, e.g. radarr"><input id="vs" placeholder="service"><input id="vu" placeholder="base URL it may be sent to" size=30><select id="va" aria-label="how the key is sent"><option value="header:X-Api-Key">header X-Api-Key</option><option value="bearer">Bearer token</option><option value="query:apikey">query ?apikey=</option><option value="header:X-Plex-Token">header X-Plex-Token</option><option value="basic:">Basic (user + password)</option></select><input id="vb" placeholder="user (Basic only)" size=12><select id="vr" aria-label="risk"><option value="normal">normal risk</option><option value="low">low risk</option><option value="high">high risk (every write asks you)</option></select><input id="vd" placeholder="description" size=22><input id="vv" type="password" placeholder="value" autocomplete="off"><button class="pri" onclick="suCred()">Store</button></div></details></div>
 <div class="card"><h3>4 · Features <span class="mut sm">all recommended; untick what you don't want</span></h3><div class="cxsteps">${d.settings.filter(x=>typeof x.default=="boolean").map(x=>`<label class="cxstep"><input type="checkbox" ${x.value?"checked":""} onchange="post('setup/setting',{key:'${x.key}',value:this.checked})"> ${E(x.help)} <span class="pill done">recommended</span></label>`).join("")}</div>
-${d.settings.filter(x=>typeof x.default=="number").map(x=>`<p><label>${E(x.help)} <input type="number" min="0" max="90" value="${x.value}" style="width:72px" onchange="post('setup/setting',{key:'${x.key}',value:this.value})"></label></p>`).join("")}</div>
+${d.settings.filter(x=>typeof x.default=="number").map(x=>`<p><label>${E(x.help)} <input type="number" min="0" max="90" value="${x.value}" style="width:72px" onchange="post('setup/setting',{key:'${x.key}',value:this.value})"></label></p>`).join("")}
+${d.settings.filter(x=>typeof x.default=="string").map(x=>`<p><label>${E(x.help)}<br><input value="${E(x.value)}" size="46" placeholder="https://" onchange="post('setup/setting',{key:'${x.key}',value:this.value})"></label></p>`).join("")}
+<p><button onclick="post('setup/phone_test',{})">Send a test notification</button> <span class="mut sm">Install the ntfy app and subscribe to the same topic. Use a long random topic: anyone who knows it can read it.</span></p></div>
 <div class="card"><h3>5 · Agents <a class="sm" href="#Connect" onclick="event.preventDefault();go('Connect')">connect another →</a></h3>${d.agents.length?`<table>${d.agents.map(a=>`<tr><td><b>${E(a.name)}</b></td><td>${a.connected?pill("connected"):`<span class="pill pending">never connected</span>`}</td><td>${a.handover_complete?pill("done")+" hand-over complete":`<span class="mut">still owes: ${E(a.missing.join(", "))}</span>`}</td></tr>`).join("")}</table>`:empty("🤝","No agents yet","")}</div>
 <div class="card"><h3>Recent credential decisions</h3>${d.decisions.length?`<table>${d.decisions.map(x=>`<tr><td class="mut">${E((x.at||"").slice(11,16))}</td><td>${E(x.agent)}</td><td><b>${E(x.credential)}</b></td><td>${pill(x.verdict)}</td><td class="mut">${E(x.call)}</td><td class="mut">${E(x.reason)}</td></tr>`).join("")}</table>`:'<p class="mut">None yet.</p>'}</div>`},
 async Secrets(){const a=await api("audit");return `<div class="card"><h3>Secret references</h3><p class="mut">Values are never stored or displayed.</p><table>${a.refs.map(r=>`<tr><td><code>${E(r.ref)}</code></td><td>${E(r.description)}</td><td class="mut">agents: ${E(r.allowed_agents.join(", ")||"any")} · max ttl ${r.max_ttl}s</td></tr>`).join("")}</table>
