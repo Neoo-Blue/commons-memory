@@ -31,7 +31,8 @@ Connect a second AI the same way and it can see the first one's memory immediate
 ## Feature tour
 | Area | What you get | Learn more |
 |---|---|---|
-| **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · auto-capture hooks for Claude Code/Codex/Gemini/Cursor with typed observations ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
+| **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · `context=N` returns the turns around each hit and relative dates resolve against each memory's own date ("yesterday (7 May 2023)") · free-text contradiction flags (TypeSafe) · auto-capture hooks for Claude Code/Codex/Gemini/Cursor with typed observations ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
+| **Project board** | Every request you make, in your words, with the targets (metric, goal, current), expectations, actions and deliveries under it, layer by layer (`project / ui/dashboard`). Done needs evidence, dropped needs a reason, and asking twice is counted. It leads every agent's check-in, so nothing you asked for is lost to context compaction or an agent switch | [docs/tools.md](docs/tools.md) |
 | **Continuity** | Sessions, checkpoints, handoffs that resume in another AI · layered context packs (L0 gist → L3 full) so the next AI doesn't re-pay tokens · decisions with rationale and `why()` · leftovers and recurring jobs | [docs/guide.md](docs/guide.md) |
 | **Teamwork** | Submit a task and get a DAG: plan → parallel parts → cross-review (author ≠ reviewer) → debate/consensus → merge. Quality gates, budgets, leases with automatic reassignment, an escalation ladder, routing to the right agent + model + effort, multi-project scheduling, task breakdown view | [docs/guide.md](docs/guide.md), [docs/multitasking.md](docs/multitasking.md) |
 | **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS). `summon` calls every agent at once and reports who is ready; `commons agent daemon --preset claude --install` starts a CLI agent within a second of new work | [docs/messaging.md](docs/messaging.md) |
@@ -102,7 +103,8 @@ Captured from a demo database (`examples/demo_multi_agent.py`); keys are redacte
 
 | | |
 |---|---|
-| ![Overview](docs/screenshots/overview.png)<br>**Overview**: totals, spend, live agents | ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: projects, jobs, agent load vs capacity |
+| ![Overview](docs/screenshots/overview.png)<br>**Overview**: totals, spend, live agents | ![Board](docs/screenshots/board.png)<br>**Board** (new): what you asked, targets, actions and deliveries per project and layer |
+| ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: projects, jobs, agent load vs capacity | ![Board on a phone](docs/screenshots/board-mobile.png)<br>**On a phone**: every page works at 390 px |
 | ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent** (new in 0.8.1): pick a client, create a key, copy, verify | ![Task breakdown](docs/screenshots/task-breakdown.png)<br>**Task breakdown**: the job DAG with routing reasons per subtask |
 | ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph | ![Org chart](docs/screenshots/org-chart.png)<br>**Org chart**: workspace → projects → jobs → agents |
 | ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: auto-built, cited KB per project | ![Skills](docs/screenshots/skills.png)<br>**Skills**: shared pool with versions and review |
@@ -192,7 +194,7 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 |---|---|---|
 | LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.4% / 76.5%** (v0.8: 31.2 / 71.1) |
 | LoCoMo retrieval | evidence-session any@10 | **97.4%** (v0.8: 95.8) |
-| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **69.5%** |
+| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.8%** with `context=2` and date resolution (69.5% for hits alone); no LLM at write time |
 | Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
 | Tool schema an AI pays for each session | tokens | **2,970** for the core profile (v0.8: 33,057) |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
@@ -201,10 +203,12 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 
 | vs | Same metric | Commons | Rival |
 |---|---|---|---|
-| mem0 OSS | QA accuracy, same reader/judge/prompts, 1,540 q | 69.5% | 70.3% (tie, sign test p = 0.45; mem0 wins multi-hop and temporal, Commons single-hop and open-domain) |
-| mem0 OSS | search p50 / LLM calls per write | 24-68 ms / none | 377 ms / extraction on every write |
+| mem0 OSS | QA accuracy, same reader/judge/prompts, 1,540 q | **78.8%** | 70.3% (paired: Commons alone right 232x, mem0 alone 107x, p = 1e-11) |
+| mem0 OSS | per category: multi-hop / temporal / inference / single-hop | **64.2 / 77.3 / 43.8 / 88.2** | 61.0 / 73.8 / 37.5 / 76.2 |
+| mem0 OSS | search p50 / LLM calls per write | **24-68 ms / none** | 377 ms / extraction on every write |
 | MemPalace | its own recall metric, dialog / session top-10 | **0.708 / 0.945** | 0.545 / 0.889 |
 | claude-mem 13.36 | same metric, dialog / session top-10 | **0.708 / 0.945** | 0.496 / 0.811 (search p50 2.7 s) |
+| claude-mem 13.36 | footprint at rest | **43 MB RSS, 0.1% CPU** with 5,761 memories (185 MB once the embedder loads) | its chroma-mcp process sat at ~39% CPU on the same Mac |
 
 Published numbers elsewhere use other readers, judges and subsets (mem0's paper: 66.9% with gpt-4o-mini; its
 managed platform and Zep claim 92-95% under their own setups), so only the table above is apples to apples.
@@ -212,7 +216,7 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 ## Comparison
 | Project | Great at | Commons' angle |
 |---|---|---|
-| [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Writes in milliseconds (no LLM on the write path), adds a code graph, handoffs, decisions, orchestration and secrets; `commons import mem0` brings your memories over |
+| [mem0 / OpenMemory](https://github.com/mem0ai/mem0) | Fact extraction, cross-client memory | Higher LoCoMo QA in every category (78.8% vs 70.3%, same reader and judge) with no LLM on the write path, plus a code graph, handoffs, a project board, orchestration and secrets; `commons import mem0` brings your memories over |
 | [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic capture for Claude Code | Same hook-based capture for Claude Code, Codex, Gemini and Cursor, shared by every agent; `commons import claude-mem --curate` imports and cleans its history |
 | [MemPalace](https://github.com/MemPalace/mempalace) | Verbatim recall, retrieval benchmarks | Higher recall on LoCoMo under MemPalace's own metric (0.708 vs 0.545 dialog-level), plus multi-agent coordination |
 | [Archify](https://github.com/tt-a1i/archify) | Validated, interactive architecture diagrams | Graphs come from the real code index and memory, with communities, impact paths and a cluster map; Archify still has more diagram types |

@@ -29,7 +29,9 @@ with paraphrase and date formats. Total cost $2.56.
 | open-domain (cat 3) | 96 | 39.6 |
 | **overall** | 1,540 | **69.5** |
 
-Published figures use other readers and judges (mem0's paper: gpt-4o-mini, mem0 66.9%, Zep 66.0%, full-context
+That table is hits alone. With the reader also given each hit's neighbouring turns and resolved dates
+(`--neighbors 2`), the same run scores **78.8%** (multi-hop 64.2, temporal 77.3, open-domain 43.8, single-hop 88.2);
+see the head-to-head below. Published figures use other readers and judges (mem0's paper: gpt-4o-mini, mem0 66.9%, Zep 66.0%, full-context
 72.9%), so they are not comparable; the head-to-head below runs mem0 here instead. LongMemEval-S QA on a seeded
 100-question sample, same reader/judge: **62.0%** ($0.35; strongest on single-session-user 94%, weakest on
 single-session-assistant 45% and multi-session 50%).
@@ -38,20 +40,33 @@ single-session-assistant 45% and multi-session 50%).
 Every system ingested the same LoCoMo turns on the same machine. Harnesses are in [`rivals/`](rivals/), per-question
 results in [`results/v0.9.0/rivals/`](results/v0.9.0/rivals/).
 
-**End-to-end QA vs mem0** (LoCoMo cats 1-4, 1,540 questions). mem0 OSS ingested each conversation in 6-turn chunks
+**End-to-end QA vs mem0, final** (LoCoMo cats 1-4, 1,540 questions, Commons with `--neighbors 2` and read-time date
+resolution, mem0 unchanged):
+
+| System | overall | multi-hop | temporal | open-domain | single-hop | LLM calls at ingest | search p50 |
+|---|---|---|---|---|---|---|---|
+| **Commons 0.9** (context=2, dates) | **78.8** | **64.2** | **77.3** | **43.8** | **88.2** | none | 24-68 ms |
+| Commons 0.9 (context=1, dates) | 76.8 | 60.3 | 78.2 | 47.9 | 85.1 | none | 24-68 ms |
+| mem0 OSS | 70.3 | 61.0 | 73.8 | 37.5 | 76.2 | ~1 per 6 turns | 377 ms |
+
+Paired on the same 1,518 questions: Commons right and mem0 wrong 232 times, the reverse 107 times (sign test
+p = 1e-11). What closed the gap: each hit comes with the turns around it from the same session (`search(context=N)`,
+a reply like "yes, last week" is useless without the question it answers), every line carries its date, and relative
+times resolve against that date ("last week (the week before 9 June 2023)"). mem0 buys the same context with an LLM
+call on every write; Commons does it at read time for free. Cost of the runs: $4.67 (context=1), $6.41 (context=2).
+
+**First head-to-head, hits only** (LoCoMo cats 1-4, 1,540 questions). mem0 OSS ingested each conversation in 6-turn chunks
 with its LLM fact extraction (Claude Haiku 4.5), fastembed bge-small and local Qdrant, and returned its top 20
 memories per question. Its memories and Commons' top 20 went through the *same* reader, judge, prompts and "Today
 is" date line (Claude Haiku 4.5, [`rivals/qa_external.py`](rivals/qa_external.py)).
 
 | System | overall | multi-hop | temporal | open-domain | single-hop | LLM calls at ingest | search p50 |
 |---|---|---|---|---|---|---|---|
-| mem0 OSS | **70.3** | **61.0** | **73.8** | 37.5 | 75.9 | ~1 per 6 turns (~10 min per conversation) | 377 ms |
-| Commons 0.9 | 69.5 | 53.2 | 68.9 | **39.6** | **78.6** | none | 24-68 ms |
+| mem0 OSS | 70.3 | 61.0 | 73.8 | 37.5 | 75.9 | ~1 per 6 turns (~10 min per conversation) | 377 ms |
+| Commons 0.9, hits only | 69.5 | 53.2 | 68.9 | 39.6 | 78.6 | none | 24-68 ms |
 
-Paired on the same questions: Commons right and mem0 wrong 188 times, the reverse 203 times (sign test p = 0.45),
-so overall accuracy is a **statistical tie**. mem0's LLM-distilled facts win multi-hop and temporal questions;
-Commons' raw turns win single-hop and open-domain, with no ingest model, ~6-15x faster search and nothing to pay
-per write.
+Hits alone tied mem0 (188 vs 203 paired wins, p = 0.45): mem0's distilled facts won multi-hop and temporal, which is
+what the context and date work above fixed.
 
 **Retrieval vs MemPalace and claude-mem** (LoCoMo, 1,986 questions, MemPalace's own metric: per question, the
 fraction of evidence turns or sessions in the top 10, averaged; MemPalace measured by its own
@@ -62,6 +77,11 @@ fraction of evidence turns or sessions in the top 10, averaged; MemPalace measur
 | **Commons 0.9** | **0.708** | **0.945** | **76.5** | **97.4** | 24.5 ms p50 (1k items) |
 | MemPalace (hybrid) | 0.545 | 0.889 | - | - | 0.71-0.91 s per question (harness) |
 | claude-mem 13.36 | 0.496 | 0.811 | 54.3 | 85.3 | 2,726 ms p50 (HTTP API) |
+
+### Footprint
+Commons serving 5,761 real memories with background maintenance on and no clients: **43 MB RSS, 0.1% CPU** (12
+samples over 2 minutes); 185 MB after the first search loads the quantized bge-small model and vector cache. Bulk
+embedding uses batches of 8 (same speed as 64, ~200 MB lower peak), and maintenance runs once per database.
 
 ### Storage engine: SQLite vs Postgres + pgvector (`commons bench scale --target postgresql://...`)
 Same synthetic store, same machine (an oversubscribed 8-core Mac, load ~33, so compare rows, not absolutes).

@@ -3,6 +3,16 @@
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
 ## v0.9.0: lean, fast, instant, and proven on your own data
+- **Beats mem0 on LoCoMo QA in every category** (78.8% vs 70.3%, same reader and judge, p = 1e-11) with no LLM
+  at write time: `search(context=N)` returns the turns around each hit, and relative dates resolve against each
+  memory's own date at read time.
+- **Project board** (`board`, `board_add`, `board_update`): verbatim asks, targets, expectations, actions and
+  deliveries per project and layer; evidence-gated done; repeat counting; first in every pickup and session start;
+  a Board page in the dashboard.
+- **Dashboard refresh**: one accent on neutral charcoal (no gradient), Geist, tabular figures, gzip, focus kept across
+  live re-renders, fixed state/element-id collisions (Board TypeError, Memory searching for an <input>).
+- **Lighter and steadier hub**: one maintenance loop per database, CAS job claims, KB clustering 70x faster, cached
+  sentence splitting, batch-8 embedding, imports embed only their own rows, remote calls time out.
 - **Measured against the rivals, here.** mem0 OSS, MemPalace and claude-mem were run on the same LoCoMo data:
   QA ties mem0 (69.5 vs 70.3, p = 0.45) with no LLM per write and 6-15x faster search; retrieval beats MemPalace
   (0.708 vs 0.545 dialog-level, its own metric) and claude-mem (0.496). `benchmarks/live_agents.py` checks real

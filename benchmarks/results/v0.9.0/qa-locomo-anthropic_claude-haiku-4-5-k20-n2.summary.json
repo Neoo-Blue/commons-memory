@@ -1,0 +1,28 @@
+{
+  "benchmark": "qa-locomo",
+  "reader": "anthropic/claude-haiku-4-5",
+  "judge": "anthropic/claude-haiku-4-5",
+  "k": 20,
+  "n": 1540,
+  "accuracy": 0.7877,
+  "cost": 6.4084,
+  "by_type": {
+    "cat1": {
+      "n": 282,
+      "accuracy": 0.6418
+    },
+    "cat2": {
+      "n": 321,
+      "accuracy": 0.7726
+    },
+    "cat3": {
+      "n": 96,
+      "accuracy": 0.4375
+    },
+    "cat4": {
+      "n": 841,
+      "accuracy": 0.8823
+    }
+  },
+  "commons_version": "0.9.0"
+}

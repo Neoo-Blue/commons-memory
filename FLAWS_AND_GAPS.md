@@ -106,13 +106,16 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Lock held across ONNX | `complete_subtask` embedded its result while holding the store lock, stalling every agent | Embedded after the lock | concurrency suite |
 | Handoff session | `handoff` did not return its `session_id`, so the next agent could not `resume()` it precisely | Returned | live multi-agent run |
 | Postgres | Scalar `MAX(a,b)` (scheduler preemption) failed | Translated to `GREATEST`; full suite passes on Postgres 17 + pgvector | `COMMONS_TEST_PG` run |
+| QA vs mem0 | Tied mem0 (69.5 vs 70.3), behind on multi-hop and temporal | `search(context=N)` + read-time date resolution: 78.8% vs 70.3%, every category ahead | full LoCoMo QA run |
+| Double maintenance | `serve --dashboard` ran two background loops that embedded the same rows | One loop and one reindex lock per database; CAS job claims | `test_one_background_loop_and_one_claim_per_database` |
+| Import embedding | Each import call embedded the whole backlog | `embed_ids`: only its own rows | review apply 17 min -> seconds per batch |
 | Free-text contradictions | Only structured facts (subject/predicate) were checked | Librarian asks TypeSafe about each new note vs its 3 nearest (precision 1.00 / recall 0.97 on 96 pairs) | `test_librarian_flags_free_text_contradictions_once` |
 
 ### Still open after v0.9
 | Risk / gap | Why |
 |---|---|
-| QA vs mem0 | Run head-to-head here (same reader/judge/prompts): mem0 70.3%, Commons 69.5%, a statistical tie. mem0's LLM-extracted facts win multi-hop (61 vs 53) and temporal (74 vs 69); Commons pays nothing per write and searches 6-15x faster. LongMemEval QA: 62% on a 100-question sample. |
-| Multi-hop and temporal QA | One retrieval pass over raw turns misses facts spread across turns; mem0 consolidates them at write time with an LLM. Query decomposition or optional write-time distillation is not built. |
+| LongMemEval QA | 62% on a 100-question sample (hits only); not yet re-run with context and date resolution, and no rival was run on it here. |
+| Context costs reader tokens | `context=2` lifted LoCoMo QA from 69.5% to 78.8% (beating mem0 70.3% in every category) but gives the reader ~2.5x more text; `context=0` stays the default for search. |
 | Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
 | Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |
 | Archify parity | Graphs are real and analysed, but there are no sequence, workflow or lifecycle diagram types, no commit-pinned source badges and no architecture diff between snapshots yet. |
