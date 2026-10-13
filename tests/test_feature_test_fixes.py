@@ -2,6 +2,8 @@
 import base64
 import os
 
+import pytest
+
 from commons_memory import vault as V
 from commons_memory import work as W
 from commons_memory.capture import Capture
@@ -31,6 +33,7 @@ def test_vault_names_may_use_hyphens_like_agent_names(store, monkeypatch):
 
 
 def test_turn_recall_skips_other_agents_asking_the_same_question(tmp_path):
+    pytest.importorskip("fastembed")  # without it the store falls back to hash embeddings, below the recall bar
     store = make_store(tmp_path, embedder="fastembed")  # recall's similarity bar needs real embeddings
     store.add_item("memory", "test-antigravity: where does Plex run?", agent_id=store.ensure_agent("a"),
                    session_id="other-chat", tags=["conversation", "user"])
@@ -40,6 +43,7 @@ def test_turn_recall_skips_other_agents_asking_the_same_question(tmp_path):
 
 
 def test_turn_in_a_project_still_finds_global_knowledge(tmp_path):
+    pytest.importorskip("fastembed")  # without it the store falls back to hash embeddings, below the recall bar
     store = make_store(tmp_path, embedder="fastembed")
     store.add_item("memory", "Plex runs in Docker in Proxmox LXC CT 100 at 192.168.50.203 with Tautulli")
     store.add_item("memory", "unrelated note about the build", project="commons-test")
