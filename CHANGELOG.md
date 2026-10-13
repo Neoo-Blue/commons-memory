@@ -2,6 +2,24 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.23.0: model presets, half-price benchmarks, row-level access and signed audit exports
+- **Presets out of the box.** With a provider key on the Setup page, planning, knowledge-base summaries and preference
+  extraction use a small model from it (Claude Haiku 5.5 with an Anthropic key; Gemini, OpenAI, xAI or a local Ollama
+  model otherwise; never OpenRouter) until you set those roles yourself. Doing stuck work (escalation) still needs a
+  model you chose. Knowledge-base summaries are cached by content, so an unchanged section never costs a second call.
+- **Message Batches for benchmarks.** `commons bench qa-locomo|qa-longmemeval --batch-api` runs retrieval as usual,
+  then sends every reader call and every judge call to Anthropic Message Batches at half price. Curated imports
+  already had `--batch-api`.
+- **Row-level access.** `restrict(id, agents, perm)` limits one memory, decision, board item or Drive file to named
+  agents (read, or write too); `remember(..., visible_to=[...])` writes a private one. Its author and admins keep
+  access; everyone else stops seeing it in search, expand, the graph, the board, Drive and the shared knowledge base.
+- **Signed audit export.** `commons audit-export` writes the audit log as hash-chained JSONL signed with the hub's
+  Ed25519 key; `commons audit-verify FILE --key <fingerprint>` (from `commons audit-key`) proves nothing was edited,
+  dropped, reordered or re-signed.
+- API-backed workers (`@llm` seats) now use the effort level routing picked for each step, not just its model.
+- **For agents:**
+  - Something only certain agents should see: remember(..., visible_to=[names]) or restrict(id, agents).
+
 ## v0.22.1: ready for PyPI, and the one-line installer works again
 - **The one-line installer was broken since v0.9.0.** It downloads the wheel attached to the latest GitHub release,
   and releases since v0.9.0 had none, so `curl ... install.sh | sh` failed with a 404. Releases now get their wheel

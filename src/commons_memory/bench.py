@@ -356,6 +356,46 @@ def _day(ts) -> str:  # "8 May 2023" reads (and gets echoed back) like the bench
 
 
 def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label, neighbors: int = 0):
+    prompt = _qa_prompt(s, question, as_of, k, ts_label, neighbors)
+    a = pl.chat(model, prompt, system="ROLE: reader.", cache_prefix=QA_READER, max_tokens=200, role="grader")
+    answer = (a["text"] or "").strip()
+    j = pl.chat(judge, _judge_prompt(question, gold, answer), system="ROLE: grader.", cache_prefix=QA_JUDGE,
+                max_tokens=60, role="grader", schema=QA_SCHEMA)
+    return answer, _verdict(j["text"]), a.get("cost", 0) + j.get("cost", 0)
+
+
+def _judge_prompt(question, gold, answer) -> str:
+    return f"Question: {question}\nGold answer: {gold}\nGenerated answer: {answer}"
+
+
+def _verdict(text) -> bool:
+    try:
+        return json.loads(re.search(r"\{.*\}", text or "", re.S).group(0))["verdict"] == "CORRECT"
+    except (AttributeError, ValueError, KeyError):
+        return "CORRECT" in (text or "").upper() and "WRONG" not in (text or "").upper()
+
+
+def _qa_batched(pl, model, judge, items: list[dict], log, poll: float = 30) -> tuple[list[tuple[str, bool]], float]:
+    """Message Batches (half price): every reader prompt in one batch, then every judge prompt in a second.
+    items: [{id, prompt, question, gold}] with ids matching ^[A-Za-z0-9_-]{1,64}$."""
+    def run(mid, reqs, role):
+        bid = pl.batch_submit(mid, reqs)
+        log(f"{role}: batch {bid} with {len(reqs)} requests submitted")
+        while True:
+            r = pl.batch_results(mid, bid, role=role)
+            if r["status"] == "ended":
+                return r
+            time.sleep(poll)
+    a = run(model, [{"id": it["id"], "prompt": it["prompt"], "system": "ROLE: reader.", "cache_prefix": QA_READER,
+                     "max_tokens": 200} for it in items], "reader")
+    answers = {it["id"]: (a["results"].get(it["id"]) or "").strip() for it in items}
+    j = run(judge, [{"id": it["id"], "prompt": _judge_prompt(it["question"], it["gold"], answers[it["id"]]),
+                     "system": "ROLE: grader.", "cache_prefix": QA_JUDGE, "max_tokens": 60, "schema": QA_SCHEMA}
+                    for it in items], "grader")
+    return [(answers[it["id"]], _verdict(j["results"].get(it["id"]))) for it in items], a["cost"] + j["cost"]
+
+
+def _qa_prompt(s, question, as_of, k, ts_label, neighbors: int = 0) -> str:
     from .temporal import annotate
     ids, _, _ = s.rank(question, limit=k, as_of=as_of)
     ctx = []
@@ -374,21 +414,14 @@ def _qa_one(pl, model, judge, s, question, gold, as_of, k, ts_label, neighbors: 
             r = s.q("SELECT content, created_at FROM items WHERE id=?", (i,))
             if r:
                 ctx.append(f"[{_day(r[0]['created_at'])}] {annotate(r[0]['content'][:700], r[0]['created_at'])}")
-    prompt = f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
-    a = pl.chat(model, prompt, system="ROLE: reader.", cache_prefix=QA_READER, max_tokens=200, role="grader")
-    answer = (a["text"] or "").strip()
-    j = pl.chat(judge, f"Question: {question}\nGold answer: {gold}\nGenerated answer: {answer}", system="ROLE: grader.",
-                cache_prefix=QA_JUDGE, max_tokens=60, role="grader", schema=QA_SCHEMA)
-    try:
-        ok = json.loads(re.search(r"\{.*\}", j["text"], re.S).group(0))["verdict"] == "CORRECT"
-    except (AttributeError, ValueError, KeyError):
-        ok = "CORRECT" in (j["text"] or "").upper() and "WRONG" not in (j["text"] or "").upper()
-    return answer, ok, a.get("cost", 0) + j.get("cost", 0)
+    return f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
 
 
 def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str | None = None, k: int = 20,
        limit: int | None = None, workers: int = 8, embedder: str = "auto", seed: int = 7, log=lambda m: None,
-       neighbors: int = 0) -> dict:
+       neighbors: int = 0, batch: bool = False) -> dict:
+    """batch=True: retrieval runs here as usual, then every reader call and every judge call goes to Anthropic Message
+    Batches (half price; results usually within the hour)."""
     """End-to-end answer accuracy (LLM reader + LLM judge), the metric mem0/Zep publish. LoCoMo: categories 1-4
     (adversarial category 5 excluded, as in the mem0 paper). LongMemEval-S: a seeded random sample of `limit`
     questions (each needs its own embedded haystack). Retrieval is the same Store.rank behind search()."""
@@ -402,6 +435,7 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
         ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "") + \
         ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "")
     os.makedirs(out, exist_ok=True)
+    queued: list[dict] = []
     if suite == "locomo":
         convs = json.load(open(data_path))[: limit or None]
         for conv in convs:
@@ -419,9 +453,19 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                 s.reindex()
                 ref = max(_locomo_date(c.get(f"session_{i}_date_time", "")) for i in range(1, n)) + 86400
                 qs = [q for q in conv["qa"] if q.get("category") in (1, 2, 3, 4) and "answer" in q]
+                label = time.strftime("%d %B %Y", time.gmtime(ref))
+                if batch:
+                    for i, q in enumerate(qs):
+                        queued.append({"id": re.sub(r"[^A-Za-z0-9_-]", "_", f"{conv['sample_id']}-{i}")[:64],
+                                       "prompt": _qa_prompt(s, q["question"], ref, k, label, neighbors),
+                                       "question": q["question"], "gold": str(q["answer"]),
+                                       "row": {"id": conv["sample_id"], "type": f"cat{q['category']}", "q": q["question"],
+                                               "gold": str(q["answer"])}})
+                    log(f"{conv['sample_id']}: {len(qs)} questions retrieved for the batch")
+                    continue
                 with ThreadPoolExecutor(max_workers=workers) as ex:
                     res = list(ex.map(lambda q: _qa_one(pl, model, judge, s, q["question"], q["answer"], ref, k,
-                                                        time.strftime("%d %B %Y", time.gmtime(ref)), neighbors), qs))
+                                                        label, neighbors), qs))
                 for q, (ans, ok, c_) in zip(qs, res):
                     rows.append({"id": conv["sample_id"], "type": f"cat{q['category']}", "q": q["question"],
                                  "gold": str(q["answer"]), "answer": ans, "correct": int(ok)})
@@ -451,12 +495,22 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                         s.add_item("note", f"user: {t['content']}" + (f"\nassistant: {reply}" if reply else ""), created_at=ts)
                 s.reindex()
                 gold = q["answer"] if not q["question_id"].endswith("_abs") else "The information is not available (abstain)."
+                if batch:
+                    return q, (_qa_prompt(s, q["question"], _lme_date(q["question_date"]), k, q["question_date"], neighbors),
+                               gold, 0.0)
                 return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_date(q["question_date"]), k, q["question_date"],
                                   neighbors)
             finally:
                 _cleanup(d)
         with ThreadPoolExecutor(max_workers=max(1, workers // 2)) as ex:
             for q, (ans, ok, c_) in ex.map(one, data):
+                if batch:  # ans is the reader prompt, ok the gold answer
+                    queued.append({"id": re.sub(r"[^A-Za-z0-9_-]", "_", q["question_id"])[:64], "prompt": ans,
+                                   "question": q["question"], "gold": ok,
+                                   "row": {"id": q["question_id"], "type": q["question_type"]
+                                           + ("_abs" if q["question_id"].endswith("_abs") else ""),
+                                           "q": q["question"], "gold": str(q["answer"])}})
+                    continue
                 rows.append({"id": q["question_id"], "type": q["question_type"] + ("_abs" if q["question_id"].endswith("_abs") else ""),
                              "q": q["question"], "gold": str(q["answer"]), "answer": ans, "correct": int(ok), "cost": c_})
                 cost += c_
@@ -464,6 +518,10 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                     f.write(json.dumps(rows[-1]) + "\n")
                 if len(rows) % 10 == 0:
                     log(f"{len(rows)}/{total}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
+    if queued:
+        got, c_ = _qa_batched(pl, model, judge, queued, log)
+        cost += c_
+        rows += [it["row"] | {"answer": ans, "correct": int(ok)} for it, (ans, ok) in zip(queued, got)]
     with open(os.path.join(out, f"{tag}.jsonl"), "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

@@ -122,18 +122,40 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def remember(content: str = "", title: str = "", project: str = "", tags: list[str] | None = None,
                  entities: list[str] | None = None, kind: str = "memory", related_ids: list[str] | None = None,
                  subject: str = "", predicate: str = "", value: str = "", session_id: str = "",
-                 text: str = "", agent: str = "", api_key: str = "") -> str:
+                 text: str = "", visible_to: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
         """Store a memory (note, observation, fact). `content` is the text (`text` is accepted as an alias).
         For facts give subject/predicate/value to enable conflict detection. entities: names or ids to link in the
-        graph. Secrets are auto-redacted; store refs like env://X."""
+        graph. visible_to: only these agents (and you) may see it. Secrets are auto-redacted; store refs like env://X."""
         content = content or text
         if not content.strip():
             raise CommonsError("remember needs `content` (the memory text; `text` also works)")
         aid, auth = who(agent, api_key)
-        return _fmt(store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
-                                   entities=entities, related_ids=related_ids, subject=subject or None,
-                                   predicate=predicate or None, value=value or None, session_id=session_id or None,
-                                   authenticated=auth), "json")
+        out = store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
+                             entities=entities, related_ids=related_ids, subject=subject or None,
+                             predicate=predicate or None, value=value or None, session_id=session_id or None,
+                             authenticated=auth)
+        if visible_to:
+            from .auth import PRINCIPAL
+            from .rowacl import restrict as _restrict
+            out["visible_to"] = _restrict(store, PRINCIPAL.get(), out["id"], visible_to)["visible_to"]
+        return _fmt(out, "json")
+
+    @mcp.tool()
+    def restrict(id: str, agents: list[str], perm: str = "read", agent: str = "", api_key: str = "") -> str:
+        """Limit one record (memory, decision, board item, Drive file) to the named agents; perm write also lets
+        them change it. You (its author) and admins keep access. unrestrict(id) opens it again."""
+        from .auth import PRINCIPAL
+        from .rowacl import restrict as _restrict
+        who(agent, api_key)
+        return _fmt(_restrict(store, PRINCIPAL.get(), id, agents, perm), "json")
+
+    @mcp.tool()
+    def unrestrict(id: str, agent: str = "", api_key: str = "") -> str:
+        """Make a restricted record visible again to everyone who can read its project."""
+        from .auth import PRINCIPAL
+        from .rowacl import unrestrict as _unrestrict
+        who(agent, api_key)
+        return _fmt(_unrestrict(store, PRINCIPAL.get(), id), "json")
 
     @mcp.tool()
     def search(query: str = "", mode: str = "hybrid", project: str = "", agent_filter: str = "",

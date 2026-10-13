@@ -32,6 +32,11 @@ KINDS = {
 ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro", "difficulty",
          "curator", "observer", "gatekeeper"]
 TASK_TYPES = ["research", "plan", "code", "review", "red_team", "test", "summarize", "debate", "judge", "general"]
+# Out-of-the-box models for the light roles, picked from the first provider key you add (change any role to override).
+PRESET_ROLES = ("planner", "kb_summarizer", "pref_extractor")
+PRESET_ORDER = ("anthropic", "google", "openai", "xai", "ollama")
+PRESETS = {"anthropic": "claude-haiku-5-5", "google": "gemini-3-flash", "openai": "gpt-5-mini", "xai": "grok-4-6",
+           "ollama": "qwen3:8b"}
 
 # Small, cheap, automatically checkable probes per task type.
 PROBES: dict[str, list[tuple[str, str]]] = {
@@ -367,16 +372,29 @@ class ProviderLayer:
             self.s.x("DELETE FROM meta WHERE key=?", (f"role:{role}",))
         return {"role": role, "model": model_id}
 
-    def role_model(self, role: str) -> str | None:
+    def role_model(self, role: str, preset: bool = True) -> str | None:
+        """The model for a role: the one set for it, else the distributor's, else (planner, kb_summarizer and
+        pref_extractor only) a small model from the first provider key you added. preset=False skips the presets."""
         for k in (role, "distributor"):
             r = self.s.q("SELECT value FROM meta WHERE key=?", (f"role:{k}",))
             if r:
                 return r[0]["value"]
+        return self.preset(role) if preset else None
+
+    def preset(self, role: str) -> str | None:
+        from . import settings
+        if role not in PRESET_ROLES or not settings.get(self.s, "role_presets"):
+            return None
+        on = {r["name"]: r["kind"] for r in self.s.q("SELECT name, kind FROM providers WHERE enabled=1")}
+        for kind in PRESET_ORDER:  # never OpenRouter: it bills per call through a third party
+            name = next((n for n, k in on.items() if k == kind), None)
+            if name:
+                return f"{name}/{PRESETS[kind]}"
         return None
 
     def roles(self) -> dict:
-        return {r: {"model": self.role_model(r), "explicit": bool(self.s.q("SELECT 1 FROM meta WHERE key=?", (f"role:{r}",)))}
-                for r in ROLES}
+        return {r: {"model": self.role_model(r), "explicit": bool(self.s.q("SELECT 1 FROM meta WHERE key=?", (f"role:{r}",))),
+                    "preset": not self.role_model(r, preset=False) and bool(self.preset(r))} for r in ROLES}
 
     def call_role(self, role: str, prompt: str, max_tokens: int = 1500) -> str | None:
         """Run a role prompt on its configured model; None when no model is configured (callers use heuristics)."""

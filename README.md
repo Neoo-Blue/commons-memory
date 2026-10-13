@@ -39,7 +39,7 @@ commons search "how do payments retry"
 # 4. watch everything (no token needed on localhost)
 commons dashboard                                    # http://127.0.0.1:8766
 ```
-Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the 31 core tools (6.1k tokens, against 39k for all 181); `tools(query)` finds the other 150 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
+Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the 31 core tools (6.3k tokens, against 39.7k for all 183); `tools(query)` finds the other 152 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
 
 ## Feature tour
 | Area | What you get | Learn more |
@@ -55,7 +55,8 @@ Connect a second AI the same way and it can see the first one's memory immediate
 | **Messaging & wake** | Direct and broadcast messages (at-least-once, threaded), a `/bus/*` shim for existing agent buses, presence, and wake channels (signed webhooks, ntfy, Slack, email, SSE/WS). `summon` calls every agent at once and reports who is ready; `commons agent daemon --preset claude --install` (or codex, cursor, gemini, grok, …) starts a CLI agent within seconds of new work (pushed, not polled) · `msg_send(type=task)` becomes a tracked job, handed to a live agent if the recipient is offline unless you pass `reroute=false` | [docs/messaging.md](docs/messaging.md) |
 | **Skills & tools** | Shared skill pool with versioning, review gate and rollback: any model loads a skill with `skill(name)` and nothing installed, sees pool skills natively in its skills list, and asks another agent with `skill_help` when it can't run one · MCP prompts (slash commands like /checkin, /wrapup) and resources · MCP hub that proxies upstream servers with per-agent policy, keys from the vault, and approvals decided by your decision chain · research · Commons Drive (versioned shared files; S3, WebDAV, SFTP…) | [docs/drive.md](docs/drive.md) |
 | **You** | Preferences learned once and applied by every AI · retro learning from your past Claude/ChatGPT/Codex/Cursor history (review queue) · `commons import claude-mem|mem0|claude-memory|sesame [--curate]` with an AI manager that keeps, merges or drops each item | [docs/retro-learning.md](docs/retro-learning.md) |
-| **Operations** | Setup page with a first-run checklist (keys, decision order, credentials, features) · `commons setup` connects 17 AI clients in one command and `commons doctor --repair` fixes a broken connection · dashboard (30 pages, live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
+| **Access & audit** | Project ACLs plus row-level access: one memory, decision, board item or file can be limited to named agents (`restrict`, `remember(visible_to=...)`), and it then disappears from everyone else's search, graph, board, Drive and the shared knowledge base · signed, hash-chained audit export (`commons audit-export`, `audit-verify --key`) that proves nothing was edited, dropped or re-signed · secrets redacted everywhere, keys only through the vault | [docs/configuration.md](docs/configuration.md) |
+| **Operations** | Setup page with a first-run checklist (keys, decision order, credentials, features) · model presets: with one provider key, planning, knowledge-base summaries and preference extraction just work (Haiku with an Anthropic key), summaries cached by content · Message Batches (half price) for curated imports and benchmarks · `commons setup` connects 17 AI clients in one command and `commons doctor --repair` fixes a broken connection · dashboard (30 pages, live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
 
 ## Architecture
 ```mermaid
@@ -190,7 +191,7 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (v0.9.0; LongMemEval QA on v0.20, tool sizes on v0.21)
+## Benchmarks (v0.9.0; LongMemEval QA on v0.20, tool sizes on v0.23)
 Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
 results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
@@ -201,7 +202,7 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 | LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.8%** with `context=2` and date resolution (69.5% for hits alone); no LLM at write time |
 | LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **67%** on v0.20.1 (v0.9: 62%); temporal 63% (v0.9: 53%). Hits alone: neighbouring turns cost 10 points on its long sessions |
 | Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
-| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer) | **6,102** for the 31 core tools in v0.21; listing all 181 would cost 39,045 |
+| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer) | **6,291** for the 31 core tools in v0.23; listing all 183 would cost 39,710 |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
 **Head-to-head, rivals run here on the same LoCoMo data** (details in [benchmarks/README.md](benchmarks/README.md)):
@@ -232,11 +233,10 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 | Agent buses / chat bridges | Messaging | Commons adds a shared mailbox, presence and wake, plus a bus-compatible shim |
 
 ## Roadmap
-- Publish to PyPI so `uvx commons-memory` / `pipx install commons-memory` work without git.
-- Planner, summarizer and preference-extractor presets out of the box.
+- First PyPI release (the publishing workflow is in place; `uvx commons-memory` / `pipx install commons-memory` work once it lands).
 - Graphiti adapter, plus tree-sitter for more languages and live LSP lookups.
-- Message Batches support for half-price curated imports and benchmarks.
-- Fine-grained (row-level) ACLs and signed audit export.
+- Tiered model seats (cheap / mid / top models from your keys, picked per step by difficulty) and a six-stage
+  DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP workflow with nested subagents and a stage graph.
 - Hosted dashboard auth via OIDC.
 
 History: [CHANGELOG.md](CHANGELOG.md).

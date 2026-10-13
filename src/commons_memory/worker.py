@@ -189,7 +189,7 @@ def run_worker(client, cmd: str, *, once: bool = False, max_tasks: int = 0, inte
                 rr = ProviderLayer(client.store).chat(mdl, prompt[len(cpre):] if cpre and prompt.startswith(cpre) else prompt,
                                                       cache_prefix=cpre, system="You are an expert agent in a Commons team.",
                                                       agent_id=getattr(client, "agent_id", None), job_id=p["job_id"],
-                                                      role="executor")
+                                                      role="executor", effort=p.get("effort"))  # the routed effort level
                 out, ok = rr["text"], True
                 out += f"\nTOKENS: {rr['tokens_out']}"
             else:

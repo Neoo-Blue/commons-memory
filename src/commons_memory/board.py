@@ -201,6 +201,8 @@ def view(s: Store, project: str | None = None, path: str = "", status: str = "op
         args += [path.strip("/"), path.strip("/") + "/%"]
     rows = [dict(r) for r in s.q(f"SELECT * FROM board WHERE {' AND '.join(where)} ORDER BY project_id, path, created_at "
                                  f"LIMIT ?", (*args, limit * 3))]
+    gone = s.hidden_ids([r["id"] for r in rows])  # board items restricted to other agents
+    rows = [r for r in rows if r["id"] not in gone]
     keep = (lambda r: r["status"] in OPEN) if status == "open" else (lambda r: True) if status == "all" else \
         (lambda r: r["status"] == status)
     byid = {r["id"]: r for r in rows}

@@ -526,7 +526,7 @@ class Drive:
             return p.read_bytes(), {"path": path, "mount": m["name"], "mime": mimetypes.guess_type(str(p))[0]}
         project = self._proj(project, "read")
         r = self._row(project, path)
-        if not r:
+        if not r or self.s.hidden_ids([r["id"]]):  # a file restricted to other agents doesn't exist for this caller
             raise CommonsError(f"no such file {path}")
         sha = r["sha"]
         if version:
@@ -564,7 +564,8 @@ class Drive:
         like = prefix.rstrip("/") + "/%"
         rows = self.s.q("SELECT * FROM drive_files WHERE project=? AND (path LIKE ? OR path=?)"
                         + ("" if include_deleted else " AND deleted_at IS NULL") + " ORDER BY path", (project, like, prefix))
-        files = [self._info(r) for r in rows]
+        gone = self.s.hidden_ids([r["id"] for r in rows])
+        files = [self._info(r) for r in rows if r["id"] not in gone]
         if not recursive:
             depth = prefix.rstrip("/").count("/") + 1
             dirs = sorted({"/".join(f["path"].split("/")[:depth + 1]) for f in files if f["path"].count("/") > depth})

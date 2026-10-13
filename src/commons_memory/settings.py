@@ -19,6 +19,8 @@ DEFAULTS = {
                    "rules (keyword splitting, always works). Every planner sees who is live, what each agent is good "
                    "at and how much usage it has left."),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
+    "role_presets": (True, "Use a small model from your first provider key (Claude Haiku with an Anthropic key) for "
+                           "planning, knowledge-base summaries and preference extraction, unless you set those roles"),
     "capture_diffs": (True, "Keep each agent's code changes (git diff, secrets redacted) with its work, in the job "
                             "workspace"),
     "dup_warnings": (True, "Warn agents when someone else is doing, or already did, the same work"),

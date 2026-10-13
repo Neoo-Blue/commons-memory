@@ -130,7 +130,7 @@ class Escalator:
     def _llm(self, st: dict) -> dict | None:
         from .providers import ProviderLayer
         pl = ProviderLayer(self.s)
-        model = pl.role_model("distributor") or pl.role_model("planner")
+        model = pl.role_model("distributor") or pl.role_model("planner", preset=False)  # doing work needs a model you chose
         if not model:
             return None
         aid = self.s.ensure_agent("commons-distributor")

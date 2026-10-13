@@ -353,6 +353,7 @@ class Store:
                     tags: list[str] | None = None, project: str | None = None, agent_id: str | None = None) -> dict:
         """Edit a memory in place (dashboard inline edit, librarian). Redacted, ACL-checked on the old and the new
         project, keyword index and vector refreshed."""
+        self._row_write(iid)
         r = self.q("SELECT * FROM items WHERE id=?", (iid,))
         if not r:
             raise CommonsError(f"unknown id {iid}")
@@ -390,6 +391,7 @@ class Store:
 
     def delete_item(self, iid: str, agent_id: str | None = None) -> dict:
         """Hard-delete a memory with its keyword row, vector and graph edges (ACL: write on its project)."""
+        self._row_write(iid)
         r = self.q("SELECT project_id, kind FROM items WHERE id=?", (iid,))
         if not r:
             raise CommonsError(f"unknown id {iid}")
@@ -850,11 +852,14 @@ class Store:
     def hidden_ids(self, ids, need: str = "read") -> set[str]:
         """The given ids that belong to a project the caller may not read: the one ACL filter for graph reads,
         expand and budgeted listings (batched, so it is cheap on big graph exports)."""
+        from .auth import PRINCIPAL
+        from .rowacl import hidden as row_hidden
         denied = self.denied_projects(need)
         ids = [i for i in ids if isinstance(i, str)]
+        rows = row_hidden(self, PRINCIPAL.get(), ids, need) if ids else set()  # records restricted to other agents
         if not denied or not ids:
-            return set()
-        out = {i for i in ids if i in set(denied)}
+            return rows
+        out = rows | {i for i in ids if i in set(denied)}
         dph = ",".join("?" * len(denied))
         for i in range(0, len(ids), 400):
             ch = ids[i:i + 400]
@@ -865,6 +870,11 @@ class Store:
             out |= {r["id"] for r in self.q(f"SELECT s.id FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.id IN "
                                             f"({ph}) AND j.project_id IN ({dph})", ch + denied)}
         return out
+
+    def _row_write(self, iid: str) -> None:
+        from .auth import PRINCIPAL
+        from .rowacl import check
+        check(self, PRINCIPAL.get(), iid, "write")  # restricted records: only listed writers, the author, admins
 
     def check_ids(self, *ids: str) -> None:
         if self.hidden_ids(list(ids)):

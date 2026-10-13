@@ -90,8 +90,11 @@ class KB:
     def _items(self, bucket: str) -> list[dict]:
         from .trust import Trust
         tr, floor = Trust(self.s), float(os.environ.get("COMMONS_KB_MIN_TRUST", "0.2"))
+        restricted = {r["ref"] for r in self.s.q("SELECT DISTINCT ref FROM row_acl")}  # the KB is shared: never these
         out = []
         for i in self._items_raw(bucket):
+            if i["id"] in restricted:
+                continue
             t = tr.score(i["agent_id"])
             if t >= floor:  # very low-trust writers never reach the shared digest
                 out.append(i | {"_trust": t})
@@ -238,9 +241,15 @@ class KB:
         if not cites:
             return content
         if sec in ("overview", "decisions"):
+            import hashlib
             from .providers import ProviderLayer
-            llm = ProviderLayer(self.s).call_role("kb_summarizer", f"Rewrite this knowledge-base section as concise "
-                                                  f"prose. Keep every [id] citation.\n# {TITLES[sec]} ({bucket})\n\n{content}")
+            prompt = (f"Rewrite this knowledge-base section as concise prose. Keep every [id] citation.\n"
+                      f"# {TITLES[sec]} ({bucket})\n\n{content}")
+            key = "kbsum:" + hashlib.sha256(prompt.encode()).hexdigest()[:32]
+            hit = self.s.q("SELECT value FROM meta WHERE key=?", (key,))  # unchanged section: no second model call
+            llm = hit[0]["value"] if hit else ProviderLayer(self.s).call_role("kb_summarizer", prompt)
+            if llm and not hit:
+                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, llm))
             if llm:
                 return llm.strip() + "\n\nSources: " + " ".join(f"[{c}]" for c in cites)
         hook = os.environ.get("COMMONS_KB_SUMMARIZER")

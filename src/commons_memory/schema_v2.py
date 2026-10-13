@@ -218,6 +218,8 @@ def _v5(db):
     vault_migrate(db)
     from .status import migrate as status_migrate
     status_migrate(db)
+    from .rowacl import migrate as rowacl_migrate
+    rowacl_migrate(db)
 
 
 _v4e_migrate = migrate

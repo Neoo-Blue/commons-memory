@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
-NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor"}
-CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault"} | NOSTORE
+NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key"}
+CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
@@ -104,6 +105,8 @@ def add_parsers(sub) -> None:
     x.add_argument("--limit", type=int)
     x.add_argument("--workers", type=int, default=4)
     x.add_argument("--rerank", action="store_true")
+    x.add_argument("--batch-api", action="store_true", help="qa-*: reader and judge calls through Anthropic Message "
+                   "Batches (half price; results usually within the hour)")
     x = sub.add_parser("diagram", help="interactive HTML diagram (code graph or job plan)")
     x.add_argument("kind", choices=["code", "job", "workflow", "sequence", "lifecycle", "delta"])
     x.add_argument("target", nargs="?", default="", help="project (code) or job id (job)")
@@ -129,6 +132,14 @@ def add_parsers(sub) -> None:
     x.add_argument("scope", nargs="?", default="")
     x.add_argument("query", nargs="?", default="")
     sub.add_parser("audit", help="memory organisation audit (librarian score)").add_argument("--project")
+    x = sub.add_parser("audit-export", help="signed, hash-chained export of the audit log (verify with audit-verify)")
+    x.add_argument("--out", default="-", help="file to write (default stdout)")
+    x.add_argument("--since", help="ISO time or 7d / 12h")
+    x.add_argument("--until")
+    x = sub.add_parser("audit-verify", help="check a signed audit export: chain, signature, and optionally the key")
+    x.add_argument("file")
+    x.add_argument("--key", help="the fingerprint you expect (from `commons audit-key` on the hub)")
+    sub.add_parser("audit-key", help="this hub's audit signing key fingerprint (pin it when verifying exports)")
 
 
 def _import(args) -> int:
@@ -200,6 +211,15 @@ def _import(args) -> int:
 
 def handle_nostore(args) -> int:
     c = args.cmd
+    if c == "audit-verify":
+        from .auditexport import verify
+        r = verify(Path(args.file).read_text(), args.key)
+        print(json.dumps(r, indent=2))
+        return 0 if r["ok"] else 1
+    if c == "audit-key":
+        from .auditexport import public_key
+        print(json.dumps(public_key(), indent=2))
+        return 0
     if c == "doctor":
         from .setup import doctor
         return doctor(args.client, args.agent, args.url, args.repair)
@@ -268,7 +288,7 @@ def handle_nostore(args) -> int:
                 return 2
             s = bench.qa(args.suite[3:], args.data, args.out, Store(args.db), args.model, judge=args.judge, k=args.k,
                          limit=args.limit, workers=args.workers, embedder=args.embedder, neighbors=args.neighbors,
-                         log=lambda m: print(m, file=sys.stderr, flush=True))
+                         batch=args.batch_api, log=lambda m: print(m, file=sys.stderr, flush=True))
             print(json.dumps(s, indent=2))
             return 0
         if args.suite == "scale":
@@ -356,4 +376,13 @@ def handle(args, store) -> int:
     elif c == "audit":
         from .spaces import audit
         print(json.dumps(audit(store, args.project), indent=2))
+    elif c == "audit-export":
+        from .auditexport import export
+        out = export(store, args.since, args.until)
+        if args.out == "-":
+            sys.stdout.write(out)
+        else:
+            Path(args.out).write_text(out)
+            print(f"wrote {args.out} ({out.count(chr(10)) - 2} rows)", file=sys.stderr)
+
     return 0
