@@ -23,6 +23,8 @@ DEFAULTS = {
                                 "URLs, and everything is logged)"),
     "dashboard_lock": (False, "Lock the whole dashboard behind my owner password (each browser signs in once for 14 "
                               "days; agents keep working through their keys)"),
+    "agent_updates": ("auto", "Agents' own tools (agy, grok, claude): auto = keep them up to date (checked every 10 "
+                              "minutes, updated on the machine they run on), notify = tell me when one is out, off"),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
     "role_presets": (True, "Use a small model from your first provider key (Claude Haiku with an Anthropic key) for "
                            "planning, knowledge-base summaries and preference extraction, unless you set those roles"),
@@ -62,6 +64,9 @@ def put(s: Store, key: str, value) -> dict:
         value = int(value)
         if not 0 <= value <= 90:
             raise CommonsError("reserve_pct is 0-90")
+    elif isinstance(d, str) and key in CHOICES:
+        if value not in CHOICES[key]:
+            raise CommonsError(f"{key} is one of {', '.join(CHOICES[key])}")
     elif isinstance(d, str):
         value = (value or "").strip()
         if value and not value.startswith(("http://", "https://")):
@@ -87,8 +92,10 @@ def put(s: Store, key: str, value) -> dict:
     return {key: value}
 
 
+CHOICES = {"agent_updates": ("auto", "notify", "off")}
 RISKY = {"auto_approve_all"}  # off by default and shown as "your risk", never as recommended
 
 
 def listing(s: Store) -> list[dict]:
-    return [{"key": k, "value": get(s, k), "default": d, "help": h, "risky": k in RISKY} for k, (d, h) in DEFAULTS.items()]
+    return [{"key": k, "value": get(s, k), "default": d, "help": h, "risky": k in RISKY, "choices": CHOICES.get(k)}
+            for k, (d, h) in DEFAULTS.items()]

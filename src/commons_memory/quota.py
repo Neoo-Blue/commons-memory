@@ -212,6 +212,55 @@ DEFAULT_MAP = {
 MODEL_CMDS = {"antigravity": ["agy", "models"], "grok-build": ["grok", "models"]}
 
 
+# each agent's own tool: how to read its version, check for a newer one (if it can), and update it
+# (override: "_cli" in quota-map.json; "claude" means the agents aiusage's claude windows map to)
+CLI_CMDS = {"antigravity": {"version": ["agy", "--version"], "update": ["agy", "update"]},
+            "grok-build": {"version": ["grok", "--version"], "check": ["grok", "update", "--check", "--json"],
+                           "update": ["grok", "update"]},
+            "claude": {"version": ["claude", "--version"], "update": ["claude", "update"]}}
+
+
+def _run(cmd: list[str], timeout: float = 60) -> tuple[int, str]:
+    import os
+    import shutil
+    import subprocess
+    exe = shutil.which(cmd[0], path=os.environ.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"))
+    if not exe:
+        return 127, f"{cmd[0]} not found"
+    try:
+        r = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        return r.returncode, (r.stdout + r.stderr).strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+
+
+def local_clis(mapping: dict, cmds: dict | None = None) -> dict[str, dict]:
+    """{agent: {"version", "latest"?, "can_check", "update": cmd}} for every agent tool installed on this machine."""
+    import re
+    out = {}
+    for key, c in (cmds or CLI_CMDS).items():
+        agents = sorted({a for ws in (mapping.get("claude") or {}).values() for a in ws}) if key == "claude" else [key]
+        code, text = _run(c["version"], 30)
+        v = re.search(r"\d+\.\d+\.\d+[\w.+-]*", text) if code == 0 else None
+        if not v:
+            continue
+        info = {"version": v.group(0), "can_check": "check" in c, "update": c["update"]}
+        if "check" in c:
+            code, text = _run(c["check"], 60)
+            try:
+                info["latest"] = json.loads(text[text.find("{"):]).get("latestVersion") if code == 0 else None
+            except ValueError:
+                pass
+        for a in agents:
+            out[a] = info
+    return out
+
+
+def run_update(cmd: list[str]) -> tuple[bool, str]:
+    code, text = _run(cmd, 900)
+    return code == 0, text[-600:]
+
+
 def local_models(cmds: dict | None = None) -> dict[str, list[dict]]:
     """Each agent's live model catalog from its own CLI: `agy models` (slug<TAB>name) or `grok models` (bullets).
     An agent whose CLI is missing or fails is left out, so the hub keeps what it last knew."""

@@ -254,21 +254,38 @@ def handle_nostore(args) -> int:
             return 0
         mapping = json.load(open(args.map)) if args.map else None
         mp = Path.home() / ".commons" / "quota-map.json"
-        cmds = (mapping or (json.loads(mp.read_text()) if mp.exists() else {})).get("_models")
-        wins_by, models_by = Q.from_aiusage(args.aiusage_db, mapping), Q.local_models(cmds)
+        eff = mapping or (json.loads(mp.read_text()) if mp.exists() else Q.DEFAULT_MAP)
+        wins_by, models_by = Q.from_aiusage(args.aiusage_db, mapping), Q.local_models(eff.get("_models"))
+        clis = Q.local_clis(eff, eff.get("_cli"))
+
+        def report(a):
+            try:
+                return json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}")
+            except Exception:  # noqa: BLE001 - a hub older than v0.24.2 knows neither models nor cli: send the windows
+                a = {k: v for k, v in a.items() if k not in ("models", "cli")}
+                return json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}") if a["windows"] else {}
         sent = {}
-        for agent in sorted(set(wins_by) | set(models_by)):
+        for agent in sorted(set(wins_by) | set(models_by) | set(clis)):
             # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
             a = {"windows": wins_by.get(agent, []), "for_agent": agent}
             if agent in models_by:
                 a["models"] = models_by[agent]
-            try:
-                r = json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}")
-            except Exception:  # noqa: BLE001 - a hub older than v0.24.2 has no models argument: send the windows
-                a.pop("models", None)
-                r = json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}") if a["windows"] else {}
-            sent[agent] = [w["window"] for w in a["windows"]] + ([f"{len(a['models'])} models"] if "models" in a else []) \
-                + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])]
+            c = clis.get(agent)
+            if c:
+                a["cli"] = {k: v for k, v in c.items() if k != "update"}
+            r = report(a)
+            line = [w["window"] for w in a["windows"]] + ([f"{len(a['models'])} models"] if "models" in a else []) \
+                + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])] + ([f"v{c['version']}"] if c else [])
+            if c and (r.get("cli") or {}).get("update"):  # the hub says update now: run the agent's own updater here
+                ok, out = Q.run_update(c["update"])
+                after = Q.local_clis(eff, eff.get("_cli")).get(agent) or c
+                b = {"windows": [], "for_agent": agent, "cli": {"version": after["version"], "result": out, "ok": ok}}
+                if agent in models_by:
+                    b["models"] = Q.local_models(eff.get("_models")).get(agent) or models_by[agent]
+                r2 = report(b)
+                line += [f"updated to v{after['version']}" if ok else "update failed"] + \
+                    [f"NEW: {n}" for n in (r2.get("models") or {}).get("new", [])]
+            sent[agent] = line
         print(json.dumps({"synced": sent}))
         return 0
     if c == "import":

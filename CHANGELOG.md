@@ -2,6 +2,19 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.24.3: Commons keeps your agents' own tools up to date
+- **Why.** A new model often needs a newer agent CLI before it shows up, and the owner shouldn't have to remember to
+  run `agy update` on every machine.
+- **Versions everywhere, updates on their own.** The 10-minute `commons quota sync` now reports each agent's CLI
+  version (`agy`, `grok`, `claude`), plus the latest version where the CLI can check (`grok update --check`). With
+  `agent_updates` = auto (the default), Commons tells that machine to run the agent's own updater when a newer version
+  is out, or once a day for CLIs that only find out by trying (`agy update`, `claude update`). The model list is
+  re-read right after, so a model that needed the update is announced in the same run. notify = just tell me; off.
+- **Update now.** The Models page lists every agent's tool, its version and the latest, with an Update now button
+  (runs within 10 minutes on the agent's machine). You get a notification when a version changes or an update fails.
+- **For agents:** quota_report takes `cli` ({version, latest?, can_check?}); its answer's cli.update says whether to
+  run your updater now.
+
 ## v0.24.2: Commons knows which models each agent can run, and tells you when a new one appears
 - **What went wrong.** Google launched Gemini 4 Argon for Antigravity, and the owner asked whether Commons had picked
   it up. It couldn't have: Commons only knew each subscription agent's usage windows, never the models behind it.

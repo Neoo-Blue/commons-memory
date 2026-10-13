@@ -102,11 +102,12 @@ def register_v8(mcp, store, who):
                             goal=goal or None, path=path or None, agent_id=aid))
 
     @mcp.tool()
-    def quota_report(windows: list[dict], for_agent: str = "", models: list | None = None, agent: str = "",
-                     api_key: str = "") -> str:
+    def quota_report(windows: list[dict], for_agent: str = "", models: list | None = None, cli: dict | None = None,
+                     agent: str = "", api_key: str = "") -> str:
         """Report your usage windows so Commons only hands you work you can finish: [{window: "five_hour", used_pct:
         14, resets_at: "2026-10-13T03:00:00Z"}, {window: "weekly", ...}]. models: the models you can run right now
-        ([{id, name}] or ids); new ones are announced. for_agent: report for another agent (only callers listed in
+        ([{id, name}] or ids); new ones are announced. cli: your tool's {version, latest?, can_check?} (after an update
+        also {result, ok}); the answer's cli.update says whether to run your updater now. for_agent: report for another agent (only callers listed in
         COMMONS_QUOTA_REPORTERS, e.g. the machine running `commons quota sync` from aiusage)."""
         import os as _os
         from . import quota as Q
@@ -126,6 +127,9 @@ def register_v8(mcp, store, who):
         if models:
             from .providers import ProviderLayer
             out["models"] = ProviderLayer(store).sync_agent_models(target, models)
+        if cli:
+            from .agentcli import report
+            out["cli"] = report(store, target, cli)
         return _js(out)
 
     @mcp.tool()

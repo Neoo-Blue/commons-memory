@@ -32,3 +32,42 @@ def test_the_sync_reads_each_cli_and_reports_through_quota_report(store, tmp_pat
     out = asyncio.run(build_server(store).call_tool("quota_report", {"windows": [], "models": got["antigravity"],
                                                                      "api_key": key}))
     assert '"models":1,' in out[1]["result"]
+
+
+def test_commons_decides_when_an_agents_tool_updates(store, monkeypatch):
+    from commons_memory import agentcli as AC
+    from commons_memory import settings
+    grok, agy = store.ensure_agent("grok-build"), store.ensure_agent("antigravity")
+    assert AC.report(store, grok, {"version": "1.0.52", "latest": "1.0.52", "can_check": True}) == {"update": False}
+    assert AC.report(store, grok, {"version": "1.0.52", "latest": "1.0.53", "can_check": True})["update"]  # newer out
+    AC.report(store, grok, {"version": "1.0.53", "result": "updated", "ok": True})
+    assert store.q("SELECT 1 FROM notifications WHERE title LIKE '%grok-build updated 1.0.52 → 1.0.53%'")
+    assert not AC.report(store, grok, {"version": "1.0.53", "latest": "1.0.53", "can_check": True})["update"]
+    assert AC.report(store, agy, {"version": "1.3.4", "can_check": False})["update"]  # can't check: try once a day
+    AC.report(store, agy, {"version": "1.3.4", "result": "already on the latest version", "ok": True})
+    assert not AC.report(store, agy, {"version": "1.3.4", "can_check": False})["update"]
+    AC.request(store, "antigravity")  # the owner pressed Update now
+    assert AC.report(store, agy, {"version": "1.3.4", "can_check": False})["update"]
+    AC.report(store, agy, {"version": "1.3.4", "result": "network down", "ok": False})
+    assert store.q("SELECT 1 FROM notifications WHERE title LIKE '%antigravity: updating its tool failed%'")
+    settings.put(store, "agent_updates", "notify")
+    assert not AC.report(store, grok, {"version": "1.0.53", "latest": "1.0.60", "can_check": True})["update"]
+    assert store.q("SELECT 1 FROM notifications WHERE title LIKE '%grok-build 1.0.60 is out%'")
+    assert {c["agent"]: c["update_available"] for c in AC.listing(store)} == {"antigravity": False, "grok-build": True}
+
+
+def test_this_machine_reads_versions_and_runs_updaters(tmp_path):
+    from commons_memory import quota as Q
+    (tmp_path / "v.py").write_text('print("tool 2.4.1 (stable)")\n')
+    (tmp_path / "chk.py").write_text('print(\'{"currentVersion":"2.4.1","latestVersion":"2.5.0"}\')\n')
+    (tmp_path / "up.py").write_text('print("updated to 2.5.0")\n')
+    py = sys.executable
+    got = Q.local_clis({"claude": {"five_hour": ["my-agent"]}}, {
+        "grok-build": {"version": [py, str(tmp_path / "v.py")], "check": [py, str(tmp_path / "chk.py")],
+                       "update": [py, str(tmp_path / "up.py")]},
+        "claude": {"version": [py, str(tmp_path / "v.py")], "update": [py, str(tmp_path / "up.py")]},
+        "missing": {"version": ["no-such-cli-xyz", "--version"], "update": ["no-such-cli-xyz"]}})
+    assert got["grok-build"]["latest"] == "2.5.0" and got["grok-build"]["version"] == "2.4.1"
+    assert got["my-agent"]["version"] == "2.4.1" and not got["my-agent"]["can_check"]  # claude -> its mapped agent
+    assert "missing" not in got
+    assert Q.run_update(got["grok-build"]["update"]) == (True, "updated to 2.5.0")
