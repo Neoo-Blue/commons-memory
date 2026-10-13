@@ -13,13 +13,13 @@ ARG EXTRAS="postgres,http,tokens,code,otel,sftp,smb,ws,embed,vault"
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 # all extras ship manylinux/aarch64 wheels, so no compiler is needed
 WORKDIR /src
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE CHANGELOG.md ./
 COPY src ./src
 RUN python -m venv /opt/commons \
  && /opt/commons/bin/pip install build \
  && python -m pip install build && python -m build --wheel --outdir /wheels \
  && /opt/commons/bin/pip install "$(ls /wheels/*.whl)[${EXTRAS}]" \
- && /opt/commons/bin/pip uninstall -y build pip setuptools wheel || true
+ && (/opt/commons/bin/pip uninstall -y build pip setuptools wheel || true)  # only the cleanup may fail
 # bake the default embedding model into the image (no download on first start; works offline)
 # chmod: huggingface_hub writes its tree cache 0600 as root, which the non-root runtime user can't read (it printed
 # "Ignoring corrupted tree cache file ... Permission denied" on every command)
