@@ -163,3 +163,24 @@ def test_a_window_that_already_reset_is_not_expiring(store):
     a = _agent(store, "a")
     Q.report(store, a, [{"window": "five_hour", "used_pct": 10, "resets_at": now() - 3600}])
     assert Q.headroom(store, a) == (0.8 - Q.task_cost(store, a, "general", "five_hour") / 100, False)
+
+
+def test_plans_survive_lead_in_brackets_loops_and_duplicate_keys(store):
+    import pytest
+    from commons_memory.store import CommonsError
+    good = [{"key": "a", "type": "code", "title": "do a"}]
+    assert P.parse("Plan [draft]: here it is " + json.dumps(good))[0]["key"] == "a"
+    example = json.dumps([{"key": "ex", "title": "ignore me"}])
+    assert P.parse(f"Format example: {example}\nThe plan:\n{json.dumps(good)}")[0]["key"] == "a"
+    lead, gb = _agent(store, "lead"), _agent(store, "grok-build", live=True, plan=0.9)
+    o = Orchestrator(store)
+    j = o.submit("Fix the flaky upload test", agent_id=lead)
+    loop = [{"key": "a", "type": "code", "title": "a", "deps": ["r"], "gates": ["r"]},
+            {"key": "r", "type": "review", "title": "r"}]  # valid as written, a loop once r waits for a
+    o.claim(gb, j["subtasks"][0]["id"])
+    o.complete(j["subtasks"][0]["id"], gb, json.dumps(loop))
+    assert len(o.status(j["job_id"])["subtasks"]) > 1  # the rules took over; the job didn't stall
+    with pytest.raises(CommonsError, match="unique"):
+        o.submit("x", dag=[{"key": "k", "title": "one"}, {"key": "k", "title": "two"}])
+    assert not store.q("SELECT 1 FROM jobs WHERE title='x'")
+

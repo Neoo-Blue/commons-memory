@@ -2,6 +2,20 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.21.2: fixes found by the agents' own live run of v0.21
+Grok Build, Antigravity, Muse and Haiku ran three real jobs through the new splitting (a plan written by an agent, a
+plan written by Haiku, and a live split_subtask). The audit they produced of the splitting code found these:
+- A plan that parses but can't run (a loop once review steps wait for their work) no longer stalls its job: the
+  keyword rules take over, for agent plans and model plans alike.
+- A plan is read from the last top-level array of steps in the reply, so lead-in brackets or a format example before
+  the real plan don't break it or replace it.
+- A DAG with repeated step keys is refused before anything is written (it used to fail halfway, leaving a job behind).
+- Revoking an agent's project access is audited, like granting it.
+- README: the teamwork patterns are listed as alternatives rather than one pipeline, daemon wake is stated as
+  "within seconds" (what the tests measure), and the LoCoMo retrieval numbers now have stored results (reproduced on
+  v0.21.1). The guide has a troubleshooting table for splitting. The agents' README audit graded 65 claims true,
+  0 false and 3 unclear; all three are addressed.
+
 ## v0.21.1: the model planner no longer runs out of room
 - Haiku writes thorough part briefs and hit the planner's 2,500-token output cap mid-plan on the first live job, so
   the cut-off plan was rejected and a live agent planned instead. The cap is now 8,000 tokens, briefs are asked to stay

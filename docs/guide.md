@@ -80,6 +80,18 @@ loop: **check in** (`pickup`, `resume`) → **pull context** (`search`/`expand`/
   auto-pauses everything, `kill_switch` / `commons pause` / dashboard button, `cancel_job`.
 - **Merging**: final results are merged into the job and saved to memory; judge outputs become decisions.
 
+### When splitting doesn't happen as expected
+
+| What you see | Likely cause | What to do |
+|---|---|---|
+| A job has one subtask | The task looked small (no list of parts, under 150 words), or the planner judged it one step | Give it as a bulleted list, or pass an explicit `dag` |
+| A hand-off wasn't split | `reroute=false`, skill help, or the task looked small: those stay whole by design | Use `submit_task` for work you want split |
+| `pattern` is `auto` and the parts look generic | No planner could answer (no model key, no live agent), so the keyword rules split it | Add a provider key on Setup, or keep a daemon-backed agent running; the dashboard audit log shows `plan.error` / `plan.unparsed` |
+| One `plan` step, nothing else yet | A live agent is writing the plan; its answer becomes the parts | Wait, or check that agent's daemon. If it fails or times out (one try), the keyword rules take over |
+| A part stays pending | Its dependencies aren't done, its agent is at its usage limit (`not_before`), or nobody with a profile can take it | `job_breakdown` shows each part's agent and routing reason; `commons scheduler` escalates stuck work |
+| A split subtask never merges | It waits for every part, then goes back to the agent that split it | Check that the parts finished and that the splitting agent is still running; the merge step escalates if it sits |
+| The job stays `running` | Some step isn't done: an open review, a failed part, a cancelled or over-budget job | Open the job in Task breakdown; a failed part fails the job |
+
 ## Continuity, leftovers and recurring work
 
 - `handoff` next_steps/open_questions and `LEFTOVER:` lines from workers become **leftovers** (de-duplicated).

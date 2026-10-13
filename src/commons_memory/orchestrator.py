@@ -266,6 +266,8 @@ class Orchestrator:
         """Validate a DAG before anything is written; returns the agents chosen per key: {key: (agent_id, pinned)}.
         agent: chosen by the submitter, retries stay; assign: first try only (delegate, agent planners)."""
         keys = {d["key"] for d in dag}
+        if len(keys) != len(dag):
+            raise CommonsError("subtask keys must be unique")
         by_key = {d["key"]: d for d in dag}
         for d in dag:  # a review/test always waits for the work it checks, or it would approve work not yet done
             for g in d.get("gates", []):
@@ -333,8 +335,11 @@ class Orchestrator:
             if not model or not self.s.q("SELECT 1 FROM providers WHERE name=? AND enabled=1", (model.split("/")[0],)):
                 continue
             dag = P.llm(self.s, model, task)
-            if dag:
-                return dag, "llm"
+            try:
+                if dag and self._check(dag) is not None:
+                    return dag, "llm"
+            except CommonsError:  # a plan that can't run: the next entry plans
+                self.s.audit(None, "plan.invalid", model, "")
         return None, None
 
     def _planner_agent(self, prefer: str | None = None) -> str | None:
@@ -351,10 +356,15 @@ class Orchestrator:
         from . import planning as P
         job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
         dag = P.parse(result)
+        try:
+            chosen = self._check(dag) if dag else None
+        except CommonsError:  # parses but can't run (a loop once checks wait for their work): use the rules
+            dag = None
         if not dag:
             self.s.audit(None, "plan.unparsed", st["id"], (result or "")[:300])
             dag = plan(job["body"], "auto")
-        ids = self._insert(job["id"], dag, self._check(dag), {}, prefix="p.")
+            chosen = self._check(dag)
+        ids = self._insert(job["id"], dag, chosen, {}, prefix="p.")
         for d in dag:  # the first parts hang off the plan: they see it, and it never shows up as a job result
             if not d.get("deps"):
                 self.s.x("UPDATE subtasks SET deps=? WHERE id=?", (_j([st["id"]]), ids[d["key"]]))

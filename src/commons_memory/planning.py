@@ -9,7 +9,6 @@ it has left, so it sizes the parts to the team. The router still assigns every p
 from __future__ import annotations
 
 import json
-import re
 
 from .store import Store
 
@@ -48,8 +47,16 @@ def parse(text: str) -> list[dict] | None:
     """A planner's answer -> a valid DAG (keys unique, deps/gates known, acyclic, at most 20 parts), else None."""
     from .orchestrator import _check_acyclic
     try:
-        dag = json.loads(re.search(r"\[.*\]", text or "", re.S).group(0))
-        assert isinstance(dag, list) and 0 < len(dag) <= 20 and all(isinstance(d, dict) for d in dag)
+        dec, dag, pos, text = json.JSONDecoder(), None, 0, text or ""
+        while (i := text.find("[", pos)) >= 0:  # the LAST top-level array of objects: answers follow examples
+            try:
+                obj, pos = dec.raw_decode(text, i)
+            except ValueError:
+                pos = i + 1
+                continue
+            if isinstance(obj, list) and obj and all(isinstance(d, dict) for d in obj):
+                dag = obj
+        assert isinstance(dag, list) and 0 < len(dag) <= 20
         keys = [str(d.get("key") or "") for d in dag]
         assert all(keys) and len(set(keys)) == len(keys)
         for d in dag:

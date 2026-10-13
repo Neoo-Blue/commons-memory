@@ -69,3 +69,12 @@ def test_a_delegated_task_wakes_only_the_agent_it_was_given_to(store):
     assert d["assigned_to"] == "muse" and _wakes(store, d["subtask_id"]) == ["muse"]
     d = o.delegate(sender, "muse", "nobody is live, so it falls back to muse")
     assert d["assigned_to"] == "muse" and _wakes(store, d["subtask_id"]) == ["muse"]
+
+
+def test_revoking_project_access_is_audited(store):
+    from commons_memory.auth import ACL
+    a = store.ensure_agent("a")
+    acl = ACL(store)
+    acl.grant("p", "a", "write")
+    acl.revoke("p", "a")
+    assert store.q("SELECT 1 FROM audit WHERE action='acl.revoke'")

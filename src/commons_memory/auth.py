@@ -56,6 +56,7 @@ class ACL:
         pid = self.s.project_id(project)
         a = self.s.get_agent(agent)
         self.s.x("DELETE FROM project_acl WHERE project_id=? AND agent_id=?", (pid, a["id"] if a else agent))
+        self.s.audit(PRINCIPAL.get(), "acl.revoke", pid, {"agent": a["id"] if a else agent})
         return {"revoked": True}
 
     def list(self, project: str | None = None) -> list[dict]:
