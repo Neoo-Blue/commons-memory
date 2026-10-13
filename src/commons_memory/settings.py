@@ -31,6 +31,8 @@ DEFAULTS = {
                          "the best live agent (uses the vault's GitHub key; works behind NAT)"),
     "phone_ntfy": ("", "Phone approvals: your ntfy topic URL (e.g. https://ntfy.sh/<long-random-topic>); every Needs-you "
                        "question arrives with Yes / No buttons"),
+    "graphiti_url": ("", "A Graphiti server (e.g. http://graphiti:8000) to mirror memories into every few minutes, "
+                         "as a temporal knowledge graph; `commons graphiti pull` brings its facts back"),
     "dashboard_url": ("", "This dashboard's address as your phone reaches it (LAN or tailnet), for the Yes / No buttons"),
 }
 ENV = {"reserve_pct": "COMMONS_QUOTA_RESERVE"}

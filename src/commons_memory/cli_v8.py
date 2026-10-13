@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key"}
-CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export"} | NOSTORE
+CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export", "graphiti"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
@@ -140,6 +140,12 @@ def add_parsers(sub) -> None:
     x.add_argument("file")
     x.add_argument("--key", help="the fingerprint you expect (from `commons audit-key` on the hub)")
     sub.add_parser("audit-key", help="this hub's audit signing key fingerprint (pin it when verifying exports)")
+    x = sub.add_parser("graphiti", help="mirror memories into a Graphiti knowledge graph (push) or import its facts (pull)")
+    x.add_argument("direction", choices=["push", "pull"])
+    x.add_argument("--url", help="Graphiti server (default: the graphiti_url setting)")
+    x.add_argument("--group", default="commons")
+    x.add_argument("--last-n", type=int, default=50, help="pull: facts from this many latest episodes")
+    x.add_argument("--project", help="pull: file the facts under this project")
 
 
 def _import(args) -> int:
@@ -376,6 +382,16 @@ def handle(args, store) -> int:
     elif c == "audit":
         from .spaces import audit
         print(json.dumps(audit(store, args.project), indent=2))
+    elif c == "graphiti":
+        from . import graphiti as G
+        from . import settings as _st
+        url = args.url or _st.get(store, "graphiti_url")
+        if not url:
+            print("give --url or set graphiti_url on the Setup page", file=sys.stderr)
+            return 2
+        r = G.push(store, url, args.group) if args.direction == "push" else \
+            G.pull(store, url, args.group, args.last_n, args.project)
+        print(json.dumps(r, indent=2))
     elif c == "audit-export":
         from .auditexport import export
         out = export(store, args.since, args.until)

@@ -22,9 +22,9 @@ from .store import Store
 INTERVALS = {  # seconds (env COMMONS_EVERY_<NAME> overrides)
     "recurring": 30, "reap": 30, "escalate": 60, "kb": 5, "librarian": 600, "models": 3600, "routing_validate": 3600,
     "discovery": 86400, "prune": 86400, "backup": 86400, "wake": 5, "a2a_push": 3, "reindex": 60, "tiers": 3600,
-    "quota_wake": 60, "schedules": 60, "release": 300, "events": 300,
+    "quota_wake": 60, "schedules": 60, "release": 300, "events": 300, "graphiti": 300,
 }
-LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex", "tiers", "quota_wake", "schedules", "release", "events")
+LIGHT = ("kb", "librarian", "reap", "wake", "a2a_push", "reindex", "tiers", "quota_wake", "schedules", "release", "events", "graphiti")
 
 
 def _every(name: str) -> float:
@@ -122,6 +122,15 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
         from .events import watch_github
         return watch_github(s) or None
     run("events", events)
+
+    def graphiti():  # mirror new memories into a Graphiti knowledge graph, when one is configured
+        from . import settings as _st
+        url = _st.get(s, "graphiti_url")
+        if not url:
+            return None
+        from .graphiti import push
+        return push(s, url)["sent"] or None
+    run("graphiti", graphiti)
 
     def schedules():  # take over scheduled runs an owner missed or can't deliver
         from . import settings as _st
