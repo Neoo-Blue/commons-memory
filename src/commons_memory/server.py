@@ -384,6 +384,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     register_v8(mcp, store, who)
     from .server_v81 import register_v81
     register_v81(mcp, store, who)
+    from .server_prompts import register_prompts
+    register_prompts(mcp, store, who)
     offload_sync_tools(mcp)
     from .toolargs import install as friendly_args
     friendly_args(mcp)

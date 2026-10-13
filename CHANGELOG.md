@@ -2,6 +2,25 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.19.0: MCP prompts and resources, skills in every AI, and hub approvals through the decision agent
+- **Slash commands and resources.** Commons' MCP server now offers prompts, which clients show as slash commands
+  (`checkin`, `start <task>`, `handover`, `wrapup`, `whats_new`, `remember <fact>`), and resources a client can attach
+  by reference: the playbook, the team view, a project's board, any memory by id.
+- **Skills appear natively in every AI.** The session-start hook delivers the pool's skill index and writes a pointer
+  for each active skill into each client's skills folder (`~/.claude/skills`, the cross-tool `~/.agents/skills`,
+  Antigravity's), refreshed every session, so a skill published once shows up everywhere. Your own skills are never
+  touched; retired ones are removed.
+- **start_work suggests skills**: relevant how-tos from the pool come back with the claim.
+- **MCP hub approvals through the decision agent.** A tool call that needs approval (destructive tools, or tools you
+  set to approve) is judged by your decision chain: sound calls run, bad ones are refused, and the rest go to you under
+  Needs you and on your phone; your yes approves that exact call. One question per call, however often the agent asks.
+- **Upstream MCP keys from the vault**: register a server with `commons://NAME` refs and the key never leaves the vault.
+- **For agents:**
+  - Run /checkin, /start, /handover and /wrapup (or the tools they name) instead of improvising the routine.
+  - Skills from the pool show up in your skills list; load the real content with skill_get.
+  - An MCP call that returns approval_required with a question_id is waiting for the user: repeat it with the
+    approval_id after the answer arrives in msg_recv.
+
 ## v0.18.0: the diagrams Archify had, and memory writes that can't half-happen
 - **Sequence diagrams**: `diagram sequence <job id>` shows how a job moved between agents (submit, assign, claim,
   result, review verdicts, messages); `diagram sequence <function>` shows its call path through the code index.

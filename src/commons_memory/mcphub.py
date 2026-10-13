@@ -423,14 +423,41 @@ class Hub:
             ok = approval_id and self.s.q("SELECT 1 FROM mcp_approvals WHERE id=? AND status='approved' AND server=? "
                                           "AND tool=? AND args_hash=?", (approval_id, srv_name, name, ahash))
             if not ok:
+                same = self.s.q("SELECT id FROM mcp_approvals WHERE status='pending' AND agent_id IS ? AND server=? AND "
+                                "tool=? AND args_hash=? ORDER BY created_at DESC LIMIT 1", (agent_id, srv_name, name, ahash))
+                if same:  # asked before: point at the waiting question
+                    log("approval_required")
+                    return {"status": "approval_required", "approval_id": same[0]["id"], "risk": risk,
+                            "hint": "already waiting for the user's answer (Needs you); repeat with approval_id after "
+                                    "the yes arrives in msg_recv"}
+                from .vault import _context, decide
+                state = (f"An AI agent named {self.s.label(agent_id)[1] if agent_id else 'unknown'} asks to run the "
+                         f"upstream MCP tool {srv_name}__{name} (classified {risk}) with these arguments: "
+                         f"{red_args[:1500]}\n\n{_context(self.s, agent_id) if agent_id else ''}")
+                d = decide(self.s, agent_id, state, "write", "high" if risk == "destructive" else "normal",
+                           f"mcp:{srv_name}__{name}")
                 aid = new_id("apr")
-                self.s.x("INSERT INTO mcp_approvals VALUES(?,?,?,?,?,?,?,?,NULL)",
-                         (aid, agent_id, srv_name, name, red_args[:2000], ahash, "pending", now()))
-                log("approval_required")
-                return {"status": "approval_required", "approval_id": aid, "risk": risk,
-                        "hint": "a human must approve this call (dashboard › MCP hub or `commons mcp approve`); "
-                                "then repeat mcp_call with approval_id"}
-            self.s.x("UPDATE mcp_approvals SET status='used' WHERE id=?", (approval_id,))
+                if d["verdict"] == "deny":
+                    log("denied")
+                    raise CommonsError(f"the decision agent refused {tool}: {d['reason']}")
+                if d["verdict"] == "allow":  # judged sound: proceed, recorded as an automatic approval
+                    self.s.x("INSERT INTO mcp_approvals VALUES(?,?,?,?,?,?,?,?,?)",
+                             (aid, agent_id, srv_name, name, red_args[:2000], ahash, "used", now(), now()))
+                    self.s.audit(agent_id, "mcp.approval.auto", aid, {"via": d.get("via"), "reason": d["reason"]})
+                else:
+                    self.s.x("INSERT INTO mcp_approvals VALUES(?,?,?,?,?,?,?,?,NULL)",
+                             (aid, agent_id, srv_name, name, red_args[:2000], ahash, "pending", now()))
+                    from . import board as B
+                    q = B.add(self.s, "question", f"[mcp {aid}] Allow {self.s.label(agent_id)[1] if agent_id else 'an agent'} "
+                                                  f"to run {srv_name}__{name}({red_args[:200]})? It is classified {risk}. "
+                                                  f"(Commons: {d['reason']}). Answer yes or no.",
+                              project="commons-dev", path="mcp", agent_id=agent_id)
+                    log("approval_required")
+                    return {"status": "approval_required", "approval_id": aid, "question_id": q["id"], "risk": risk,
+                            "hint": "the user has it under Needs you (and on their phone); repeat mcp_call with "
+                                    "approval_id after the yes arrives in msg_recv"}
+            else:
+                self.s.x("UPDATE mcp_approvals SET status='used' WHERE id=?", (approval_id,))
         # rate limit per agent+server
         recent = self.s.q("SELECT COUNT(*) c FROM mcp_calls WHERE server=? AND agent_id IS ? AND ts>? AND "
                           "status IN ('ok','error')", (srv_name, agent_id, now() - 60))[0]["c"]
@@ -661,3 +688,12 @@ def _err(e: BaseException) -> str:
     if hasattr(e, "exceptions") and e.exceptions:  # ExceptionGroup
         return _err(e.exceptions[0])
     return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+
+def answered(s: Store, question_text: str, answer: str) -> None:
+    """The user answered an MCP approval question on the board (or the phone)."""
+    import re as _re
+    m = _re.search(r"\[mcp (apr_[0-9a-f]+)\]", question_text or "")
+    if m:
+        yes = bool(_re.match(r"\s*(y|yes|ok|okay|approve|allow|sure|go)\b", answer or "", _re.I))
+        Hub(s).decide(m.group(1), yes)

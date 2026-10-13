@@ -180,7 +180,9 @@ class Capture:
         pid = self.s.project_id(project) if project else None
         skey = f"{harness}:{payload.get('session_id') or payload.get('conversation_id') or 'default'}"
         if event == "session_start":
-            return {"ok": True, "context": self.context(agent_id, project) if st["inject"] else ""}
+            from .skillsync import index
+            return {"ok": True, "context": self.context(agent_id, project) if st["inject"] else "",
+                    "skills": index(self.s)}  # the hook writes pointers so every pool skill shows up natively
         if event == "prompt":
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
             if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
@@ -478,6 +480,12 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         res = _post(url, harness, event, payload, timeout)
     else:
         res = _local(harness, event, payload, store_factory)
+    if res and event == "session_start" and isinstance(res.get("skills"), list):
+        try:
+            from .skillsync import write
+            write(res["skills"])
+        except Exception:  # noqa: BLE001 - never block a session over this
+            pass
     if res and res.get("block") and harness == "claude-code" and hevent == "Stop":
         return json.dumps({"decision": "block", "reason": res["block"]})  # Claude Code keeps going instead of stopping
     return output_for(harness, hevent, (res or {}).get("context", "")) if res else ""

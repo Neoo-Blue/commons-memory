@@ -136,6 +136,8 @@ def answer(s: Store, item_id: str, text: str, by: str = "user") -> dict:
                           mtype="message", subject="answer: " + r["text"][:60], meta={"board": item_id})
     from .vault import answered
     answered(s, r["text"], text)  # a credential request the decision agent passed to the user
+    from .mcphub import answered as mcp_answered
+    mcp_answered(s, r["text"], text)  # an upstream MCP tool call waiting for approval
     s.audit(None, "board.answer", item_id, {"by": by})
     return get(s, item_id)
 

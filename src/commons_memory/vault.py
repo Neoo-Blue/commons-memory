@@ -262,12 +262,19 @@ def _context(s: Store, agent_id: str) -> str:
 
 
 def judge(s: Store, agent_id: str, cred: dict, method: str, url: str, justification: str, body: str = "") -> dict:
-    """{verdict: allow|deny|ask_user, scope, scores, via, reason}."""
+    """{verdict: allow|deny|ask_user, scope, scores, via, reason} for one credential use."""
     scope = "read" if method in READ else "write"
     state = (f"An AI agent named {s.label(agent_id)[1]} asks to use the user's {cred['service']} credential "
              f"({cred['description'] or cred['name']}).\nRequested call: {method} {url}\n"
              + (f"Request body: {body[:1500]}\n" if body else "")
              + f"Agent's justification: {justification}\n\n{_context(s, agent_id)}")
+    return decide(s, agent_id, state, scope, cred["risk"], cred["name"])
+
+
+def decide(s: Store, agent_id: str, state: str, scope: str, risk: str = "normal", audit_ref: str = "") -> dict:
+    """The decision chain on any described action (credential use, an upstream MCP tool call): the first judge that
+    answers decides, risky writes go to the user, and the user is always the last stop."""
+    cred = {"name": audit_ref, "risk": risk}
     qs = QUESTIONS if scope == "write" else {"legit": QUESTIONS["legit"]}
     scores, via = None, None
     from . import settings, typesafe

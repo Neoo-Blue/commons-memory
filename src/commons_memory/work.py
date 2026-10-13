@@ -171,9 +171,16 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
     rel = related(s, what, project, paths)
     s.x("UPDATE work_claims SET related=? WHERE id=?", (json.dumps([r["id"] for r in rel]), cid))
     s.audit(agent_id, "work.start", cid, {"what": what[:200], "forced": bool(force)})
-    return {"ok": True, "claim_id": cid, "builds_on": ov["done"], "related": rel,
+    try:  # a reusable how-to for this kind of work, from the shared skill pool
+        from .skillpool import SkillPool
+        skills = [{"name": x.get("name"), "description": (x.get("description") or "")[:120]}
+                  for x in SkillPool(s).suggest(what, limit=3)]
+    except Exception:  # noqa: BLE001
+        skills = []
+    return {"ok": True, "claim_id": cid, "builds_on": ov["done"], "related": rel, "skills": skills,
             "do": "It's yours: others are warned off. `related` is what's connected to this work: if you change it, "
-                  "update those too. Call finish_work(claim_id, result) (or handoff) when done."}
+                  "update those too. `skills` are pool how-tos for this (skill_get). Call finish_work(claim_id, "
+                  "result) (or handoff) when done."}
 
 
 def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status: str = "done") -> dict:

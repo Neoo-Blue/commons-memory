@@ -109,3 +109,48 @@ def test_gateway_tools_inside_event_loop(store, monkeypatch):
         return str(s), str(c)
     s, c = asyncio.run(go())
     assert "up__get_weather" in s and "Rome: sunny" in c
+
+
+def test_destructive_calls_go_to_the_user_and_a_yes_lets_the_retry_run(hub, store, monkeypatch):
+    from commons_memory import board as B
+    from commons_memory import settings
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    settings.put(store, "judge_chain", ["ask"])
+    a = store.ensure_agent("cleaner")
+    r = hub.call("up__delete_everything", {"confirm": True}, a)
+    assert r["status"] == "approval_required" and r["question_id"]
+    q = B.get(store, r["question_id"])
+    assert q["status"] == "blocked" and "delete_everything" in q["text"]
+    again = hub.call("up__delete_everything", {"confirm": True}, a)
+    assert again["approval_id"] == r["approval_id"]                              # one question, not two
+    B.answer(store, r["question_id"], "yes, wipe it")
+    ok = hub.call("up__delete_everything", {"confirm": True}, a, approval_id=r["approval_id"])
+    assert ok["status"] == "ok"
+    assert hub.call("up__delete_everything", {"confirm": True}, a, approval_id=r["approval_id"])["status"] == "approval_required"
+
+
+def test_a_sound_call_the_judge_allows_runs_without_waiting(hub, store, monkeypatch):
+    from commons_memory import settings
+    from commons_memory import typesafe
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts")
+    monkeypatch.setattr(typesafe, "noul", lambda state, qs, timeout=20, key=None: {"legit": 0.95, "destructive": 0.05,
+                                                                                    "user_backed": 0.9})
+    settings.put(store, "judge_chain", ["typesafe", "ask"])
+    hub.set_policy("approve", "up", "create_note")                               # the user wants these checked
+    a = store.ensure_agent("writer")
+    r = hub.call("up__create_note", {"text": "standup notes"}, a)
+    assert r["status"] == "ok"
+    assert store.q("SELECT status FROM mcp_approvals WHERE tool='create_note'")[0]["status"] == "used"
+
+
+def test_upstream_server_key_can_come_from_the_vault(store, monkeypatch):
+    import base64
+    import os as _os
+    from commons_memory import vault as V
+    monkeypatch.setenv("COMMONS_VAULT_KEY", base64.b64encode(_os.urandom(32)).decode())
+    V.add(store, "up_token", "tok_vault_456", "upstream", ["http://127.0.0.1/"], {"bearer": True})
+    h = Hub(store)
+    h.add("up2", command=sys.executable, args=[UP], env_refs={"UPSTREAM_TOKEN": "commons://up_token"})
+    r = h.call("up2__get_weather", {"city": "Bergen"}, store.ensure_agent("reader"))
+    assert r["status"] == "ok" and "Bergen" in r["result"]
+    assert "tok_vault_456" not in json.dumps(h.calls()) and "tok_vault_456" not in json.dumps(h.servers())
