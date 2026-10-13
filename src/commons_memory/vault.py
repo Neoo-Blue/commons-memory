@@ -447,6 +447,14 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
     d = ({"verdict": "allow", "scope": g["scope"], "scores": {}, "via": "grant", "reason": f"within grant {g['id']}"}
          if g else judge(s, agent_id, cred, method, url, justification, body))
     did, qid = new_id("vdc"), None
+    if d["verdict"] == "ask_user":  # the same request again: point at the question already waiting, don't add another
+        same = s.q("SELECT d.id, d.question_id FROM vault_decisions d JOIN board b ON b.id=d.question_id WHERE "
+                   "d.agent_id=? AND d.cred=? AND d.method=? AND d.url=? AND b.status IN ('open','doing','blocked') "
+                   "ORDER BY d.ts DESC LIMIT 1", (agent_id, credential, method, url[:1000]))
+        if same:
+            return {"verdict": "waiting_for_user", "decision_id": same[0]["id"], "question_id": same[0]["question_id"],
+                    "reason": "this exact request is already waiting for the user's answer",
+                    "do": "The user has it under Needs you; the answer arrives in msg_recv. Don't ask again."}
     if d["verdict"] == "ask_user":
         from . import board as B
         qid = B.add(s, "question", f"[vault {did}] Allow {s.label(agent_id)[1]} to {method} {url[:200]} with your "

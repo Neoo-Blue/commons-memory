@@ -243,3 +243,15 @@ def test_vault_generates_and_keeps_account_logins(store, svc, monkeypatch):
     V.add(store, "apikey", "secret-api-key-1", "svc", [base], {"bearer": True})
     with pytest.raises(CommonsError, match="never shown"):
         V.reveal(store, a, "apikey", "I need the raw API key for a script")
+
+
+def test_a_repeated_write_request_reuses_the_waiting_question(store, svc, monkeypatch):
+    from commons_memory import settings
+    base, _ = svc
+    V.add(store, "sonarr", SECRET, "sonarr", [base], {"header": "X-Api-Key"})
+    settings.put(store, "judge_chain", ["ask"])
+    a = store.ensure_agent("muse")
+    r1 = V.use(store, a, "sonarr", "POST", base + "/api/v3/series", "add Stargate Universe as the user asked")
+    r2 = V.use(store, a, "sonarr", "POST", base + "/api/v3/series", "user confirmed in chat: add Stargate Universe")
+    assert r1["question_id"] == r2["question_id"]
+    assert len(store.q("SELECT 1 FROM board WHERE kind='question' AND status='blocked'")) == 1

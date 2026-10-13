@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.17.1: one question per request
+- An agent asking again for the same credential write points at the question already waiting under Needs you instead
+  of adding another one.
+
 ## v0.17.0: outside events become work, and 17 AI clients set up in one command
 - **GitHub watcher.** List repos on Setup: a failed CI run, a new issue or a new PR becomes a job for the best live
   agent. It pulls through the vault's GitHub key, so it works behind NAT with nothing exposed, and its first look at a
