@@ -212,6 +212,8 @@ def _v5(db):
     quota_migrate(db)
     from .schedules import migrate as schedules_migrate
     schedules_migrate(db)
+    from .work import migrate as work_migrate
+    work_migrate(db)
 
 
 _v4e_migrate = migrate

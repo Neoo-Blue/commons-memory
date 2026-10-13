@@ -6,6 +6,12 @@ All notable changes, newest first. The README describes the current release only
 - **Every message is memory.** Capture hooks store each user message and each agent reply word for word (searchable,
   with `search(context=N)` returning the turns around a hit), and distilled decisions/todos come on top instead of
   replacing them. Count-only "Session: N prompt(s)" summaries are gone.
+- **No duplicate work.** `start_work` checks a task against what other agents are doing now (work claims, claimed
+  subtasks, overlapping paths) and what was finished in the last 30 days; busy means don't start, done means build on
+  it. `finish_work` or `handoff` closes the claim with its result. Prompt hooks and `turn` run the same check on every
+  user message and warn the agent without being asked.
+- **Agents know the routine without being told.** Commons hands each agent its playbook on the first `pickup`/`turn`
+  and again whenever it changes.
 - **`turn` hook for chat apps** with no hook API (claude.ai, Grok, ChatGPT connectors): one call per turn stores the
   exchange verbatim and returns the relevant memory before the agent answers.
 - **Quota-aware distribution.** Agents report their 5-hour and weekly windows (`quota_report`, or `commons quota sync`
@@ -24,6 +30,8 @@ All notable changes, newest first. The README describes the current release only
   holds up; your answer goes straight to the asking agent's inbox.
 - **Keep-working Stop hook** (opt-in, `COMMONS_HOOK_KEEP_WORKING=1`): Claude Code keeps going while Commons has tasks
   for it and quota allows, bounded per session.
+- **v0.9.3 merged:** wake prompts typed into a terminal (tmux/PTY) now carry only event types and sender names,
+  never message text (any agent with a key could otherwise inject instructions into the user's session).
 - **Fixes:** imports no longer accept blank memories (every writer now refuses empty content; `text` works as an alias
   for `content`); agents can `forget` memories they wrote; relayed subagent reports are no longer captured as
   user prompts; task packets kept the related memory (it was overwritten).

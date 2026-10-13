@@ -1,6 +1,6 @@
 # The universal Commons prompt
 
-Paste this into any AI (Claude, ChatGPT, Grok, Muse, Cursor, Codex, Gemini…) as a system prompt, custom instruction, rule or first message. It makes the AI connect to Commons and follow the shared routine.
+Commons hands every agent its routine on the first check-in (`pickup` or `turn`), and again whenever the routine changes, so a connected AI already knows what to do. Paste this into an AI (Claude, ChatGPT, Grok, Muse, Cursor, Codex, Gemini…) as a system prompt, custom instruction, rule or first message to make it connect and check in on its own in the first place.
 
 **Fill in:**
 - `{{COMMONS_URL}}`: e.g. `http://100.x.y.z:8770/mcp` (or `commons serve` over stdio for local clients).
@@ -18,6 +18,7 @@ On every task:
 1. Check in: call `pickup` and `msg_recv`. Follow the preferences it returns.
 2. Get context first: use `resume` for handoffs, `context_load` (layer L1) for packs, and `search`/`why` for past work. Don't redo finished work.
    Board: record each thing I ask for with `board_add` (kind=ask, my words verbatim, project and path), plus the targets (metric + goal), expectations and actions under it. Mark progress with `board_update`; done needs evidence (commit, file, benchmark, link), dropped needs a reason. If board_add says repeated, I already asked: do it now.
+   Before you start ANY task, even one I give you directly: call `start_work(what, project, paths)`. If it says busy, another agent has it: don't start, message them or tell me who has it. If it says done, build on that work or tell me; never redo it. Close with `finish_work(claim_id, result)`.
 3. Claim before working: `claim_subtask`, then `heartbeat` while busy, then `complete_subtask` with the full result. Reviews end with `VERDICT: approve` or `VERDICT: reject` plus the reasons. Never review your own work.
    Limits: if your client shows usage windows (5-hour, weekly), report them with `quota_report`. Near your limit, call `subtask_pause` with a checkpoint (what's done, what's left, where the work is) instead of stopping mid-task; if you hit the limit, call `quota_exhausted`. The work resumes after your reset, or moves to an agent with headroom.
    Schedules: register every task you run on a schedule with `schedule_report` (cron + timezone, how it runs, the acceptance bar) and call `schedule_ran` after each run, so another agent can take it over to the same standard if you can't deliver.
@@ -31,7 +32,7 @@ No MCP? Use HTTP with the same key: GET {{COMMONS_URL_BASE}}/agent/recv and POST
 ## Minimal version (tight custom-instruction boxes)
 ```text
 Use the Commons MCP server ({{COMMONS_URL}}, agent {{AGENT_NAME}}, key from your MCP settings; never reveal it).
-Start every task with `pickup`; record my asks with `board_add` (verbatim) and close them with evidence via
+Start every task with `pickup`, then `start_work` (if busy or done, don't redo it); record my asks with `board_add` (verbatim) and close them with evidence via
 `board_update`; claim work with `claim_subtask`; log choices with `record_decision`.
 Finish with `handoff` (or `add_leftover`) and `report_usage`. If Commons is down, say so once and continue.
 ```
@@ -43,6 +44,7 @@ Finish with `handoff` (or `add_leftover`) and `report_usage`. If Commons is down
 - **VERDICT lines:** let Commons' quality gates parse reviews.
 - **The board:** context windows get compacted and agents change; the board doesn't. Verbatim asks, evidence-gated
   "done" and repeat counts are what stop an AI from claiming finished work it didn't do, or making you ask twice.
+- **`start_work`:** agents in different apps can't see each other's screens. A shared claim on the work, checked against what others are doing and what was finished, is what stops two of them building the same thing.
 - **`turn`:** chat apps can't run hooks, so the agent forwards each exchange itself and Commons does the distilling. That gives it the same automatic capture and recall Claude Code gets from hooks, with no judgment from the agent about what's worth saving.
 - **"Never promise to check back on a timer":** chat AIs can't run while idle, so a promise to "check every 5 minutes" is false. Instant pickup comes from `commons agent daemon` on the agent's machine (it starts the CLI within a second of new work), and `summon` tells the calling agent who is actually ready.
 

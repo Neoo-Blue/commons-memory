@@ -180,7 +180,14 @@ class Capture:
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
             if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
                 return {"ok": True, "context": ""}
-            ctx = self.recall(text, project, skey=skey) if st["inject"] else ""  # before storing, or it finds itself
+            ctx = ""
+            if st["inject"]:  # before storing, or it finds itself
+                from . import work as W
+                try:
+                    ctx = W.warning(self.s, agent_id, text, project)
+                except Exception:  # noqa: BLE001 - a failed check must not block the prompt
+                    ctx = ""
+                ctx += self.recall(text, project, skey=skey)
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
                 self.verbatim(agent_id, project, skey, harness, "user", text)

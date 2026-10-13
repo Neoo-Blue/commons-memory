@@ -258,3 +258,33 @@ def test_review_fixes_hooks_forget_drive_keepwork(store, tmp_path, monkeypatch):
     assert cap.event(w, "stop", stop, harness="claude-code").get("block")
     assert not cap.event(w, "stop", stop, harness="claude-code").get("block")
     assert not cap.event(w, "stop", stop, harness="claude-code").get("block")   # still spent, not a fresh 2 rounds
+
+
+def test_no_two_agents_do_the_same_work_and_finished_work_isnt_redone(store):
+    from commons_memory import work as W
+    from commons_memory.capture import Capture
+    a, b = store.ensure_agent("alpha"), store.ensure_agent("beta")
+    r = W.start(store, a, "Build the instant wake daemon for CLI agents", project="hub", paths=["src/wake.py"])
+    assert r["ok"]
+    clash = W.start(store, b, "instant wake daemon for the CLI agents", project="hub")
+    assert not clash["ok"] and clash["busy"][0]["agent"] == "alpha"              # same task, other words
+    assert not W.start(store, b, "Refactor logging", project="hub", paths=["src/wake.py"])["ok"]   # same file
+    assert W.start(store, b, "Write the pricing page copy", project="site")["ok"]  # unrelated work goes ahead
+    warn = Capture(store).event(b, "prompt", {"session_id": "w1", "project": "hub",
+                                              "prompt": "please build an instant wake daemon for CLI agents"},
+                                harness="claude-code")["context"]
+    assert "BUSY: alpha" in warn                                                   # hooks warn without being asked
+    W.finish(store, a, r["claim_id"], "wakeclient.py, 8 tests, released v0.9.3")
+    again = W.start(store, b, "instant wake daemon for CLI agents", project="hub")
+    assert not again["ok"] and "v0.9.3" in again["done"][0]["result"]            # done before: build on it
+    assert W.start(store, b, "instant wake daemon for CLI agents", project="hub", force=True,
+                   reason="add Windows support")["ok"]
+    assert [x["agent"] for x in W.active(store, "hub")] == ["beta"]
+
+
+def test_every_agent_gets_the_playbook_once_without_being_told(store):
+    from commons_memory.server import INSTRUCTIONS, playbook_once
+    a = store.ensure_agent("newbie")
+    first = playbook_once(store, a)
+    assert "start_work" in first and INSTRUCTIONS in first
+    assert playbook_once(store, a) == ""                                           # not on every call

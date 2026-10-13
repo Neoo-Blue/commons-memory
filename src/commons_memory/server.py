@@ -21,21 +21,41 @@ from .ids import now
 from .secrets import Broker
 from .store import CommonsError, Store
 
-INSTRUCTIONS = """Commons is a shared memory hub used by many AIs. Workflow:
+INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user's AIs. Follow this routine on your own:
 0) Chat app with no hooks (claude.ai, Grok, ChatGPT)? Call turn(user_message, reply=<your previous reply>) at the
-   start of EVERY turn: it saves the exchange automatically and returns what Commons knows; read it before you answer.
-   pickup() and msg_recv() to check in. Your client lists the core tools; tools(query) searches the other ~130 and
-   call(tool, args) runs any of them (find, tree, skill_get, submit_task, fs_read, ...).
-1) search(query) first — results are compact one-line summaries with ids; expand(id) only what you need.
-2) remember() durable facts/notes; record_decision() for choices (what/why/alternatives).
-3) claim_subtask → heartbeat → complete_subtask for assigned work; handoff() before you stop so another AI can resume().
-   board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence; check
-   board() before you stop: it survives context compaction, your memory of the conversation doesn't.
-   Near a usage limit: subtask_pause(checkpoint) or quota_exhausted(), never abandon work; quota_report your windows.
-   Register your own scheduled tasks with schedule_report and report each run with schedule_ran.
-   Need a decision only the user can make? board_add(kind=question): it waits under "Needs you" and the answer
-   arrives in msg_recv.
-4) Never write secret values; reference them as env://NAME, vault://path#key, op://vault/item/field."""
+   start of EVERY turn: it stores the exchange word for word and returns what Commons already knows.
+1) Check in: pickup() and msg_recv(). Follow the preferences they return.
+2) Before answering from scratch or saying you don't know: search(query) (one-line hits; expand(id) for detail),
+   why(topic) for past decisions, resume() for handoffs. Don't redo finished work.
+3) Before starting ANY task, including one the user gives you directly: start_work(what, project, paths).
+   busy = another agent has it: don't start; msg_send them or tell the user who has it.
+   done = it was done before: build on it or tell the user; never redo it. finish_work(claim_id, result) when done.
+4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result. Reviews end with
+   "VERDICT: approve" or "VERDICT: reject" and the reasons. Never review your own work.
+5) board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence.
+   A decision only the user can make: board_add(kind=question); the answer arrives in msg_recv.
+   remember() durable facts, record_decision(what, why), observe_preference() when the user corrects you.
+6) Limits: quota_report your usage windows; near a limit subtask_pause(checkpoint) or quota_exhausted(), never
+   abandon work. Scheduled tasks: schedule_report them and schedule_ran after every run.
+7) Other agents: summon() wakes them and says who is ready. Never promise to check back on a timer.
+8) Before you stop: board() for anything still open, then handoff(summary, next_steps), then report_usage().
+Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
+Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them."""
+
+
+def playbook_once(store, agent_id: str | None) -> str:
+    """The routine above, handed to each agent on its first check-in and again whenever it changes, so nobody has
+    to paste a prompt into every AI. Returns "" once the agent has seen this version."""
+    if not agent_id:
+        return ""
+    import hashlib
+    ver = hashlib.sha1(INSTRUCTIONS.encode()).hexdigest()[:10]
+    key = f"playbook:{agent_id}"
+    seen = store.q("SELECT value FROM meta WHERE key=?", (key,))
+    if seen and seen[0]["value"] == ver:
+        return ""
+    store.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, ver))
+    return "COMMONS PLAYBOOK (new or updated; follow it every session without being asked):\n" + INSTRUCTIONS + "\n\n"
 
 
 def _fmt(obj: Any, fmt: str = "text") -> str:
@@ -204,9 +224,13 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         aid, _ = who(agent, api_key)
         if not session_id:
             session_id = store.session_for(aid, project or None, goal or summary)
-        return _fmt(store.handoff(session_id, summary=summary, state=state, decisions=decisions, next_steps=next_steps,
-                                  open_questions=open_questions, relevant_ids=relevant_ids, to_agent=to_agent or None,
-                                  agent_id=aid, goal=goal or None), "json")
+        res = store.handoff(session_id, summary=summary, state=state, decisions=decisions, next_steps=next_steps,
+                            open_questions=open_questions, relevant_ids=relevant_ids, to_agent=to_agent or None,
+                            agent_id=aid, goal=goal or None)
+        if aid:  # handing off ends your claims on the work; the summary is what the next agent sees
+            from . import work as W
+            W.finish(store, aid, result=summary)
+        return _fmt(res, "json")
 
     @mcp.tool()
     def resume(session_id: str = "", project: str = "", max_tokens: int = 1200, agent: str = "", api_key: str = "") -> str:

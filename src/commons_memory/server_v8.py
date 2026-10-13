@@ -60,7 +60,9 @@ def register_v8(mcp, store, who):
             out["context"] = r.get("context") or "Nothing in Commons matches this message."
         if not out:
             raise CommonsError("pass user_message (before you answer) and/or reply (your previous answer)")
-        return _js(out)
+        from .server import playbook_once
+        pb = playbook_once(store, aid)
+        return _js(({"playbook": pb} if pb else {}) | out)
 
     @mcp.tool()
     def capture_settings(project: str, enabled: str = "", tools: str = "", prompts: str = "", inject: str = "",
@@ -193,6 +195,30 @@ def register_v8(mcp, store, who):
         if len(items) > 500:
             raise CommonsError("import_items takes at most 500 items per call")
         return _js(_imp(store, items, agent_id=aid))
+
+    @mcp.tool()
+    def start_work(what: str, project: str = "", paths: list[str] | None = None, force: bool = False, reason: str = "",
+                   agent: str = "", api_key: str = "") -> str:
+        """Call before starting ANY task, including ones the user gives you directly. Commons checks it against what
+        other agents are doing now and what was finished in the last 30 days. ok=false + busy: someone has it, so don't
+        start (coordinate with msg_send, or tell the user who has it). ok=false + done: read that work and build on
+        it; force=true + reason only for a real follow-up. ok=true: it's yours until finish_work or handoff.
+        paths: files/dirs/resources you'll change (overlap on a path counts as the same work)."""
+        from . import work as W
+        return _js(W.start(store, me(agent, api_key), what, project or None, paths, force, reason))
+
+    @mcp.tool()
+    def finish_work(claim_id: str = "", result: str = "", status: str = "done", agent: str = "", api_key: str = "") -> str:
+        """Close your work claim (all of your open ones when claim_id is empty) with the result: what changed, where,
+        and how it was verified. status: done | dropped. This is what the next agent is shown, so be specific."""
+        from . import work as W
+        return _js(W.finish(store, me(agent, api_key), claim_id, result, status))
+
+    @mcp.tool()
+    def working_now(project: str = "") -> str:
+        """Every agent's open work claims (who is doing what, since when, which paths)."""
+        from . import work as W
+        return _js(W.active(store, project or None))
 
     @mcp.tool()
     def forget(id: str, agent: str = "", api_key: str = "") -> str:

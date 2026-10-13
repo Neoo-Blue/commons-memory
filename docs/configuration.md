@@ -36,7 +36,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_DRIVE_DIR` | — | Local Drive directory (default `~/.commons/drive`) | drive.py |
 | `COMMONS_DRIVE_MAX_FILE_MB` | `25` | Largest single Drive file in MB | drive.py |
 | `COMMONS_DRIVE_QUOTA_MB` | `1024` | Total Drive quota in MB | drive.py |
-| `COMMONS_DUP_SIM` | `0.86` | Similarity above which a new leftover is merged into an existing one | orchestrator.py |
+| `COMMONS_DUP_SIM` | `0.86` | Similarity (0-1) at which start_work and the prompt hooks treat two tasks as the same work (default 0.8) | orchestrator.py, work.py |
 | `COMMONS_EMBEDDER` | `auto` | Embeddings: `auto` (fastembed if installed, else openai if COMMONS_EMBED_URL, else hash), `fastembed[:model]`, `openai[:model]`, `hash`, `none` | embed.py |
 | `COMMONS_EMBED_KEY_REF` | — | Secret reference for the embeddings endpoint key | embed.py |
 | `COMMONS_EMBED_MODEL` | `text-embedding-3-small` | Embedding model (fastembed default BAAI/bge-small-en-v1.5; openai default text-embedding-3-small) | embed.py |
@@ -132,3 +132,4 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_WAKE_PUSH_WHEN_LIVE` | `0` | Also push wakes to agents already connected live (`1`) | messaging.py |
 | `COMMONS_WAKE_SYNC` | — | Deliver wakes synchronously (tests/debugging) | messaging.py |
 | `COMMONS_WEBHOOK_ALLOWLIST` | — | Hosts allowed for webhooks/A2A push even if private or non-https (`*.example.com` ok) | messaging.py |
+| `COMMONS_WORK_STALE` | `7200` | Seconds of agent silence after which its open work claim no longer blocks others (default 7200) | work.py |

@@ -865,7 +865,7 @@ def wake_events_since(s: Store, agent_id: str, since: str | None = None, limit: 
     if not r:
         return []
     rows = s.q("SELECT id, payload, created_at FROM wake_events WHERE agent_id=? AND created_at>=? AND id<>? "
-               "ORDER BY created_at, rowid LIMIT ?", (agent_id, r[0]["created_at"], since, limit))
+               "ORDER BY created_at, id LIMIT ?", (agent_id, r[0]["created_at"], since, limit))
     out = []
     for x in rows:
         try:

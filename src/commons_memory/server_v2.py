@@ -108,7 +108,9 @@ def register_v2(mcp, store, who):
     @mcp.tool()
     def pickup(project: str = "", max_tokens: int = 900, agent: str = "", api_key: str = "") -> str:
         """Start-of-session check-in: ready subtasks, inbox, leftovers ranked by your expertise, plus user preferences."""
-        return orch.pickup(me(agent, api_key, write=False), project or None, max_tokens)["text"]
+        from .server import playbook_once
+        aid = me(agent, api_key, write=False)
+        return playbook_once(store, aid) + orch.pickup(aid, project or None, max_tokens)["text"]
 
     @mcp.tool()
     def add_leftover(text: str, task_type: str = "general", priority: int = 1, project: str = "", source_id: str = "",
