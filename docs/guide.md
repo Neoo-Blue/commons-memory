@@ -61,7 +61,7 @@ loop: **check in** (`pickup`, `resume`) → **pull context** (`search`/`expand`/
 | `debate` | N debaters (distinct agents) → judge | judge's synthesis is stored as a decision |
 | `consensus` | N voters → automatic tally | majority of `VERDICT: approve` |
 | `parallel` | plan → parts (each gated by review) → merge/summary | each part |
-| explicit / LLM | `dag=[{key,type,deps,gates}]` or `pattern="llm"` with `COMMONS_PLANNER_CMD` | as declared |
+| explicit / LLM | `dag=[{key,type,deps,gates,agent}]` (agent pins a node, retries included) or `pattern="llm"` with `COMMONS_PLANNER_CMD` | as declared |
 
 - **Allocation**: expertise × learned success rate (Beta-smoothed per agent and task type) − load − cost + speed;
   availability and `max_concurrent` respected; siblings in debates and votes spread across agents.

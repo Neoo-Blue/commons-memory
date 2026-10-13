@@ -37,7 +37,8 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
    done = it was done before: build on it or tell the user; never redo it. finish_work(claim_id, result) when done.
    Both list what's connected to the work (memories, docs, decisions): update whatever your change made outdated.
 4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result. Reviews end with
-   "VERDICT: approve" or "VERDICT: reject" and the reasons. Never review your own work.
+   "VERDICT: approve" or "VERDICT: reject" and the reasons; a reject is still success=true (success=false
+   means you couldn't do the work). Never review your own work.
 5) board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence.
    A decision only the user can make: board_add(kind=question); the answer arrives in msg_recv.
    remember() durable facts, record_decision(what, why), observe_preference() when the user corrects you.

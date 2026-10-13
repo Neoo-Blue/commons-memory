@@ -194,7 +194,7 @@ def register_v8(mcp, store, who):
     @mcp.tool()
     def start_work(what: str, project: str = "", paths: list[str] | None = None, force: bool = False, reason: str = "",
                    agent: str = "", api_key: str = "") -> str:
-        """Before ANY task: checks it against other agents' live and recently finished work. ok=false + busy: someone has it, don't start. ok=false + done: build on it (force=true + reason only for a real follow-up). ok=true: yours until finish_work or handoff; `related` lists connected memories to update. paths: files or resources you'll change."""
+        """Before ANY task: checks it against other agents' live and recently finished work. Branch on status: busy = someone has it, don't start; done = build on it (force=true + reason only for a real follow-up). ok = yours until finish_work or handoff; `related` lists connected memories to update. paths: files or resources you'll change."""
         from . import work as W
         return _js(W.start(store, me(agent, api_key), what, project or None, paths, force, reason))
 

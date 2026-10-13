@@ -226,6 +226,13 @@ class Orchestrator:
                             "title": f"Leftover: {lo['text'][:100]}", "body": lo["text"], "deps": [],
                             "priority": lo.get("priority", 1), "leftover_id": lo["id"]})
         keys = {d["key"] for d in dag}
+        pins = {}
+        for d in dag:
+            if d.get("agent"):  # the submitter chose who does this node: no routing, and retries stay with them
+                a = self.s.get_agent(d["agent"])
+                if not a:
+                    raise CommonsError(f"subtask {d['key']}: unknown agent {d['agent']}")
+                pins[d["key"]] = a["id"]
         for d in dag:
             for k in d.get("deps", []) + d.get("gates", []):
                 if k not in keys:
@@ -262,6 +269,10 @@ class Orchestrator:
                       ids[gate_of[d["key"]]] if d["key"] in gate_of else None, "pending", d.get("priority", 0),
                       _j(d.get("budget", per)), d.get("max_attempts", 3), now(), now()))
             self.s.relate(ids[d["key"]], jid, "part_of")
+            if d["key"] in pins:
+                self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (pins[d["key"]], ids[d["key"]]))
+                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{ids[d['key']]}", pins[d["key"]]))
+                self.s.relate(ids[d["key"]], pins[d["key"]], "assigned_to")
             if d.get("leftover_id"):
                 self.s.x("UPDATE leftovers SET status='carried', carried_to=?, updated_at=? WHERE id=?",
                          (ids[d["key"]], now(), d["leftover_id"]))
@@ -574,16 +585,21 @@ class Orchestrator:
             raise CommonsError("not your active claim")
         return {"subtask_id": subtask_id, "lease_expires": iso(now() + lease_seconds)}
 
+    def _pin(self, subtask_id: str) -> str | None:
+        r = self.s.q("SELECT value FROM meta WHERE key=?", (f"pin:{subtask_id}",))
+        return r[0]["value"] if r else None
+
     def reap(self) -> list[str]:
         """Expired leases: retry (exclude the agent that timed out and reassign) or fail after max_attempts."""
         out = []
         for st in self.s.q("SELECT * FROM subtasks WHERE status='claimed' AND lease_expires<?", (now(),)):
-            excl = json.loads(st["excluded_agents"] or "[]") + [st["claimed_by"]]
+            pin = self._pin(st["id"])
+            excl = json.loads(st["excluded_agents"] or "[]") + ([] if pin else [st["claimed_by"]])
             with self.s.lock:  # only reap if it is still the same expired claim (no heartbeat/complete in between)
                 won = self.s.db.execute(
-                    "UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=NULL, excluded_agents=?, updated_at=? "
+                    "UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=?, excluded_agents=?, updated_at=? "
                     "WHERE id=? AND status='claimed' AND claimed_by=? AND lease_expires<?",
-                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", _j(excl), now(), st["id"],
+                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", pin, _j(excl), now(), st["id"],
                      st["claimed_by"], now())).rowcount == 1
             if not won:
                 continue
@@ -631,11 +647,12 @@ class Orchestrator:
                                     "claimed_by=? AND status='claimed'", ("awaiting_gate" if gates else "done", result, v,
                                                                           now(), subtask_id, agent_id)).rowcount
         else:  # out of attempts: straight to failed (_fail below also fails the job), else back in the queue
-            won = self.s.db.execute("UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=NULL, result=?, "
+            pin = self._pin(subtask_id)  # pinned work is retried by the agent the submitter chose, never moved
+            won = self.s.db.execute("UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=?, result=?, "
                                     "excluded_agents=?, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
-                                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", result,
-                                     _j(json.loads(st["excluded_agents"] or "[]") + [agent_id]), now(), subtask_id,
-                                     agent_id)).rowcount
+                                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", pin, result,
+                                     _j(json.loads(st["excluded_agents"] or "[]") + ([] if pin else [agent_id])),
+                                     now(), subtask_id, agent_id)).rowcount
         if won != 1:
             raise CommonsError("subtask claim expired or was reassigned before completion")
         snap = self.s.q("SELECT value FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))

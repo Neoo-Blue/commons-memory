@@ -59,7 +59,7 @@ def register_v2(mcp, store, who):
                     api_key: str = "") -> str:
         """Submit a task for multi-agent execution. pattern: auto|plan_execute_verify|cross_review|debate|consensus|
         parallel (bullet list => parallel parts each gated by review). Or pass an explicit dag:
-        [{key,type,title,body,deps:[keys],gates:[keys]}]. budget: {tokens, cost, seconds} caps the whole job.
+        [{key,type,title,body,deps:[keys],gates:[keys],agent}] (agent pins a node to that agent, retries included). budget: {tokens, cost, seconds} caps the whole job.
         context_pack: a pack id from context_save — subtasks get its L1 as a cache-friendly prefix instead of re-sent text."""
         return _js(orch.submit(task, pattern=pattern, project=project or None, agent_id=me(agent, api_key), n=n,
                                budget=budget, dag=dag, context_pack=context_pack or None,
@@ -91,7 +91,8 @@ def register_v2(mcp, store, who):
                          model: str = "", leftovers: list[str] | None = None, preferences: list[str] | None = None,
                          agent: str = "", api_key: str = "") -> str:
         """Finish a claimed subtask. Gate tasks need verdict approve|reject (or a 'VERDICT:' line in result).
-        leftovers: unfinished items to carry forward. preferences: user preferences you learned. success=false retries."""
+        leftovers: unfinished items to carry forward. preferences: user preferences you learned. success=false only when you
+        could not do the work (it is retried); a review or test that finds problems is success=true with the findings."""
         return _js(orch.complete(subtask_id, me(agent, api_key), result, verdict=verdict or None, tokens=tokens,
                                  tokens_in=tokens_in, cost=cost, model=model or None, leftovers=leftovers,
                                  preferences=preferences, success=success))

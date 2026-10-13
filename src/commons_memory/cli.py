@@ -152,7 +152,7 @@ def _main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("worker", help="poll for subtasks and execute them with a CLI agent")
     w.add_argument("--agent", required=True)
     w.add_argument("--cmd", dest="worker_cmd", help="shell command; prompt on stdin and in {prompt_file}")
-    w.add_argument("--preset", help="claude|codex|cursor|gemini|echo")
+    w.add_argument("--preset", help="claude|codex|cursor|gemini|grok|echo")
     w.add_argument("--model", default=None, help="model name for cost estimates")
     w.add_argument("--url", help="remote hub MCP url (http://host:8765/mcp); default: local DB")
     w.add_argument("--api-key", default=os.environ.get("COMMONS_API_KEY"))

@@ -275,7 +275,8 @@ class Store:
         meta_s, f5 = redact(_j(meta or {}))
         found = sorted(set(f1 + f2 + f3 + f4 + f5))
         if not summary:
-            first = (title + ": " if title else "") + " ".join(content.split())
+            body = " ".join(content.split())
+            first = (title + ": " if title and not body.lower().startswith(title.lower()) else "") + body
             summary = first[:160] + ("…" if len(first) > 160 else "")
         if not title:
             title = " ".join(content.split())[:80]

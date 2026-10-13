@@ -42,8 +42,12 @@ def ask(s: Store, requester: str, name: str, task: str, why: str = "") -> dict:
         raise CommonsError("say what you need done with the skill (task)")
     hs = helpers(s, name, requester)
     if not hs:
-        raise CommonsError(f"no agent has used or declared skill {name!r} yet: post the work with msg_send(type='task') "
-                           "so the best live agent takes it, or ask the user")
+        from .skillpool import SkillPool
+        near = [x["name"] for x in SkillPool(s).list(f"{name.replace('-', ' ')} {task}", max_tokens=200)["skills"][:3]]
+        raise CommonsError(f"no agent has used or declared skill {name!r} yet. "
+                           + (f"Similar skills in the pool: {', '.join(near)} (load one with skill(name=...)). " if near else "")
+                           + "If the task itself still needs doing, post it with msg_send(type='task') so the best live "
+                             "agent takes it, or ask the user")
     from .orchestrator import Orchestrator
     in_pool = bool(s.q("SELECT 1 FROM skills WHERE name=? AND active_version IS NOT NULL", (name,)))
     body = (f"{s.label(requester)[1]} asks for help with the skill '{name}'"

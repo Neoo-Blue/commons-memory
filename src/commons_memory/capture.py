@@ -356,19 +356,31 @@ class Capture:
         if len((prompt or "").split()) < 3:
             return ""
         rep = self._repeated_ask(prompt, project)
-        ids, _, why = self.s.rank(prompt, project=project, limit=8)
-        if ids is None:  # project not created yet
-            return rep
-        if skey and ids:  # this conversation's own turns are already in the agent's context
-            ph = ",".join("?" * len(ids))
-            mine = {r["id"] for r in self.s.q(f"SELECT id FROM items WHERE id IN ({ph}) AND session_id=?", (*ids, skey))}
-            ids = [i for i in ids if i not in mine]
-        good = [i for i in ids if why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_HOOK_RECALL_SIM", "0.6"))
-                or (why.get(i, {}).get("bm25_rank", 99) <= 2 and why.get(i, {}).get("vec_rank", 99) <= 3)]
+        good = self._recall_ids(prompt, project, skey)
+        if project and len(good) < 3:  # a homelab question asked inside a code project still deserves the answer
+            good += [i for i in self._recall_ids(prompt, None, skey) if i not in good]
         if not good:
             return rep
         r = self.s._budgeted(good[:3], max_tokens, total=len(good))
         return rep + "Possibly relevant Commons memory:\n" + r["text"]
+
+    def _recall_ids(self, prompt: str, project: str | None, skey: str | None) -> list[str]:
+        ids, _, why = self.s.rank(prompt, project=project, limit=12)
+        if not ids:  # None: project not created yet
+            return []
+        from .board import _words
+        w, ph = _words(prompt), ",".join("?" * len(ids))
+        drop = set()
+        for r in self.s.q(f"SELECT id, session_id, tags, content FROM items WHERE id IN ({ph})", ids):
+            if skey and r["session_id"] == skey:  # this conversation's own turns are already in the agent's context
+                drop.add(r["id"])
+            elif '"conversation"' in (r["tags"] or "") and '"user"' in (r["tags"] or "") and w:  # someone else asking the same question carries no answer
+                o = _words(r["content"])
+                if o and len(w & o) / len(w | o) >= 0.6:
+                    drop.add(r["id"])
+        return [i for i in ids if i not in drop and (
+            why.get(i, {}).get("sim", 0) >= float(os.environ.get("COMMONS_HOOK_RECALL_SIM", "0.6"))
+            or (why.get(i, {}).get("bm25_rank", 99) <= 2 and why.get(i, {}).get("vec_rank", 99) <= 3))]
 
     def _repeated_ask(self, prompt: str, project: str | None) -> str:
         """The user is asking for something already on the board and still open: say so before the agent answers."""

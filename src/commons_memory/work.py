@@ -151,10 +151,10 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
         raise CommonsError("start_work needs `what`: the task in one line")
     ov = overlaps(s, agent_id, what, project, paths)
     if ov["busy"]:
-        return {"ok": False, **ov, "do": "Another agent is on this now. Don't start it: msg_send them to coordinate (split "
+        return {"ok": False, "status": "busy", **ov, "do": "Another agent is on this now. Don't start it: msg_send them to coordinate (split "
                                          "it, or wait for their finish_work), or tell the user who has it."}
     if ov["done"] and not force:
-        return {"ok": False, **ov, "do": "This was done before. Read it (expand/resume the ids) and build on it, or tell "
+        return {"ok": False, "status": "done", **ov, "do": "This was done before. Read it (expand/resume the ids) and build on it, or tell "
                                          "the user it's done. A genuine follow-up: call again with force=true and the "
                                          "reason."}
     if force and ov["done"] and not (reason or "").strip():
@@ -177,7 +177,7 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
                   for x in SkillPool(s).suggest(what, limit=3)]
     except Exception:  # noqa: BLE001
         skills = []
-    return {"ok": True, "claim_id": cid, "builds_on": ov["done"], "related": rel, "skills": skills,
+    return {"ok": True, "status": "ok", "claim_id": cid, "builds_on": ov["done"], "related": rel, "skills": skills,
             "do": "It's yours: others are warned off. `related` is what's connected to this work: if you change it, "
                   "update those too. `skills` are pool how-tos for this (skill_get). Call finish_work(claim_id, "
                   "result) (or handoff) when done."}

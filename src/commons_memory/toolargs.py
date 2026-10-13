@@ -13,7 +13,7 @@ ALIASES: dict[str, list[str]] = {
     "content": ["text", "body", "note", "memory", "message"],
     "body": ["text", "content", "message"],
     "text": ["content", "body"],
-    "query": ["q", "search", "question", "text"],
+    "query": ["q", "search", "question", "text", "topic"],
     "what": ["decision", "title"],
     "why": ["rationale", "reason", "because"],
     "project": ["project_name", "projectname", "repo", "workspace"],

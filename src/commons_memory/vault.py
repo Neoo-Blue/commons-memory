@@ -137,8 +137,8 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     """Admin only (CLI on the hub): store a credential. auth: {"header": "X-Plex-Token"} | {"query": "apikey"} |
     {"bearer": true} | {"basic": "username"} (value = password) | {"header": "Authorization", "prefix": "Token "},
     optional "extra_headers"."""
-    if not re.fullmatch(r"[a-z0-9_]{2,40}", name or ""):
-        raise CommonsError("name: 2-40 chars of a-z, 0-9, _")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,39}", name or ""):
+        raise CommonsError("name: 2-40 chars of a-z, 0-9, _ or -, starting with a letter or digit")
     value = (value or "").strip()
     if not value:
         raise CommonsError("empty value (pipe it on stdin)")

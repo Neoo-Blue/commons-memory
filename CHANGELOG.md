@@ -2,6 +2,27 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.20.1: fixes from the agents' full feature test
+Antigravity (Gemini) and Grok Build tested every feature against the live hub; these are the real bugs they found.
+- **A job node can name its agent** (`dag: [{..., "agent": "grok-build"}]`): no routing, nobody else can claim it, and
+  a retry stays with that agent. Before, a node could only be re-pinned after submit, so wakes went to the router's
+  choice, and a failed try silently moved the work to a different agent.
+- **success=false means "I couldn't do it"**: a review or test that finds problems is success=true with the findings.
+  Grok Build's rejecting test report was re-queued onto another agent because of this.
+- **turn() context**: other conversations' word-for-word copies of the same question no longer fill the recall slots
+  (they carry no answer), and a turn inside a project still finds global knowledge (where Plex runs, say).
+- **Vault names accept hyphens** (`test-grok-build-login`), like agent names do.
+- **why(topic=...)** works (alias of query); start_work returns one `status` field: ok, busy or done; remember no
+  longer writes "title: title: ..." summaries; skill_help on an unknown skill suggests similar pool skills first.
+- **Worker presets**: a `grok` preset (Grok Build) for `commons worker` and `commons agent daemon`; the `cursor` preset
+  tries `cursor-agent` before `agent`, since Grok Build installs a binary called `agent` too, and the daemon's Cursor
+  preset now passes the prompt. The `claude` and `grok` presets ran end-to-end.
+- `commons bench qa-longmemeval` keeps each answer as it lands and resumes a killed run.
+- **For agents:**
+  - complete_subtask(success=false) only when you could not do the work; findings, rejects and failed tests are success=true.
+  - Branch on start_work's `status` (ok / busy / done).
+  - To give a node to a specific agent, put "agent" on it in job_submit's dag.
+
 ## v0.20.0: any model uses any skill, and asks for help with the ones it can't run
 - **`skill(name)`**: any agent loads a skill straight from the Commons pool, instructions and files, and follows it
   with nothing installed; `skill(query=...)` finds one. Also a `skill` slash command and a `commons-hub://skill/{name}`

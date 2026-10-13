@@ -398,6 +398,10 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
     pl, judge = ProviderLayer(llm_store), judge or model
     os.environ["COMMONS_TRUST_WEIGHTING"] = "0"
     rows, cost = [], 0.0
+    tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}" + (f"-n{neighbors}" if neighbors else "") + \
+        ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "") + \
+        ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "")
+    os.makedirs(out, exist_ok=True)
     if suite == "locomo":
         convs = json.load(open(data_path))[: limit or None]
         for conv in convs:
@@ -428,6 +432,12 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
     else:
         data = json.load(open(data_path))
         data = random.Random(seed).sample(data, min(limit or len(data), len(data)))
+        part = os.path.join(out, f"{tag}.partial.jsonl")  # each answer is kept as it lands, so a killed run resumes
+        if os.path.exists(part):
+            rows = [json.loads(ln) for ln in open(part) if ln.strip()]
+            cost = sum(r.get("cost", 0) for r in rows)
+        done = {r["id"] for r in rows}
+        total, data = len(data), [q for q in data if q["question_id"] not in done]
 
         def one(q):
             s, d = _store(embedder)
@@ -448,14 +458,12 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
         with ThreadPoolExecutor(max_workers=max(1, workers // 2)) as ex:
             for q, (ans, ok, c_) in ex.map(one, data):
                 rows.append({"id": q["question_id"], "type": q["question_type"] + ("_abs" if q["question_id"].endswith("_abs") else ""),
-                             "q": q["question"], "gold": str(q["answer"]), "answer": ans, "correct": int(ok)})
+                             "q": q["question"], "gold": str(q["answer"]), "answer": ans, "correct": int(ok), "cost": c_})
                 cost += c_
-                if len(rows) % 20 == 0:
-                    log(f"{len(rows)}/{len(data)}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
-    os.makedirs(out, exist_ok=True)
-    tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}" + (f"-n{neighbors}" if neighbors else "") + \
-        ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "") + \
-        ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "")
+                with open(part, "a") as f:
+                    f.write(json.dumps(rows[-1]) + "\n")
+                if len(rows) % 10 == 0:
+                    log(f"{len(rows)}/{total}: {sum(r['correct'] for r in rows)} correct, ${cost:.2f}")
     with open(os.path.join(out, f"{tag}.jsonl"), "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

@@ -35,9 +35,11 @@ import time
 PRESETS = {
     "claude": "claude -p --output-format text --permission-prompts none \"Do the Commons subtask given on stdin. Follow its output protocol.\"",
     "codex": "codex exec --skip-git-repo-check --sandbox workspace-write -",
-    "cursor": "agent -p --output-format text --trust \"$(cat {prompt_file})\"",
+    # cursor-agent first: Grok Build also installs a binary called `agent`
+    "cursor": "\"$(command -v cursor-agent || command -v agent)\" -p --output-format text --trust \"$(cat {prompt_file})\"",
     "cursor-legacy": "cursor-agent -p --output-format text \"$(cat {prompt_file})\"",
     "gemini": "gemini --output-format text -p \"$(cat {prompt_file})\"",
+    "grok": "grok -p \"$(cat {prompt_file})\" --output-format plain --always-approve",
     "echo": "cat",
 }
 PRESET_DOCS = {
@@ -45,6 +47,7 @@ PRESET_DOCS = {
     "codex": "https://developers.openai.com/codex/cli/reference",
     "cursor": "https://cursor.com/docs/cli/reference/parameters",
     "gemini": "https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/headless.md",
+    "grok": "grok --help (Grok Build 1.0.52)",
 }
 
 
