@@ -133,3 +133,5 @@ COMMONS_DUP_SIM	Similarity (0-1) at which start_work and the prompt hooks treat 
 COMMONS_WORK_STALE	Seconds of agent silence after which its open work claim no longer blocks others (default 7200)
 COMMONS_VAULT_KEY	Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database
 COMMONS_RELATED_SIM	Similarity (0-1) at which start_work lists a memory, doc or decision as connected to the work (default 0.6)
+COMMONS_VAULT_KEY_FILE	File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume)
+COMMONS_AGENT_JUDGE_WAIT	Seconds Commons waits for a connected agent to answer a credential judgment (agent:any / agent:NAME in the decision chain) before moving on (default 90)

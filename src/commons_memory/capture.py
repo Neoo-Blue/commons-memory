@@ -187,9 +187,10 @@ class Capture:
                 return {"ok": True, "context": ""}
             ctx = ""
             if st["inject"]:  # before storing, or it finds itself
+                from . import settings
                 from . import work as W
                 try:
-                    ctx = W.warning(self.s, agent_id, text, project)
+                    ctx = W.warning(self.s, agent_id, text, project) if settings.get(self.s, "dup_warnings") else ""
                 except Exception:  # noqa: BLE001 - a failed check must not block the prompt
                     ctx = ""
                 ctx += self.recall(text, project, skey=skey)
@@ -226,6 +227,9 @@ class Capture:
     def verbatim(self, agent_id, project, skey, harness, role, text) -> str | None:
         """Everything said is memory: the user's messages and the agent's replies are stored word for word (searchable;
         search(context=N) brings back the turns around a hit). Distilled observations come on top, never instead."""
+        from . import settings
+        if not settings.get(self.s, "capture_verbatim"):
+            return None
         from .redact import redact
         text = redact(strip_private(text or "").strip())[0][:20000]
         if not text or self.s.q("SELECT 1 FROM items WHERE session_id=? AND content=? LIMIT 1", (skey, text)):

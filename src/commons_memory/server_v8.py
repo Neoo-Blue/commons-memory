@@ -238,6 +238,17 @@ def register_v8(mcp, store, who):
         return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
 
     @mcp.tool()
+    def judge_answer(request_id: str, legit: float, destructive: float = 0.0, user_backed: float = 0.0, reason: str = "",
+                     agent: str = "", api_key: str = "") -> str:
+        """Answer a credential-request judgment Commons sent you (you are the decision agent for it): the probability
+        (0-1) that each answer is yes. Pass the questions you were asked; reason = one line."""
+        from . import vault as V
+        sc = {"legit": legit, "destructive": destructive, "user_backed": user_backed}
+        r = store.q("SELECT questions FROM vault_judgments WHERE id=?", (request_id,))
+        asked = json.loads(r[0]["questions"]) if r else {}
+        return _js(V.judge_answer(store, me(agent, api_key), request_id, {k: sc[k] for k in asked}, reason))
+
+    @mcp.tool()
     def vault_deposit(name: str, value: str, service: str, base_urls: list[str], auth: str = "bearer",
                       extra_headers: list[str] | None = None, description: str = "", risk: str = "normal",
                       agent: str = "", api_key: str = "") -> str:

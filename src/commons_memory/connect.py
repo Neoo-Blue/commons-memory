@@ -24,12 +24,13 @@ PLATFORMS: dict[str, tuple[str, str, str]] = {
     "codex": ("Codex CLI", "codex", "Adds Commons to ~/.codex/config.toml (key read from an env var)."),
     "cursor": ("Cursor", "cursor", "Merge into ~/.cursor/mcp.json (or .cursor/mcp.json in the project)."),
     "gemini": ("Gemini CLI", "generic", "Merge into ~/.gemini/settings.json."),
+    "opencode": ("OpenCode", "generic", "Adds a remote MCP server to ~/.config/opencode/opencode.json."),
     "chatgpt": ("ChatGPT / other MCP HTTP clients", "chatgpt",
                 "Any client that speaks streamable HTTP MCP: point it at the URL and send the key as a Bearer header."),
     "any": ("Any AI (prompt only)", "generic", "Paste the prompt; MCP-less AIs can use the plain HTTP agent API."),
     "docker": ("Docker / self-host", "generic", "Run your own Commons server, then connect agents to it."),
 }
-ALIASES = {"claude": "claude-code", "codex-cli": "codex", "gemini-cli": "gemini", "openai": "chatgpt",
+ALIASES = {"open-code": "opencode", "claude": "claude-code", "codex-cli": "codex", "gemini-cli": "gemini", "openai": "chatgpt",
            "http": "chatgpt", "generic": "any", "self-host": "docker", "selfhost": "docker"}
 
 
@@ -137,6 +138,10 @@ def config_block(platform: str, url: str, key: str | None = None, name: str = "c
     if platform == "gemini":
         return {"title": "~/.gemini/settings.json", "lang": "json",
                 "text": json.dumps({"mcpServers": {"commons": {"httpUrl": url, "headers": {"Authorization": auth}}}}, indent=2)}
+    if platform == "opencode":
+        return {"title": "~/.config/opencode/opencode.json", "lang": "json",
+                "text": json.dumps({"$schema": "https://opencode.ai/config.json", "mcp": {"commons": {
+                    "type": "remote", "url": url, "enabled": True, "headers": {"Authorization": auth}}}}, indent=2)}
     if platform == "chatgpt":
         return {"title": "MCP server settings (streamable HTTP)", "lang": "text",
                 "text": f"Server URL: {url}\nTransport: Streamable HTTP\nAuthentication: header  Authorization: {auth}\n"
@@ -208,7 +213,7 @@ def bundle(platform: str, url: str, agent: str = "my-agent", key: str | None = N
             "platforms": {k: v[0] for k, v in PLATFORMS.items()}, "version": __version__}
 
 
-WAKE_CLI = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor-agent"}
+WAKE_CLI = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor-agent", "opencode": "opencode"}
 
 
 def wake_block(platform: str, url: str, agent: str) -> dict:

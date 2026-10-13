@@ -15,6 +15,19 @@ Docker: see [docs/docker.md](docs/docker.md). Prefer to read it first? `curl -fs
 ## Contents
 [Quickstart](#2-minute-quickstart) · [Feature tour](#feature-tour) · [Architecture](#architecture) · [Connect any AI](#connect-any-ai) · [Screenshots](#screenshots) · [Multi-agent](#multi-agent-in-5-commands) · [Security](#security-model) · [Networking](#networking) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Comparison](#comparison) · [Roadmap](#roadmap) · [Changelog](CHANGELOG.md)
 
+## Onboarding (self-hosted hub)
+1. Copy `.env.example` to `.env`, create the three secret files it lists (dashboard token, Postgres password, vault
+   key), then `docker compose up -d` ([docker-compose.yml](docker-compose.yml); the comments explain every option).
+2. Open the dashboard and go to **Setup**. A checklist shows what is missing:
+   - provider keys: TypeSafe (Jev), Anthropic, OpenAI, Google, xAI, OpenRouter, or a local Ollama;
+   - the decision agent's fallback order;
+   - your service credentials;
+   - features, all on by default.
+
+   Keys are stored encrypted in the vault and never shown again.
+3. **Connect** each AI with one command (`commons setup ...`; the page builds it with a checkbox per step).
+4. Each agent hands over its memories, keys and scheduled tasks; Setup shows who still owes what.
+
 ## 2-minute quickstart
 ```sh
 # 1. install (above) — this also runs `commons init` (~/.commons/commons.db)
@@ -82,7 +95,7 @@ It asks for the agent's key once (hidden, saved 0600), then does every step, eac
 - verifies the connection.
 
 Add `--no-<step>` to leave one out. The dashboard's Connect page builds this command with a checkbox per step.
-Clients: `claude-code`, `codex`, `gemini`, `cursor`.
+Clients: `claude-code`, `codex`, `gemini`, `cursor`, `opencode`.
 
 **Hosted chat apps** (claude.ai, ChatGPT, Grok, Muse) can't run commands: paste [PROMPT.md](PROMPT.md) into their
 custom instructions. It is generated from the same master instructions, so it never goes stale, and Commons hands

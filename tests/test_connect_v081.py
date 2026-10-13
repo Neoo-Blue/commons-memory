@@ -18,7 +18,7 @@ def test_bundle_every_platform(plat):
     assert b["url"] == "http://192.168.50.111:8770/mcp"
     ids = [x["id"] for x in b["blocks"]]
     txt = {x["id"]: x["text"] for x in b["blocks"]}
-    if plat in ("claude-code", "codex", "cursor", "gemini"):  # v0.12: one command, every step on unless unticked
+    if plat in ("claude-code", "codex", "cursor", "gemini", "opencode"):  # v0.12: one command, every step on unless unticked
         assert ids == ["setup", "prompt"]
         setup = b["blocks"][0]
         assert f"commons setup --client {plat} --agent grok --url http://192.168.50.111:8770" in setup["text"]

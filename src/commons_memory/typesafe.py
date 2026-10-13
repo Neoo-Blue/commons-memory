@@ -14,12 +14,12 @@ def enabled() -> bool:
     return bool(os.environ.get("TYPESAFE_API_KEY"))
 
 
-def noul(state: str, questions: dict[str, str], timeout: float = 20) -> dict[str, float]:
+def noul(state: str, questions: dict[str, str], timeout: float = 20, key: str | None = None) -> dict[str, float]:
     """Ask yes/no questions about `state`; returns {key: probability of yes}."""
     body = {"state": state[:12000], "model": os.environ.get("COMMONS_TYPESAFE_MODEL", "jev-latest"),
             "questions": {k: {"type": "noul", "instructions": v} for k, v in questions.items()}}
     req = urllib.request.Request(URL, data=json.dumps(body).encode(), headers={
-        "Authorization": "Bearer " + os.environ["TYPESAFE_API_KEY"], "Content-Type": "application/json",
+        "Authorization": "Bearer " + (key or os.environ["TYPESAFE_API_KEY"]), "Content-Type": "application/json",
         "User-Agent": "commons-memory"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         d = json.loads(r.read())

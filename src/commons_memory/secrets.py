@@ -18,7 +18,7 @@ from typing import Protocol
 from .ids import iso, new_id, now
 from .store import CommonsError, Store
 
-REF_RE = re.compile(r"^(vault|vault-dyn|env|op|infisical)://[A-Za-z0-9_./#:@?=&-]+$")
+REF_RE = re.compile(r"^(vault|vault-dyn|env|op|infisical|commons)://[A-Za-z0-9_./#:@?=&-]+$")
 DEFAULT_TTL = 300
 MAX_TTL = 3600
 
@@ -133,6 +133,18 @@ class VaultBackend:
             self._req("PUT", "/v1/sys/leases/revoke", {"lease_id": backend_lease})
 
 
+class CommonsVaultBackend:
+    """commons://NAME -> a key stored in Commons' own encrypted vault (entered on the Setup page or `commons vault set`)."""
+    scheme = "commons"
+
+    def __init__(self, store: Store):
+        self.store = store
+
+    def resolve(self, ref: str) -> str:
+        from .vault import _value
+        return _value(self.store, ref.split("://", 1)[1])
+
+
 class OnePasswordBackend:
     """op://vault/item/field via the 1Password CLI (`op read`)."""
     scheme = "op"
@@ -196,7 +208,7 @@ class Broker:
     def __init__(self, store: Store, backends: list[SecretBackend] | None = None):
         self.store = store
         self.backends = {b.scheme: b for b in (backends or [EnvBackend(), _VAULT, OnePasswordBackend(),
-                                                             InfisicalBackend()])}
+                                                             InfisicalBackend(), CommonsVaultBackend(store)])}
         for b in list(self.backends.values()):
             if getattr(b, "dynamic_scheme", None):
                 self.backends[b.dynamic_scheme] = b
@@ -272,9 +284,9 @@ class Broker:
     def resolve_internal(self, ref: str, purpose: str) -> str:
         """Server-side use of a registered ref (e.g. provider API keys). The value never leaves the process,
         is never returned to a model, and every use is audited."""
-        if not self.store.q("SELECT 1 FROM secret_refs WHERE ref=?", (ref,)):
-            raise CommonsError(f"secret ref {ref} not registered")
         scheme = ref.split("://", 1)[0]
+        if scheme != "commons" and not self.store.q("SELECT 1 FROM secret_refs WHERE ref=?", (ref,)):
+            raise CommonsError(f"secret ref {ref} not registered")  # commons:// keys are registered by being in the vault
         backend = self.backends.get(scheme)
         if not backend:
             raise CommonsError(f"no backend for {scheme}://")

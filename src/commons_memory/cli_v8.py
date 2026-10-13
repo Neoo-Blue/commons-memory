@@ -13,7 +13,7 @@ def add_parsers(sub) -> None:
     from .setup import LABELS
     st = sub.add_parser("setup", help="connect an AI to Commons completely in one go (MCP, instructions, hooks, "
                                       "instant wake, memory hand-over, verify); every step on unless --no-<step>")
-    st.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor")
+    st.add_argument("--client", required=True, help="claude-code | codex | gemini | cursor | opencode")
     st.add_argument("--agent", required=True, help="this AI's Commons agent name")
     st.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
     for k, v in LABELS.items():
@@ -21,7 +21,7 @@ def add_parsers(sub) -> None:
     i = sub.add_parser("instructions", help="write the Commons master instructions into each AI's always-loaded "
                                             "instructions (CLAUDE.md + skill, AGENTS.md, GEMINI.md, Cursor rules)")
     i.add_argument("action", choices=["install", "uninstall", "show"])
-    i.add_argument("ai", nargs="?", default="all", help="claude-code | codex | gemini | antigravity | grok | cursor | all")
+    i.add_argument("ai", nargs="?", default="all", help="claude-code | codex | gemini | antigravity | grok | cursor | opencode | all")
     i.add_argument("--url", default=os.environ.get("COMMONS_URL"), help="hub MCP url to mention (default $COMMONS_URL)")
     i.add_argument("--agent", help="agent name to mention (omit with 'all': each AI's MCP config identifies it)")
     v = sub.add_parser("vault", help="the credential vault: store keys (value on stdin, encrypted), list, remove, "

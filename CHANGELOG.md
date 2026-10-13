@@ -2,6 +2,29 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.14.0: onboarding, a decision chain you choose, and OpenCode
+- **Setup page** (dashboard, Admin > Setup) with a first-run checklist, also flagged on the Overview until done:
+  - provider keys for TypeSafe (Jev), Anthropic, OpenAI, Google, xAI, OpenRouter, or a local Ollama, stored
+    encrypted in the vault and never shown again;
+  - the decision agent's fallback order;
+  - your service credentials (add, remove, see who deposited each);
+  - feature checkboxes, all on and recommended: verbatim capture, duplicate-work warnings, quota routing and your
+    reserve %, schedule takeovers;
+  - every agent's hand-over status and the recent credential decisions.
+- **Decision chain with fallbacks.** Credential requests are judged by the first judge in your order that can answer:
+  `typesafe`, any `provider/model` you have a key for, `role:gatekeeper`, then `ask` (you). Judges without a key are
+  skipped, and a failing provider falls through to the next. `agent:any` (or `agent:NAME`) lets a live connected agent
+  judge on its own subscription when no key is available: it gets the request (never the key, never its own request)
+  and answers with `judge_answer`; no answer within 90 s moves on.
+- **Keys live in Commons, not in env files**: `commons://NAME` references resolve from the vault, so providers and
+  judges use keys entered on the Setup page.
+- **Zero-config vault**: with no `COMMONS_VAULT_KEY`, Commons creates a private key file (0600) next to the database
+  on first use; `COMMONS_VAULT_KEY_FILE` points it at a Docker secret to keep it off the data volume.
+- **docker-compose.yml** in the repo, with every option explained; README has an Onboarding section.
+- **OpenCode** is a first-class client: `commons setup --client opencode` (remote MCP in
+  `~/.config/opencode/opencode.json`, instructions in `~/.config/opencode/AGENTS.md`, `opencode run` for instant
+  wake), and an OpenCode tab on the Connect page.
+
 ## v0.13.0: one setup command, and changes reach everything connected
 - **`commons setup`**: one command connects an AI completely: MCP server, the master instructions it always loads
   (plus skill), auto-capture hooks, instant wake, its existing memories handed over, and a verification. It asks for

@@ -10,6 +10,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | auth.py, server_v5.py |
 | `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
+| `COMMONS_AGENT_JUDGE_WAIT` | `90` | Seconds Commons waits for a connected agent to answer a credential judgment (agent:any / agent:NAME in the decision chain) before moving on (default 90) | vault.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
 | `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, server.py |
 | `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
@@ -93,7 +94,6 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_QA_DATES` | — | bench qa-*: `iso` prints memory dates as 2023-05-08 (the v0.9.0 style); default "8 May 2023" | bench.py |
 | `COMMONS_QUOTA_BACKOFF` | `3600` | Seconds to park work when an agent hits its limit without a known reset time (default 3600) | orchestrator.py |
 | `COMMONS_QUOTA_REPORTERS` | — | Agents allowed to report quota windows on behalf of other agents (comma list), e.g. the agent whose key runs `commons quota sync` from aiusage | server_v8.py |
-| `COMMONS_QUOTA_RESERVE` | `20` | Default % of every quota window kept for the user (default 20); per period: COMMONS_QUOTA_RESERVE_5H, _WEEKLY, _DAILY, _MONTHLY; per agent: profile limits.reserve | quota.py |
 | `COMMONS_QUOTA_TASK_PCT` | `5` | Assumed % of a window one subtask uses until Commons has learned that agent/task type (default 5) | quota.py |
 | `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
@@ -128,6 +128,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
 | `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, cli_v8.py, wakeclient.py |
 | `COMMONS_VAULT_KEY` | — | Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database | vault.py |
+| `COMMONS_VAULT_KEY_FILE` | — | File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume) | vault.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_DEBOUNCE` | `2` | Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake) | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |

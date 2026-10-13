@@ -24,9 +24,10 @@ TARGETS = {
     "antigravity": ["~/.gemini/GEMINI.md"],
     "grok": ["~/.grok/AGENTS.md"],
     "cursor": ["~/.cursor/rules/commons.mdc"],
+    "opencode": ["~/.config/opencode/AGENTS.md"],
 }
 HOMES = {"claude-code": "~/.claude", "codex": "~/.codex", "gemini": "~/.gemini", "antigravity": "~/.gemini",
-         "grok": "~/.grok", "cursor": "~/.cursor"}
+         "grok": "~/.grok", "cursor": "~/.cursor", "opencode": "~/.config/opencode"}
 SKILL_DESC = ("Commons, the shared memory, task and credential hub for all of the user's AIs. Use at the start of EVERY "
               "task and before answering anything about the user's projects, homelab, past work, credentials or other "
               "agents: check Commons first (pickup, search), claim the work with start_work, never redo another "

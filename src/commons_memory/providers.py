@@ -30,7 +30,7 @@ KINDS = {
     "mock": "mock://",
 }
 ROLES = ["distributor", "planner", "router", "pref_extractor", "kb_summarizer", "skill_reviewer", "grader", "librarian", "retro", "difficulty",
-         "curator"]
+         "curator", "observer", "gatekeeper"]
 TASK_TYPES = ["research", "plan", "code", "review", "red_team", "test", "summarize", "debate", "judge", "general"]
 
 # Small, cheap, automatically checkable probes per task type.

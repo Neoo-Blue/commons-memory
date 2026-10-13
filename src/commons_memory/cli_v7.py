@@ -14,7 +14,8 @@ import urllib.request
 DAEMON_PRESETS = {"claude": "claude -p --output-format text --permission-prompts none",
                   "codex": "codex exec --skip-git-repo-check --sandbox workspace-write -",
                   "gemini": "gemini --output-format text",
-                  "cursor": "agent -p --output-format text --trust"}
+                  "cursor": "agent -p --output-format text --trust",
+                  "opencode": "sh -c 'opencode run \"$(cat)\"'"}
 
 CMDS = {"project-rename", "msg", "presence", "wake", "agent", "bus", "route", "drive", "sched", "mission", "breakdown"}
 

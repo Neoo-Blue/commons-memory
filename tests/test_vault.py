@@ -37,9 +37,9 @@ def svc(monkeypatch):
 
 def _judge(monkeypatch, **scores):
     from commons_memory import typesafe
-    monkeypatch.setattr(typesafe, "enabled", lambda: True)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test")
     calls = []
-    monkeypatch.setattr(typesafe, "noul", lambda state, qs, timeout=20: calls.append(qs) or {k: scores.get(k, 0) for k in qs})
+    monkeypatch.setattr(typesafe, "noul", lambda state, qs, timeout=20, key=None: calls.append(qs) or {k: scores.get(k, 0) for k in qs})
     return calls
 
 
@@ -100,17 +100,36 @@ def test_writes_and_bad_reasons(store, svc, monkeypatch):
 
 def test_no_judge_means_the_user_decides(store, svc, monkeypatch):
     base, _ = svc
-    from commons_memory import typesafe
-    monkeypatch.setattr(typesafe, "enabled", lambda: False)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     V.add(store, "plex", SECRET, "plex", [base], {"header": "X-Plex-Token"})
     r = V.use(store, store.ensure_agent("muse"), "plex", "GET", base + "/x", "the user asked what was added today")
     assert r["verdict"] == "waiting_for_user"
 
 
-def test_locked_vault(store, monkeypatch):
+def test_vault_works_with_no_setup_using_a_private_key_file(store, monkeypatch, tmp_path):
     monkeypatch.delenv("COMMONS_VAULT_KEY", raising=False)
-    with pytest.raises(CommonsError, match="locked"):
-        V.add(store, "plex", SECRET, "plex", ["http://x/"], {"bearer": True})
+    monkeypatch.setenv("COMMONS_VAULT_KEY_FILE", str(tmp_path / "keys" / "vault.key"))
+    V.add(store, "plex", SECRET, "plex", ["http://x/"], {"bearer": True})
+    kf = tmp_path / "keys" / "vault.key"
+    assert kf.exists() and oct(kf.stat().st_mode)[-3:] == "600" and V._value(store, "plex") == SECRET
+    assert V.key_source(store).startswith("file ")
+
+
+def test_ask_mode_sends_every_use_to_the_user(store, svc, monkeypatch):
+    from commons_memory import settings
+    base, _ = svc
+    _judge(monkeypatch, legit=0.99)
+    V.add(store, "plex", SECRET, "plex", [base], {"header": "X-Plex-Token"})
+    settings.put(store, "judge_chain", ["ask"])
+    r = V.use(store, store.ensure_agent("muse"), "plex", "GET", base + "/x", "the user asked what was added today")
+    assert r["verdict"] == "waiting_for_user"
+
+
+def test_commons_refs_resolve_from_the_vault(store, svc):
+    from commons_memory.secrets import Broker
+    base, _ = svc
+    V.add(store, "anthropic", "sk-ant-test-123456", "anthropic", [base], {"header": "x-api-key"})
+    assert Broker(store).resolve_internal("commons://anthropic", "test") == "sk-ant-test-123456"
 
 
 def test_basic_auth_header(store, svc, monkeypatch):
@@ -153,3 +172,54 @@ def test_handover_checklist_tracks_what_commons_still_needs(store, svc):
     st = H.status(store, a)
     assert st["complete"], st["missing"]
     assert H.nudge(store, a) == ""
+
+
+def test_judge_chain_falls_back_when_a_judge_has_no_key_or_fails(store, svc, monkeypatch):
+    from commons_memory import settings
+    from commons_memory.providers import ProviderLayer
+    base, _ = svc
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    V.add(store, "plex", SECRET, "plex", [base], {"header": "X-Plex-Token"})
+    pl = ProviderLayer(store)
+    pl.add_provider("mock", "mock")
+    calls = []
+    def fake_chat(self, model, prompt, **kw):
+        calls.append(model)
+        if model == "mock/broken":
+            raise RuntimeError("provider down")
+        return {"text": '{"legit": 0.93}'}
+    monkeypatch.setattr(ProviderLayer, "chat", fake_chat)
+    settings.put(store, "judge_chain", ["typesafe", "anthropic/claude-haiku-5-5", "mock/broken", "mock/ok", "ask"])
+    r = V.use(store, store.ensure_agent("muse"), "plex", "GET", base + "/x", "the user asked what was added today")
+    assert r["verdict"] == "allowed" and calls == ["mock/broken", "mock/ok"]   # no TypeSafe or Anthropic key: skipped
+
+
+def test_a_connected_agent_can_be_the_decision_agent(store, svc, monkeypatch):
+    import threading
+    import time as _t
+    from commons_memory import settings
+    base, _ = svc
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    V.add(store, "plex", SECRET, "plex", [base], {"header": "X-Plex-Token"})
+    asker, judge_ = store.ensure_agent("muse"), store.ensure_agent("antigravity")
+    for aid in (asker, judge_):  # both live
+        store.x("INSERT INTO wake_channels(id,agent_id,kind,config,secret,enabled,created_at,failures) "
+                "VALUES(?,?,'webhook','{}','',1,0,0)", ("w" + aid[-6:], aid))
+    settings.put(store, "judge_chain", ["typesafe", "agent:any", "ask"])
+
+    def answer():  # the judge agent sees the request in its inbox and answers
+        for _ in range(50):
+            r = store.q("SELECT id, judge_agent FROM vault_judgments WHERE status='open'")
+            if r:
+                assert r[0]["judge_agent"] == judge_                       # never the agent that asked
+                V.judge_answer(store, judge_, r[0]["id"], {"legit": 0.9}, "plain read for the user's question")
+                return
+            _t.sleep(0.1)
+    t = threading.Thread(target=answer)
+    t.start()
+    res = V.use(store, asker, "plex", "GET", base + "/x", "the user asked what was added today")
+    t.join()
+    assert res["verdict"] == "allowed"
+    assert store.q("SELECT reason FROM vault_decisions ORDER BY ts DESC LIMIT 1")[0]["reason"] == "a read with a sound reason"
+    monkeypatch.setenv("COMMONS_AGENT_JUDGE_WAIT", "1")                     # nobody answers: falls through to you
+    assert V.use(store, asker, "plex", "GET", base + "/y", "another question from the user today")["verdict"] in ("allowed", "waiting_for_user")

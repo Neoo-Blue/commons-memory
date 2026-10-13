@@ -114,6 +114,9 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
     run("quota_wake", quota_wake)
 
     def schedules():  # take over scheduled runs an owner missed or can't deliver
+        from . import settings as _st
+        if not _st.get(s, "schedule_takeover"):
+            return
         from .schedules import watch
         return watch(s) or None
     run("schedules", schedules)

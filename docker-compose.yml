@@ -5,11 +5,16 @@
 #   docker compose --profile cloudflared up -d             + Cloudflare named tunnel
 #   docker compose --profile ngrok up -d                   + ngrok tunnel
 # Secrets: put values in ./secrets/<name> files (docker secrets) or reference them (env://, vault://, op://); never in YAML.
+# Then open the dashboard and follow Setup (Admin > Setup): provider keys (TypeSafe/Jev, Anthropic, OpenAI, Google, xAI,
+# OpenRouter or a local Ollama, stored encrypted in Commons' vault), the decision agent's fallback order, your service
+# credentials and features. Connect each AI with one command from the Connect page.
 
 x-commons-env: &commons-env
   COMMONS_REQUIRE_KEYS: "1"
   COMMONS_DB: ${COMMONS_DB:-/data/commons.db}
   COMMONS_DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
+  COMMONS_VAULT_KEY_FILE: /run/secrets/vault_key   # vault master key, kept off the data volume
+  TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}          # optional: or enter it on the Setup page (stored in the vault)
   COMMONS_PUBLIC_URL: ${COMMONS_PUBLIC_URL:-}
   COMMONS_WEBHOOK_ALLOWLIST: ${COMMONS_WEBHOOK_ALLOWLIST:-}
   COMMONS_BACKGROUND: ${COMMONS_BACKGROUND:-1}
@@ -32,6 +37,7 @@ services:
       <<: *commons-env
     secrets:
       - dashboard_token
+      - vault_key
     volumes:
       - commons-data:/data
     read_only: true
@@ -96,6 +102,8 @@ services:
 secrets:
   dashboard_token:
     file: ./secrets/dashboard_token
+  vault_key:
+    file: ./secrets/vault_key
   postgres_password:
     file: ./secrets/postgres_password
 

@@ -351,8 +351,9 @@ class Orchestrator:
             if not ranked:
                 continue
             from . import quota as Q
-            fits, resets = [], []
-            for sc, a in ranked:
+            from . import settings as _st
+            fits, resets = ([], []) if _st.get(self.s, "quota_routing") else (list(ranked), [])
+            for sc, a in (ranked if _st.get(self.s, "quota_routing") else []):
                 ok, until, _w = Q.can_take(self.s, a["id"], st["type"])
                 if ok:
                     fits.append((sc, a))

@@ -130,7 +130,8 @@ def reserve(s: Store, agent_id: str, w: dict) -> float:
     prof = json.loads((a[0]["profile"] if a else None) or "{}")
     floor = (prof.get("limits") or {}).get("reserve", {}).get(w["period"])
     if floor is None:
-        floor = float(os.environ.get(f"COMMONS_QUOTA_RESERVE_{w['period'].upper()}", os.environ.get("COMMONS_QUOTA_RESERVE", "20")))
+        from . import settings
+        floor = float(os.environ.get(f"COMMONS_QUOTA_RESERVE_{w['period'].upper()}") or settings.get(s, "reserve_pct"))
     return max(float(floor), user_need(s, agent_id, w["window"], w.get("resets_at")))
 
 

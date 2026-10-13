@@ -17,7 +17,7 @@ STEPS = ["mcp", "instructions", "hooks", "wake", "import", "verify"]
 LABELS = {"mcp": "connect it to Commons (MCP)", "instructions": "teach it the Commons routine (always-loaded instructions + skill)",
           "hooks": "auto-capture every message and tool call", "wake": "instant wake when work arrives",
           "import": "hand over its existing memories", "verify": "verify the connection"}
-CLIENTS = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor"}
+CLIENTS = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor", "opencode": "opencode"}
 
 
 def _key(agent: str) -> tuple[str, Path]:
@@ -33,10 +33,10 @@ def _key(agent: str) -> tuple[str, Path]:
     return k, p
 
 
-def _merge_json(path: str, key: str, value: dict) -> str:
+def _merge_json(path: str, key: str, value: dict, section: str = "mcpServers") -> str:
     p = Path(os.path.expanduser(path))
     cfg = json.loads(p.read_text()) if p.exists() and p.read_text().strip() else {}
-    cfg.setdefault("mcpServers", {})[key] = value
+    cfg.setdefault(section, {})[key] = value
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cfg, indent=2) + "\n")
     return f"wrote {p}"
@@ -53,6 +53,9 @@ def mcp(client: str, url: str, key: str) -> str:
         return "added to Claude Code (user scope)" if r.returncode == 0 else f"failed: {(r.stderr or r.stdout)[-200:]}"
     if client == "cursor":
         return _merge_json("~/.cursor/mcp.json", "commons", {"url": url, "headers": {"Authorization": auth}})
+    if client == "opencode":
+        return _merge_json("~/.config/opencode/opencode.json", "commons",
+                           {"type": "remote", "url": url, "enabled": True, "headers": {"Authorization": auth}}, "mcp")
     if client == "gemini":
         return _merge_json("~/.gemini/settings.json", "commons", {"httpUrl": url, "headers": {"Authorization": auth}})
     if client == "codex":
@@ -95,7 +98,9 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
     step("instructions", instructions)
 
     def hooks():
-        from .capture import install_hooks
+        from .capture import HOOK_TARGETS, install_hooks
+        if client not in HOOK_TARGETS:
+            return "this AI has no hook API; its installed instructions tell it to call turn() every turn instead"
         cmd = f"env COMMONS_URL={base} COMMONS_AGENT={agent} {commons}"
         r = install_hooks(client, command=cmd)
         return f"{len(r['events'])} hook event(s) in {r['path']}"
