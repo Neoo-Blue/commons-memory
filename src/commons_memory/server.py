@@ -234,6 +234,18 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         """What depends on a symbol/file (reverse calls/imports, transitive) plus memories linked to it."""
         return _fmt(_impact(store, symbol, project or None, depth, limit), format)
 
+    @mcp.tool()
+    def code_lookup(symbol: str = "", project: str = "", path: str = "", line: int = 0, col: int = 0,
+                    kind: str = "definition") -> str:
+        """Ask the language's own server (LSP) about code: kind definition | references | hover. Give a symbol (found
+        through the code index of `project`) or path + line (+ col). Runs where the repo is: local owner/admins only."""
+        from . import lsp
+        require_host(store, "code_lookup")
+        if symbol:
+            return _fmt(lsp.find(store, symbol, project, kind), "json")
+        root = (store.q("SELECT root FROM projects WHERE name=? OR id=?", (project, project)) or [{"root": "."}])[0]["root"]
+        return _fmt(lsp.lookup(root or ".", path, line, col or 1, kind), "json")
+
     # ---------------------------------------------------------------- sessions
     @mcp.tool()
     def session_start(goal: str, project: str = "", state: dict | None = None, agent: str = "", api_key: str = "") -> str:
