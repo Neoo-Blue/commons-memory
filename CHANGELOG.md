@@ -2,6 +2,11 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.9.1: quieter capture
+- Capture hooks no longer store a "Session: 0 prompt(s), 0 tool call(s)" summary on turns where nothing happened,
+  and a line captured from the transcript tail is stored once per session (consecutive Stop events resend the same
+  tail, which tripled heuristic "decisions").
+
 ## v0.9.0: lean, fast, instant, and proven on your own data
 - **Beats mem0 on LoCoMo QA in every category** (78.8% vs 70.3%, same reader and judge, p = 1e-11) with no LLM
   at write time: `search(context=N)` returns the turns around each hit, and relative dates resolve against each

@@ -256,3 +256,18 @@ def test_bench_harness_tiny(tmp_path):
     s2 = bench.locomo(str(p2), str(tmp_path / "out"), embedder="hash", workers=1)
     assert s2["n"] == 1 and s2["metrics"]["any@1"] == 1 and s2["metrics"]["sess_any@1"] == 1
     assert (tmp_path / "out" / "locomo-hash.jsonl").exists()
+
+
+def test_stop_without_activity_writes_nothing_and_never_repeats_a_line(tmp_path):
+    from conftest import make_store
+    from commons_memory.capture import Capture
+    s = make_store(tmp_path)
+    aid = s.ensure_agent("cc")
+    cap = Capture(s)
+    tail = "We decided to keep SQLite as the default store because Postgres was slower in every benchmark."
+    before = s.q("SELECT COUNT(*) n FROM items")[0]["n"]
+    for _ in range(3):  # three Stop events in a row carrying the same transcript tail, no prompts or tools
+        cap.event(aid, "stop", {"session_id": "s1", "project": "p", "transcript_tail": tail}, harness="claude-code")
+    items = s.q("SELECT kind, summary FROM items")
+    assert not [i for i in items if (i["summary"] or "").startswith("Session (")], "empty-session summary written"
+    assert s.q("SELECT COUNT(*) n FROM items")[0]["n"] - before <= 1, "the same captured line was stored more than once"

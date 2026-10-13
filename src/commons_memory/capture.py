@@ -225,12 +225,15 @@ class Capture:
             prompts = [r["text"] for r in raw if r["kind"] == "prompt"]
             tools = [r for r in raw if r["kind"] == "tool"]
             summary = (f"Session ({harness}, {reason}): {len(prompts)} prompt(s), {len(tools)} tool call(s)"
-                       + (f"; first ask: {prompts[0][:200]}" if prompts else ""))
+                       + (f"; first ask: {prompts[0][:200]}" if prompts else "")) if prompts or tools else ""
         made = []
         from .orchestrator import Orchestrator
         orch = None
         for o in typed:
             text = strip_private(o["text"])[:1000]
+            if self.s.q("SELECT 1 FROM observations WHERE session_key=? AND kind=? AND text=? AND processed=1 LIMIT 1",
+                        (skey, o["kind"], text)):
+                continue  # consecutive Stop events resend the same transcript tail: capture each line once
             meta = {"source": f"hook:{harness}", "session": skey, "via": via}
             if o["kind"] == "decision":
                 r = self.s.record_decision(text, o.get("why") or "(captured from session)", agent_id=agent_id, project=project)
