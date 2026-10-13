@@ -4,6 +4,7 @@
   /agent/send /agent/recv /agent/ack /agent/history            native (typed messages, threads, lease)
   /agent/heartbeat  /agent/presence                            presence
   /agent/stream (SSE)  /agent/ws (WebSocket)                   live wake events for the authenticated agent
+  /agent/wake/ack  /agent/wake/replay                          v0.9.3: ack handled events; replay since ack / Last-Event-ID
 The caller is always the authenticated principal: you can only send as yourself and read your own mailbox.
 """
 from __future__ import annotations
@@ -18,7 +19,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from .messaging import HUB, Messaging, board, heartbeat
+from .messaging import HUB, Messaging, board, heartbeat, wake_ack, wake_events_since
 from .store import CommonsError, Store
 
 
@@ -124,25 +125,33 @@ def build_app(store: Store) -> Starlette:
             aid, name = _me(store)
         except PermissionError as e:
             return JSONResponse({"ok": False, "error": str(e)}, 403)
-        sub = HUB.subscribe(aid)
+        sub = HUB.subscribe(aid)  # subscribe before reading the replay so nothing falls in between
         heartbeat(store, aid, client="sse")
+        since = req.headers.get("last-event-id") or req.query_params.get("since") or ""
+        replay = await asyncio.to_thread(wake_events_since, store, aid, since or "ack")
 
         async def gen():
+            seen = set()
             try:
-                yield f"event: hello\ndata: {json.dumps({'agent': name, 'unread': m.unread(aid)})}\n\n"
+                yield f"event: hello\ndata: {json.dumps({'agent': name, 'unread': m.unread(aid), 'replay': len(replay)})}\n\n"
+                for ev in replay:  # missed while disconnected (since Last-Event-ID / ?since= / the last ack)
+                    seen.add(ev.get("event_id"))
+                    yield f"event: wake\nid: {ev.get('event_id')}\ndata: {json.dumps(ev)}\n\n"
                 ticks = 0
                 while True:
                     try:
                         ev = sub.get_nowait()
+                        if ev.get("event_id") in seen:
+                            continue
                         yield f"event: wake\nid: {ev.get('event_id')}\ndata: {json.dumps(ev)}\n\n"
                         continue
                     except queue.Empty:
                         pass
-                    if await req.is_disconnected():
+                    if ticks % 4 == 0 and await req.is_disconnected():
                         break
-                    await asyncio.sleep(0.25)
+                    await asyncio.sleep(0.05)
                     ticks += 1
-                    if ticks % 60 == 0:  # every ~15 s: keepalive + presence
+                    if ticks % 300 == 0:  # every ~15 s: keepalive + presence
                         heartbeat(store, aid, client="sse")
                         yield ": keepalive\n\n"
             finally:
@@ -158,7 +167,11 @@ def build_app(store: Store) -> Starlette:
         await sock.accept()
         sub = HUB.subscribe(aid)
         heartbeat(store, aid, client="ws")
-        await sock.send_json({"type": "hello", "agent": name, "unread": m.unread(aid)})
+        since = sock.query_params.get("since") or sock.headers.get("last-event-id") or "ack"
+        replay = await asyncio.to_thread(wake_events_since, store, aid, since)
+        await sock.send_json({"type": "hello", "agent": name, "unread": m.unread(aid), "replay": len(replay)})
+        for ev in replay:
+            await sock.send_json({"type": "wake"} | ev)
 
         async def pump():
             while True:
@@ -166,7 +179,7 @@ def build_app(store: Store) -> Starlette:
                     ev = sub.get_nowait()
                     await sock.send_json({"type": "wake"} | ev)
                 except queue.Empty:
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.05)
         task = asyncio.create_task(pump())
         try:
             while True:
@@ -174,6 +187,11 @@ def build_app(store: Store) -> Starlette:
                 op = msg.get("op")
                 if op == "heartbeat":
                     await sock.send_json({"type": "presence"} | heartbeat(store, aid, status=msg.get("status"), client="ws"))
+                elif op == "wake_ack":
+                    try:
+                        await sock.send_json({"type": "wake_acked"} | wake_ack(store, aid, str(msg.get("event_id") or "")))
+                    except CommonsError as e:
+                        await sock.send_json({"type": "error", "error": str(e)})
                 elif op == "ack":
                     await sock.send_json({"type": "acked"} | m.ack(aid, msg.get("ids") or []))
                 elif op == "recv":
@@ -193,6 +211,17 @@ def build_app(store: Store) -> Starlette:
             HUB.unsubscribe(aid, sub)
 
     @guard
+    async def wack(req: Request):
+        aid, _ = _me(store)
+        b = await body(req)
+        return JSONResponse({"ok": True} | wake_ack(store, aid, str(b.get("event_id") or "")))
+
+    @guard
+    async def wreplay(req: Request):
+        aid, _ = _me(store)
+        return JSONResponse({"ok": True, "events": wake_events_since(store, aid, req.query_params.get("since") or "ack")})
+
+    @guard
     async def hook(req: Request):
         aid, _name = _me(store)
         b = await body(req)
@@ -201,7 +230,8 @@ def build_app(store: Store) -> Starlette:
                                     b.get("harness", "generic"), b.get("project"))
         return JSONResponse(r)
 
-    routes = [Route("/agent/hook", hook, methods=["POST"])]
+    routes = [Route("/agent/hook", hook, methods=["POST"]), Route("/agent/wake/ack", wack, methods=["POST"]),
+              Route("/agent/wake/replay", wreplay)]
     for prefix in ("/bus", "/agent"):
         routes += [Route(f"{prefix}/send", send, methods=["POST"]), Route(f"{prefix}/recv", recv),
                    Route(f"{prefix}/ack", ack, methods=["POST"]), Route(f"{prefix}/history", history)]

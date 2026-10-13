@@ -18,7 +18,7 @@ def test_bundle_every_platform(plat):
     assert b["url"] == "http://192.168.50.111:8770/mcp"
     ids = [x["id"] for x in b["blocks"]]
     cli = plat in ("claude-code", "codex", "cursor", "gemini")
-    assert ids == (["config", "wake", "prompt", "skill", "verify"] if cli else ["config", "prompt", "skill", "verify"])
+    assert ids == ["config", "wake", "prompt", "skill", "verify"]  # v0.9.3: every platform gets a wake setup
     txt = {x["id"]: x["text"] for x in b["blocks"]}
     if cli:  # v0.9 instant wake: one command installs the agent daemon; the key never goes on the command line
         assert "commons agent daemon --agent grok --preset" in txt["wake"] and "--install" in txt["wake"]

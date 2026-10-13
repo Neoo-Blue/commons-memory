@@ -67,6 +67,7 @@ def add(s: Store, kind: str, text: str, *, project: str | None = None, path: str
          source or ("user" if kind == "ask" else s.label(agent_id)[1] if agent_id else None), agent_id, t, t,
          t if status in ("done", "dropped") else None))
     s.audit(agent_id, "board.add", bid, {"kind": kind, "path": path})
+    notify_mentions(s, bid, text, agent_id)
     return get(s, bid)
 
 
@@ -101,7 +102,30 @@ def update(s: Store, item_id: str, *, status: str | None = None, current: str | 
     sets["updated_at"] = now()
     s.x(f"UPDATE board SET {', '.join(f'{k}=?' for k in sets)} WHERE id=?", (*sets.values(), item_id))
     s.audit(agent_id, "board.update", item_id, {k: v for k, v in sets.items() if k not in ("updated_at", "closed_at")})
+    new_text = " ".join(x for x in (text, current, evidence) if x)
+    if new_text:
+        old = " ".join(x or "" for x in (r.get("text"), r.get("current"), r.get("evidence")))
+        notify_mentions(s, item_id, new_text, agent_id, already=set(MENTION.findall(old)))
     return get(s, item_id)
+
+
+MENTION = re.compile(r"(?<![\w.])@([A-Za-z0-9][A-Za-z0-9_.-]{0,63})")
+
+
+def notify_mentions(s: Store, item_id: str, text: str, agent_id: str | None = None, already: set | None = None) -> list[str]:
+    """Wake every registered agent @mentioned in a board item (once per new mention; never the author)."""
+    from .messaging import emit
+    woke = []
+    for name in dict.fromkeys(MENTION.findall(text or "")):
+        name = name.rstrip(".-")
+        if already and name in already:
+            continue
+        a = s.get_agent(name)
+        if not a or a["id"] == agent_id or a["name"] in ("user", "cli"):
+            continue
+        emit(s, a["id"], "board_mention", ref=item_id, preview=text, sender=s.label(agent_id)[1] if agent_id else None)
+        woke.append(a["name"])
+    return woke
 
 
 def get(s: Store, item_id: str) -> dict:

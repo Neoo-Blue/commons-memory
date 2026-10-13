@@ -119,3 +119,5 @@ COMMONS_LIBRARIAN_INDEX_EVERY	Seconds between full rebuilds of the librarian's "
 COMMONS_QA_DATES	bench qa-*: `iso` prints memory dates as 2023-05-08 (the v0.9.0 style); default "8 May 2023"
 COMMONS_CALL_TIMEOUT	Seconds a remote CLI/worker call to the hub may take before it fails and is retried by the caller (default 300)
 COMMONS_RESOLVE_DATES	Set to 0 to stop annotating relative time words in results with absolute dates from each memory's own date ("yesterday (7 May 2023)")
+COMMONS_WAKE_DEBOUNCE	Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake)
+COMMONS_KEY	Agent key for `commons wake daemon` when no --api-key / key file is given

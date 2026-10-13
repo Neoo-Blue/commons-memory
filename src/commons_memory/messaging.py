@@ -46,7 +46,10 @@ MSG_TYPES = ("message", "task", "question", "review", "fyi", "handoff")
 EVENTS = ("message", "task", "inbox", "handoff", "review", "escalation", "schedule", "test")
 CHANNEL_KINDS = ("webhook", "ntfy", "pushover", "slack", "discord", "telegram", "email", "command")
 ONLINE_S, IDLE_S = 90, 900
-BACKOFF = [2, 8, 30, 120, 600, 1800]  # seconds between webhook attempts; then dead-letter
+BACKOFF = [2, 8, 30, 120, 600, 1800]
+# events that target one agent and carry mailbox work (v0.9.3 instant wake adds assignment, lease, debate and mentions)
+FETCH_EVENTS = ("message", "task", "review", "handoff", "task_assigned", "lease_expired", "debate_turn", "board_mention",
+                "escalation")  # seconds between webhook attempts; then dead-letter
 
 SCHEMA_V7 = """
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, ext_id TEXT, sender TEXT, recipient TEXT,
@@ -95,6 +98,11 @@ class Hub:
     def live(self, agent_id: str) -> int:
         with self.lock:
             return len(self.listeners.get(agent_id, ())) + self.pollers.get(agent_id, 0)
+
+    def streams(self, agent_id: str) -> int:
+        """Open SSE/WebSocket listeners only (the 'instant' wake mode)."""
+        with self.lock:
+            return len(self.listeners.get(agent_id, ()))
 
     def polling(self, agent_id: str, delta: int) -> None:
         with self.lock:
@@ -267,7 +275,7 @@ class Messaging:
     def send(self, sender: str | None, to: str, body: str, *, mtype: str = "message", subject: str = "",
              thread: int | None = None, reply_to: int | None = None, meta: dict | None = None,
              project: str | None = None, ext_id: str | None = None, created_at: float | None = None,
-             wake: bool = True) -> dict:
+             wake: bool = True, event: str | None = None) -> dict:
         if mtype not in MSG_TYPES:
             raise CommonsError(f"type must be one of {', '.join(MSG_TYPES)}")
         body, found = redact(body or "")
@@ -307,7 +315,7 @@ class Messaging:
         except Exception:  # noqa: BLE001 - graph links are best effort
             pass
         if wake:
-            ev = {"task": "task", "review": "review", "handoff": "handoff"}.get(mtype, "message")
+            ev = event or {"task": "task", "review": "review", "handoff": "handoff"}.get(mtype, "message")
             for t in targets:
                 emit(self.s, t, ev, ref=str(mid), preview=(subject or body), sender=self._name(sid), mtype=mtype)
         out = {"id": mid, "thread": thread or mid, "to": self._name(rid), "recipients": len(targets)}
@@ -443,7 +451,18 @@ def presence(s: Store, agent_id: str) -> dict:
     chans = [c["kind"] for c in s.q("SELECT kind FROM wake_channels WHERE agent_id=? AND enabled=1", (agent_id,))]
     wakeable = bool(chans) or live > 0
     seen = bool(r.get("agent_seen"))
-    return {"agent": r["name"], "id": agent_id, "state": state, "status": r.get("status_text") or "",
+    streams = HUB.streams(agent_id)
+    if streams:
+        mode = "instant"  # holds an SSE/WebSocket wake stream open: woken within a second
+    elif HUB.pollers.get(agent_id) or (r.get("client") == "daemon" and age < ONLINE_S):
+        mode = "long-poll"
+    elif chans:
+        mode = "push"  # webhook / ntfy / command channel
+    elif age < IDLE_S:
+        mode = "polling"  # seen recently but nothing to push to: finds work only when it next checks
+    else:
+        mode = "offline"
+    return {"wake_mode": mode, "streams": streams, "agent": r["name"], "id": agent_id, "state": state, "status": r.get("status_text") or "",
             "last_heartbeat": r.get("last_heartbeat"), "live_connections": live, "channels": chans,
             "wakeable": wakeable, "ready": state in ("online", "idle") or wakeable, "client": r.get("client"),
             "seen": seen, "last_seen": r.get("agent_seen") or None}
@@ -611,7 +630,7 @@ def emit(s: Store, agent_id: str, event: str, *, ref: str = "", preview: str = "
         nonce = _secrets.token_hex(12)
         payload = {"event": event, "agent": name, "event_id": eid, "ref": ref,
                    "preview": redact(preview or "")[0][:140], "ts": round(time.time(), 3), "nonce": nonce,
-                   "fetch": "/bus/recv?for=" + urllib.parse.quote(name or "") if event in ("message", "task", "review", "handoff") else None}
+                   "fetch": "/bus/recv?for=" + urllib.parse.quote(name or "") if event in FETCH_EVENTS else None}
         payload |= {k: v for k, v in meta.items() if k in ("sender", "mtype", "job", "subtask", "level") and v}
         status = "coalesced" if recent >= per_min else "pending"
         s.x("INSERT INTO wake_events(id,agent_id,event,ref,preview,payload,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -622,8 +641,14 @@ def emit(s: Store, agent_id: str, event: str, *, ref: str = "", preview: str = "
         p = presence(s, agent_id)
         skip_push = live and os.environ.get("COMMONS_WAKE_PUSH_WHEN_LIVE", "0") != "1"
         n = 0
+        debounce = float(os.environ.get("COMMONS_WAKE_DEBOUNCE", "2"))
+        debounced = 0
         for c in s.q("SELECT id, kind FROM wake_channels WHERE agent_id=? AND enabled=1", (agent_id,)):
             if skip_push:
+                continue
+            if debounce > 0 and s.q("SELECT 1 FROM wake_deliveries WHERE channel_id=? AND status IN ('pending','retry','sending') "
+                                    "AND updated_at>?", (c["id"], now() - debounce)):
+                debounced += 1  # a burst: the wake already queued for this channel covers this event too
                 continue
             if c["kind"] == "command" and p["state"] == "online" and HUB.live(agent_id):
                 continue  # already running and listening
@@ -632,7 +657,7 @@ def emit(s: Store, agent_id: str, event: str, *, ref: str = "", preview: str = "
             n += 1
         if n:
             Dispatcher.kick(s)
-        return {"event_id": eid, "status": "pending", "live": live, "queued": n}
+        return {"event_id": eid, "status": "pending", "live": live, "queued": n} | ({"debounced": debounced} if debounced else {})
     except Exception as e:  # noqa: BLE001
         try:
             s.audit(None, "wake.emit.error", agent_id or "", str(e)[:200])
@@ -807,3 +832,45 @@ class Dispatcher:
                 a[1:])[0]["n"]
         s.x(sql, a)
         return n
+
+
+# ------------------------------------------------------------------ v0.9.3 instant wake: replay + ack
+def _ack_key(agent_id: str) -> str:
+    return f"wake_ack:{agent_id}"
+
+
+def wake_ack(s: Store, agent_id: str, event_id: str) -> dict:
+    """Remember the newest wake event this agent has handled; streams replay everything after it on reconnect."""
+    r = s.q("SELECT created_at FROM wake_events WHERE id=? AND agent_id=?", (event_id, agent_id))
+    if not r:
+        raise CommonsError("unknown wake event for this agent")
+    cur = s.q("SELECT value FROM meta WHERE key=?", (_ack_key(agent_id),))
+    if cur:
+        old = s.q("SELECT created_at FROM wake_events WHERE id=?", (cur[0]["value"],))
+        if old and old[0]["created_at"] > r[0]["created_at"]:
+            return {"acked": cur[0]["value"], "moved": False}
+    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (_ack_key(agent_id), event_id))
+    return {"acked": event_id, "moved": True}
+
+
+def wake_events_since(s: Store, agent_id: str, since: str | None = None, limit: int = 200) -> list[dict]:
+    """Events for this agent after `since` (an event id), or after its last ack when `since` is empty or 'ack'.
+    No ack and no since: nothing (a fresh listener starts from now; unread mail is still in msg_recv)."""
+    if not since or since == "ack":
+        r = s.q("SELECT value FROM meta WHERE key=?", (_ack_key(agent_id),))
+        since = r[0]["value"] if r else None
+    if not since:
+        return []
+    r = s.q("SELECT created_at FROM wake_events WHERE id=? AND agent_id=?", (since, agent_id))
+    if not r:
+        return []
+    rows = s.q("SELECT id, payload, created_at FROM wake_events WHERE agent_id=? AND created_at>=? AND id<>? "
+               "ORDER BY created_at, rowid LIMIT ?", (agent_id, r[0]["created_at"], since, limit))
+    out = []
+    for x in rows:
+        try:
+            p = json.loads(x["payload"] or "{}")
+        except ValueError:
+            continue
+        out.append(p | {"replay": True})
+    return out

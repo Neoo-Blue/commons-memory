@@ -204,17 +204,49 @@ def bundle(platform: str, url: str, agent: str = "my-agent", key: str | None = N
               {"id": "skill", "title": "Install the Commons skill (optional, teaches the routine locally)",
                "lang": "bash", "text": skill_command(platform, agent)},
               {"id": "verify", "title": "Verify (prints OK)", "lang": "bash", "text": verify_command(url, key)}]
-    preset = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor"}.get(platform)
-    if preset:
-        base = url.rstrip("/").removesuffix("/mcp")
-        blocks.insert(1, {"id": "wake", "title": "Instant wake (recommended): starts this agent within a second whenever "
-                          "Commons assigns it work or another agent summons it",
-                          "lang": "bash", "text": f"commons agent daemon --agent {agent} --preset {preset} --url {base} "
-                          f"--install\n# the key is read from ~/.commons/agents/{agent}.key; --print-unit shows the "
-                          "service file instead of installing it"})
+    blocks.insert(1, wake_block(platform, url, agent))
     return {"platform": platform, "label": label, "hint": hint, "url": url, "agent": agent, "project": project,
             "key_included": bool(key), "blocks": blocks, "troubleshooting": TROUBLESHOOTING,
             "platforms": {k: v[0] for k, v in PLATFORMS.items()}, "version": __version__}
+
+
+WAKE_CLI = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor-agent"}
+
+
+def wake_block(platform: str, url: str, agent: str) -> dict:
+    """v0.9.3 instant wake setup for one platform: woken within ~1 s of a message, assignment, lease, debate turn or
+    board @mention, instead of polling. Works on plain LAN/tailnet HTTP; the client dials out, nothing is exposed."""
+    base = url.rstrip("/").removesuffix("/mcp")
+    key = f"~/.commons/agents/{agent}.key"
+    title = "Instant wake (recommended): wakes this agent within a second of new work, no polling"
+    if platform in WAKE_CLI:
+        cli = WAKE_CLI[platform]
+        text = (f"# save the agent key once:  install -m600 /dev/stdin {key}  (paste key, Ctrl-D)\n"
+                f"# A) interactive session: run {cli} inside a PTY that Commons types wake prompts into\n"
+                f"commons wake daemon --agent {agent} --url {base} --pty '{cli}'\n"
+                f"# B) already running in tmux: inject into that pane\n"
+                f"commons wake daemon --agent {agent} --url {base} --tmux {agent}:0\n"
+                f"# C) headless: start a fresh run per wake (events JSON on stdin)\n"
+                f"commons wake daemon --agent {agent} --url {base} --exec '{cli} -p \"$COMMONS_WAKE_PROMPT\"'\n"
+                f"# keep C running as a service: commons agent daemon --agent {agent} --preset "
+                f"{ {'cursor-agent': 'cursor'}.get(cli, cli)} --url {base} --install\n"
+                "# presence then shows wake_mode=instant; stop polling loops / 'check every 5 minutes' crons")
+    elif platform == "chatgpt":
+        text = (f"# an always-on HTTP agent: hold the SSE stream (reconnect with Last-Event-ID; missed events replay)\n"
+                f"curl -N -H \"Authorization: Bearer $(cat {key})\" {base}/agent/stream\n"
+                f"# ack what you handled:  curl -X POST -H 'Authorization: Bearer ...' -d '{{\"event_id\":\"wev_...\"}}' "
+                f"{base}/agent/wake/ack\n"
+                f"# or WebSocket {base.replace('http', 'ws', 1)}/agent/ws, or a signed webhook with retries: "
+                f"commons connect {agent} --wake webhook:url=https://your-host/hook")
+    elif platform == "docker":
+        text = (f"# on the agent's machine (any OS with Python 3.10+):\npip install commons-memory\n"
+                f"commons wake daemon --agent {agent} --url {base} --exec './on-wake.sh'")
+    else:
+        text = (f"# chat-only AIs can't run while idle. Wake them by push instead:\n"
+                f"commons connect {agent} --wake ntfy:topic={agent}-wake   # phone/desktop push\n"
+                f"# or run any script on wake from an always-on machine:\n"
+                f"commons wake daemon --agent {agent} --url {base} --exec 'your-command'")
+    return {"id": "wake", "title": title, "lang": "bash", "text": text}
 
 
 def render_text(b: dict) -> str:

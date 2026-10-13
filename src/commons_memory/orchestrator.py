@@ -362,6 +362,10 @@ class Orchestrator:
             used[best[1]["id"]] = used.get(best[1]["id"], 0) + 1
             self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (best[1]["id"], st["id"]))
             self.s.relate(st["id"], best[1]["id"], "assigned_to")
+            if not self._deps_ok(st):  # ready work is mailed (and woken) by _wake_ready below; heads-up for the rest
+                from .messaging import emit
+                emit(self.s, best[1]["id"], "task_assigned", ref=st["id"], preview=st["title"] or "",
+                     job=job_id, subtask=st["id"])
         self._wake_ready(job_id)
 
     def _wake_ready(self, job_id: str) -> None:
@@ -377,9 +381,10 @@ class Orchestrator:
                 continue
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, st["assigned_agent"]))
             kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
-            Messaging(self.s).send(None, st["assigned_agent"], f"{kind} ready: {st['title']} (job {job_id}). "
-                                   f"Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
-                                   subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"]})
+            ev = "debate_turn" if st["type"] == "debate" else None
+            Messaging(self.s).send(None, st["assigned_agent"], f"{'debate turn' if ev else kind} ready: {st['title']} "
+                                   f"(job {job_id}). Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
+                                   subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"]}, event=ev)
 
     # ---------------------------------------------------------------- claims
     def claimable(self, agent_id: str, limit: int = 10) -> list[dict]:
@@ -505,6 +510,9 @@ class Orchestrator:
             if not won:
                 continue
             self.profiles.record_outcome(st["claimed_by"], st["type"], False, subtask_id=st["id"], note="lease timeout")
+            from .messaging import emit
+            emit(self.s, st["claimed_by"], "lease_expired", ref=st["id"], preview=f"lease expired: {st['title'] or ''}",
+                 job=st["job_id"], subtask=st["id"])  # the old holder learns at once that it no longer owns this
             if st["attempts"] >= st["max_attempts"]:
                 self._fail(st["id"], "lease expired too many times")
             else:
