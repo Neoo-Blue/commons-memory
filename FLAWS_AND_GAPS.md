@@ -119,7 +119,7 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 ### Still open after v0.9
 | Risk / gap | Why |
 |---|---|
-| LongMemEval QA | 62% on a 100-question sample (hits only); not yet re-run with context and date resolution, and no rival was run on it here. |
+| LongMemEval QA | 67% on a 100-question sample at v0.20.1 (62% at v0.9). Neighbouring-turn context drops it to 57% (temporal 63% -> 30%) because its turns are long, so `--neighbors` helps short-turn logs (LoCoMo +9) and hurts long sessions; no rival was run on it here. |
 | Context costs reader tokens | `context=2` lifted LoCoMo QA from 69.5% to 78.8% (beating mem0 70.3% in every category) but gives the reader ~2.5x more text; `context=0` stays the default for search. |
 | Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
 | Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |

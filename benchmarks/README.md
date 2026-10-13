@@ -33,8 +33,12 @@ That table is hits alone. With the reader also given each hit's neighbouring tur
 (`--neighbors 2`), the same run scores **78.8%** (multi-hop 64.2, temporal 77.3, open-domain 43.8, single-hop 88.2);
 see the head-to-head below. Published figures use other readers and judges (mem0's paper: gpt-4o-mini, mem0 66.9%, Zep 66.0%, full-context
 72.9%), so they are not comparable; the head-to-head below runs mem0 here instead. LongMemEval-S QA on a seeded
-100-question sample, same reader/judge: **62.0%** ($0.35; strongest on single-session-user 94%, weakest on
-single-session-assistant 45% and multi-session 50%).
+100-question sample, same reader/judge: **67.0%** at v0.20.1 ($0.35; v0.9 scored 62.0% on the same sample), with date
+resolution lifting temporal reasoning from 53% to 63%; strongest on single-session-user 94%, weakest on
+single-session-assistant 45% and multi-session 55%. Neighbouring turns, which add 9 points on LoCoMo, cost 10 here
+(57.0%, temporal 30%): LongMemEval's turns are already long user + assistant pairs, so the extra turns bury the dated
+hit. Use `--neighbors` (and `search(context=N)`) for short-turn chat logs, not for long sessions. Results:
+[`results/v0.20.1/`](results/v0.20.1/).
 
 ### Head-to-head: the rivals run here, same data, same metric (2026-10-12)
 Every system ingested the same LoCoMo turns on the same machine. Harnesses are in [`rivals/`](rivals/), per-question

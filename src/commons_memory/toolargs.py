@@ -33,6 +33,7 @@ ALIASES: dict[str, list[str]] = {
     "anchor": ["id", "item_id", "around"],
     "kind": ["type", "category"],
     "as_of": ["asof", "at_time", "when"],
+    "next_steps": ["next", "todo", "todos"],
 }
 
 
