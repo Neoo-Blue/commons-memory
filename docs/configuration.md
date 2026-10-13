@@ -50,7 +50,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, cli_v7.py, expose.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, cli_v7.py, expose.py, wakeclient.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING_MAX` | `5` | Max consecutive keep-working rounds per session before a Stop is allowed (default 5) | capture.py |
@@ -64,6 +64,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_KB_MAX_STALE` | `600` | Seconds a dirty knowledge-base bucket may stay stale while writes keep arriving (default 600); otherwise it rebuilds after COMMONS_KB_DEBOUNCE seconds of quiet | kb.py |
 | `COMMONS_KB_MIN_TRUST` | `0.2` | Minimum author trust for a record to be cited in the KB | kb.py |
 | `COMMONS_KB_SUMMARIZER` | — | Shell command that post-processes each KB section (markdown on stdin/stdout) | kb.py |
+| `COMMONS_KEY` | — | Agent key for `commons wake daemon` when no --api-key / key file is given | wakeclient.py |
 | `COMMONS_LEASE_SECONDS` | `900` | Default subtask lease; expired leases are reassigned | orchestrator.py |
 | `COMMONS_LIBRARIAN_AUTO_APPROVE` | — | Apply librarian proposals without review (`1`) | librarian.py |
 | `COMMONS_LIBRARIAN_BUDGET` | `0.10` | USD budget per librarian run when it delegates to an LLM | librarian.py |
@@ -124,8 +125,9 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
 | `COMMONS_TYPESAFE_MODEL` | `jev-latest` | TypeSafe model (default jev-latest) | typesafe.py |
 | `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
-| `COMMONS_URL` | — | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py |
+| `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, wakeclient.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
+| `COMMONS_WAKE_DEBOUNCE` | `2` | Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake) | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |
 | `COMMONS_WAKE_PUSH_WHEN_LIVE` | `0` | Also push wakes to agents already connected live (`1`) | messaging.py |
 | `COMMONS_WAKE_SYNC` | — | Deliver wakes synchronously (tests/debugging) | messaging.py |

@@ -127,3 +127,5 @@ COMMONS_QUOTA_RESERVE_5H	User reserve for 5-hour windows, % (default COMMONS_QUO
 COMMONS_QUOTA_RESERVE_WEEKLY	User reserve for weekly windows, % (default COMMONS_QUOTA_RESERVE)
 COMMONS_QUOTA_TASK_PCT	Assumed % of a window one subtask uses until Commons has learned that agent/task type (default 5)
 COMMONS_QUOTA_BACKOFF	Seconds to park work when an agent hits its limit without a known reset time (default 3600)
+COMMONS_WAKE_DEBOUNCE	Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake)
+COMMONS_KEY	Agent key for `commons wake daemon` when no --api-key / key file is given

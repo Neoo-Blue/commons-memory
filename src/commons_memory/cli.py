@@ -386,6 +386,9 @@ def _main(argv: list[str] | None = None) -> int:
     from .cli_v8 import handle_nostore
     v8_parsers(sub)
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:2] == ["wake", "daemon"]:  # v0.9.3 instant wake: a stream client, needs no local database
+        from .wakeclient import main as wake_main
+        return wake_main(argv[2:])
     tail = None
     if "secret-exec" in argv and "--" in argv[argv.index("secret-exec"):]:
         # argparse's handling of "--" before a nargs="*" positional differs across Python versions; split it ourselves

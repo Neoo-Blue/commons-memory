@@ -61,6 +61,8 @@ def add_parsers(sub) -> None:
     x.add_argument("id")
     x = ws.add_parser("test")
     x.add_argument("agent")
+    ws.add_parser("daemon", help="instant wake: hold the agent's wake stream open and run a command / inject into a "
+                  "tmux pane or PTY on every event (see `commons wake daemon --help`)", add_help=False)
     ws.add_parser("dead")
     x = ws.add_parser("redrive")
     x.add_argument("id", nargs="?")
@@ -353,7 +355,7 @@ def handle(args, store) -> int:  # noqa: C901
         from .messaging import board
         for a in board(store):
             print(f"{a.get('agent', '?'):<20} {a.get('state', '?'):<9} seen {_ago(a.get('last_seen') or a.get('last_heartbeat')):<10} "
-                  f"{'wakeable' if a.get('wakeable') else '-':<9} channels {len(a.get('channels') or [])}  {a.get('status') or ''}")
+                  f"{'wakeable' if a.get('wakeable') else '-':<9} {a.get('wake_mode', '-'):<9} channels {len(a.get('channels') or [])}  {a.get('status') or ''}")
     elif c == "wake":
         from .messaging import Channels, Dispatcher, emit
         ch = Channels(store)
