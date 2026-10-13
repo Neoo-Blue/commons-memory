@@ -10,7 +10,7 @@ def test_pool_skills_appear_in_every_client_without_touching_the_users_own(tmp_p
               {"name": "mine", "description": "pool skill with the user's name", "version": 1}]
     r = SS.write(skills, [str(claude), str(agents)])
     ptr = (claude / "deploy-nas" / "SKILL.md").read_text()
-    assert ptr.startswith("---\nname: deploy-nas\ndescription: Deploy a container") and 'skill_get(name="deploy-nas")' in ptr
+    assert ptr.startswith('---\nname: deploy-nas\ndescription: "Deploy a container') and 'skill_get(name="deploy-nas")' in ptr
     assert (agents / "deploy-nas" / "SKILL.md").exists()
     assert (claude / "mine" / "SKILL.md").read_text() == "my own skill" and str(claude / "mine") in r["left_alone"]
     assert SS.write(skills, [str(claude)])["wrote"] == []                       # unchanged versions: nothing to do
@@ -34,3 +34,12 @@ def test_session_start_delivers_the_skill_index_and_start_work_suggests_skills(s
     assert any(sk["name"] == "deploy-nas" for sk in res["skills"])
     r = W.start(store, a, "Deploy the new container to the Synology NAS", project="home")
     assert any(sk["name"] == "deploy-nas" for sk in r["skills"])
+
+
+def test_a_changed_description_rewrites_the_pointer_and_hash_descriptions_are_quoted(tmp_path):
+    d = tmp_path / "skills"
+    d.mkdir()
+    SS.write([{"name": "x", "description": "# heading", "version": 1}], [str(d)])
+    assert 'description: "# heading"' in (d / "x" / "SKILL.md").read_text()      # quoted: not a YAML comment
+    SS.write([{"name": "x", "description": "Bind services to the tailnet IP", "version": 1}], [str(d)])
+    assert "Bind services to the tailnet IP" in (d / "x" / "SKILL.md").read_text()  # same version, new text

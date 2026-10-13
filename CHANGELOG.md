@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.19.1: better skill pointers
+- A pool skill whose stored description is empty or a markdown heading gets its description from its own front matter;
+  descriptions are quoted (a leading # read as a YAML comment), and a pointer is rewritten whenever its content changes.
+
 ## v0.19.0: MCP prompts and resources, skills in every AI, and hub approvals through the decision agent
 - **Slash commands and resources.** Commons' MCP server now offers prompts, which clients show as slash commands
   (`checkin`, `start <task>`, `handover`, `wrapup`, `whats_new`, `remember <fact>`), and resources a client can attach

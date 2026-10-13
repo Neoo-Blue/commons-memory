@@ -17,15 +17,21 @@ MARK = ".commons-skill"
 
 def index(s) -> list[dict]:
     """Active pool skills, for the session-start hook response."""
+    from .skillpool import parse_front_matter
     out = []
-    for r in s.q("SELECT name, description, active_version FROM skills WHERE active_version IS NOT NULL ORDER BY name"):
-        out.append({"name": r["name"], "description": (r["description"] or "")[:300], "version": r["active_version"]})
+    for r in s.q("SELECT id, name, description, active_version FROM skills WHERE active_version IS NOT NULL ORDER BY name"):
+        desc = (r["description"] or "").strip()
+        if not desc or desc.startswith("#"):  # a heading or nothing: use the skill's own front matter instead
+            v = s.q("SELECT content FROM skill_versions WHERE skill_id=? AND version=?", (r["id"], r["active_version"]))
+            fm = parse_front_matter(v[0]["content"]) if v else {}
+            desc = (fm.get("description") or desc.lstrip("# ").strip() or f"Commons skill {r['name']}")
+        out.append({"name": r["name"], "description": " ".join(desc.split())[:300], "version": r["active_version"]})
     return out[:200]
 
 
 def _pointer(sk: dict) -> str:
     desc = " ".join((sk.get("description") or f"Commons skill {sk['name']}").split()).replace('"', "'")
-    return (f"---\nname: {sk['name']}\ndescription: {desc}\n---\n\n"
+    return (f"---\nname: {sk['name']}\ndescription: \"{desc}\"\n---\n\n"
             f"This skill lives in the Commons skill pool (version {sk['version']}). Load the full skill with "
             f"skill_get(name=\"{sk['name']}\") (through call('skill_get', {{\"name\": \"{sk['name']}\"}}) if it isn't in "
             "your tool list), follow it, then skill_rate(name, success).\n")
@@ -43,10 +49,11 @@ def write(skills: list[dict], dirs: list[str] | None = None) -> dict:
             if folder.exists() and not (folder / MARK).exists():
                 kept.append(str(folder))  # the user's own skill with that name: never overwritten
                 continue
-            if (folder / MARK).exists() and (folder / MARK).read_text().strip() == str(sk["version"]):
-                continue
+            text = _pointer(sk)
+            if (folder / MARK).exists() and (folder / "SKILL.md").exists() and (folder / "SKILL.md").read_text() == text:
+                continue  # already current (version and description)
             folder.mkdir(exist_ok=True)
-            (folder / "SKILL.md").write_text(_pointer(sk))
+            (folder / "SKILL.md").write_text(text)
             (folder / MARK).write_text(str(sk["version"]))
             wrote.append(str(folder))
         for folder in root.iterdir():
