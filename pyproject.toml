@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=24"]
 build-backend = "hatchling.build"
 
 [project]
 name = "commons-memory"
-version = "0.22.0"
+version = "0.22.1"
 description = "Unified cross-AI memory: one MCP hub for shared memory, code graph, handoffs, reasoning logs and safe secret references."
-readme = "README.md"
+dynamic = ["readme"]
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Neoo-Blue" }]
@@ -31,6 +31,30 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout>=2"]
 
 [project.scripts]
 commons = "commons_memory.cli:main"
+commons-memory = "commons_memory.cli:main"  # so `uvx commons-memory` works with no --from
+
+[project.urls]
+Homepage = "https://github.com/Neoo-Blue/commons-memory"
+Changelog = "https://github.com/Neoo-Blue/commons-memory/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Neoo-Blue/commons-memory/issues"
+
+# PyPI renders the README without the repo next to it: make its relative links and images absolute
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '!\[([^\]]*)\]\((?!https?://)([^)]+)\)'
+replacement = '![\1](https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/\2)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)]+)\)'
+replacement = '](https://github.com/Neoo-Blue/commons-memory/blob/main/\1)'
+
+[tool.hatch.build.targets.sdist]  # benchmark results and screenshots stay on GitHub; the README links to them
+exclude = ["benchmarks/results", "docs/screenshots", "docs/img", ".github", "dist"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/commons_memory"]

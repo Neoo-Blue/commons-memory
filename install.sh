@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.sh | sh
 # Options (env): COMMONS_VERSION=v0.7.1  COMMONS_EXTRAS=http,embed (comma list or "all")  COMMONS_NO_INIT=1
 #                COMMONS_INSTALLER=uv|pipx|pip (force a method)
-# Installs the `commons` CLI from the GitHub release (wheel), runs `commons init`, prints next steps.
+# Installs the `commons` CLI (PyPI, else the GitHub release wheel, else git), runs `commons init`, prints next steps.
 set -eu
 REPO="Neoo-Blue/commons-memory"
 EXTRAS="${COMMONS_EXTRAS:-http,embed}"
@@ -17,12 +17,13 @@ if [ -z "$VER" ]; then
   VER=$(fetch "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1) || true
 fi
+# Sources, tried in order until one installs: PyPI, the release's wheel, the release tag from git.
 if [ -n "$VER" ]; then
   N=${VER#v}
-  SPEC="commons-memory[$EXTRAS] @ https://github.com/$REPO/releases/download/$VER/commons_memory-$N-py3-none-any.whl"
+  SPECS="commons-memory[$EXTRAS]==$N|commons-memory[$EXTRAS] @ https://github.com/$REPO/releases/download/$VER/commons_memory-$N-py3-none-any.whl|commons-memory[$EXTRAS] @ git+https://github.com/$REPO@$VER"
 else
-  say "could not resolve the latest release (rate-limited?); installing from main"
-  SPEC="commons-memory[$EXTRAS] @ git+https://github.com/$REPO"
+  say "could not resolve the latest release (rate-limited?); trying PyPI, then main"
+  SPECS="commons-memory[$EXTRAS]|commons-memory[$EXTRAS] @ git+https://github.com/$REPO"
 fi
 
 PY=""
@@ -34,23 +35,38 @@ METHOD="${COMMONS_INSTALLER:-}"
 if [ -z "$METHOD" ]; then
   if have uv; then METHOD=uv; elif have pipx; then METHOD=pipx; elif [ -n "$PY" ]; then METHOD=pip; else METHOD=uv-bootstrap; fi
 fi
-say "installing ${VER:-main} via $METHOD"
+say "installing ${VER:-the latest} via $METHOD"
+PYARG=""
 case "$METHOD" in
   uv-bootstrap)
     say "no uv/pipx/Python 3.10+ found; installing uv (https://astral.sh/uv)"
     fetch https://astral.sh/uv/install.sh | sh
     PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; export PATH
-    uv tool install --force --python 3.12 "$SPEC" ;;
-  uv)   uv tool install --force "$SPEC" ;;
-  pipx) pipx install --force "$SPEC" ;;
+    METHOD=uv; PYARG="--python 3.12" ;;
+  uv|pipx) ;;
   pip)
     VENV="${COMMONS_VENV:-$HOME/.commons/venv}"
     "$PY" -m venv "$VENV" || die "python venv failed (Debian/Ubuntu: apt install python3-venv)"
-    "$VENV/bin/python" -m pip install -q --upgrade pip
-    "$VENV/bin/python" -m pip install -q "$SPEC"
-    mkdir -p "$HOME/.local/bin"; ln -sf "$VENV/bin/commons" "$HOME/.local/bin/commons" ;;
+    "$VENV/bin/python" -m pip install -q --upgrade pip ;;
   *) die "unknown COMMONS_INSTALLER=$METHOD" ;;
 esac
+install_spec() {
+  case "$METHOD" in
+    uv)   uv tool install --force $PYARG "$1" ;;
+    pipx) pipx install --force "$1" ;;
+    pip)  "$VENV/bin/python" -m pip install -q "$1" && mkdir -p "$HOME/.local/bin" \
+            && ln -sf "$VENV/bin/commons" "$HOME/.local/bin/commons" ;;
+  esac
+}
+OK=""; OLDIFS=$IFS; IFS='|'
+for SPEC in $SPECS; do
+  IFS=$OLDIFS
+  if install_spec "$SPEC"; then OK=1; break; fi
+  say "not from ${SPEC#*@ }; trying the next source"
+  IFS='|'
+done
+IFS=$OLDIFS
+[ -n "$OK" ] || die "could not install commons-memory from PyPI, the release wheel or git"
 
 PATH="$HOME/.local/bin:$PATH"; export PATH
 have commons || die "installed, but 'commons' is not on PATH; add ~/.local/bin to PATH"

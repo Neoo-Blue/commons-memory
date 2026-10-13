@@ -9,10 +9,13 @@ function Have($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 
 $Ver = $env:COMMONS_VERSION
 if (-not $Ver) { try { $Ver = (Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest").tag_name } catch { $Ver = $null } }
+# Sources, tried in order until one installs: PyPI, the release's wheel, the release tag from git.
 if ($Ver) {
   $N = $Ver.TrimStart('v')
-  $Spec = "commons-memory[$Extras] @ https://github.com/$Repo/releases/download/$Ver/commons_memory-$N-py3-none-any.whl"
-} else { Say 'could not resolve latest release; installing from main'; $Spec = "commons-memory[$Extras] @ git+https://github.com/$Repo" }
+  $Specs = @("commons-memory[$Extras]==$N",
+             "commons-memory[$Extras] @ https://github.com/$Repo/releases/download/$Ver/commons_memory-$N-py3-none-any.whl",
+             "commons-memory[$Extras] @ git+https://github.com/$Repo@$Ver")
+} else { Say 'could not resolve latest release; trying PyPI, then main'; $Specs = @("commons-memory[$Extras]", "commons-memory[$Extras] @ git+https://github.com/$Repo") }
 
 $Py = $null
 foreach ($c in 'py', 'python', 'python3') {
@@ -20,26 +23,39 @@ foreach ($c in 'py', 'python', 'python3') {
 }
 $Method = $env:COMMONS_INSTALLER
 if (-not $Method) { $Method = if (Have 'uv') { 'uv' } elseif (Have 'pipx') { 'pipx' } elseif ($Py) { 'pip' } else { 'uv-bootstrap' } }
-Say "installing $(if ($Ver) { $Ver } else { 'main' }) via $Method"
+Say "installing $(if ($Ver) { $Ver } else { 'the latest' }) via $Method"
+$PyArg = @()
 switch ($Method) {
   'uv-bootstrap' {
     Say 'no uv/pipx/Python 3.10+ found; installing uv (https://astral.sh/uv)'
     Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
-    uv tool install --force --python 3.12 $Spec
+    $Method = 'uv'; $PyArg = @('--python', '3.12')
   }
-  'uv'   { uv tool install --force $Spec }
-  'pipx' { pipx install --force $Spec }
-  'pip'  {
+  'uv' {}
+  'pipx' {}
+  'pip' {
     $Venv = if ($env:COMMONS_VENV) { $env:COMMONS_VENV } else { "$env:USERPROFILE\.commons\venv" }
     & $Py -m venv $Venv
     & "$Venv\Scripts\python.exe" -m pip install -q --upgrade pip
-    & "$Venv\Scripts\python.exe" -m pip install -q $Spec
-    $Bin = "$env:USERPROFILE\.local\bin"; New-Item -ItemType Directory -Force $Bin | Out-Null
-    Set-Content "$Bin\commons.cmd" "@`"$Venv\Scripts\commons.exe`" %*"
-    $env:Path = "$Bin;$env:Path"
   }
   default { throw "unknown COMMONS_INSTALLER=$Method" }
+}
+$Ok = $false
+foreach ($Spec in $Specs) {
+  switch ($Method) {
+    'uv'   { uv tool install --force @PyArg $Spec }
+    'pipx' { pipx install --force $Spec }
+    'pip'  { & "$Venv\Scripts\python.exe" -m pip install -q $Spec }
+  }
+  if ($LASTEXITCODE -eq 0) { $Ok = $true; break }
+  Say "not from $(($Spec -split '@ ')[-1]); trying the next source"
+}
+if (-not $Ok) { throw 'could not install commons-memory from PyPI, the release wheel or git' }
+if ($Method -eq 'pip') {
+  $Bin = "$env:USERPROFILE\.local\bin"; New-Item -ItemType Directory -Force $Bin | Out-Null
+  Set-Content "$Bin\commons.cmd" "@`"$Venv\Scripts\commons.exe`" %*"
+  $env:Path = "$Bin;$env:Path"
 }
 if (-not (Have 'commons')) { throw "installed, but 'commons' is not on PATH; add $env:USERPROFILE\.local\bin to PATH" }
 Say "installed $(commons --version)"

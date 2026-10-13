@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.22.1: ready for PyPI, and the one-line installer works again
+- **The one-line installer was broken since v0.9.0.** It downloads the wheel attached to the latest GitHub release,
+  and releases since v0.9.0 had none, so `curl ... install.sh | sh` failed with a 404. Releases now get their wheel
+  and sdist attached by the release workflow (v0.22.0 was backfilled), and both installers try PyPI, then the release
+  wheel, then the release tag from git, so one missing source can't break an install again.
+- **PyPI packaging.** A trusted-publishing workflow (no token stored) publishes every release to PyPI once the project
+  is registered there; `uvx commons-memory` and `pipx install commons-memory` then work without git. A
+  `commons-memory` command joins `commons`, the PyPI page gets absolute links and images, and the sdist drops the
+  benchmark results and screenshots (12.6 MB to 0.7 MB).
+
 ## v0.22.0: the job workspace (one place for everything the agents did)
 - **A folder per job.** Every job gets `/jobs/<job>/` in Commons Drive. Each part's result lands there
   (`<part>/result.md`), and agents can add files of their own. Drive keeps every version and redacts secrets.
