@@ -12,7 +12,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
 | `COMMONS_AGENT_JUDGE_WAIT` | `90` | Seconds Commons waits for a connected agent to answer a credential judgment (agent:any / agent:NAME in the decision chain) before moving on (default 90) | vault.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
-| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, server.py |
+| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, server.py, setup.py |
 | `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
 | `COMMONS_BACKUP_DIR` | — | Backup directory (default `~/.commons/backups`) | retention.py |
@@ -53,6 +53,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
 | `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | capture.py, cli_v7.py, expose.py, setup.py, wakeclient.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
+| `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING_MAX` | `5` | Max consecutive keep-working rounds per session before a Stop is allowed (default 5) | capture.py |
 | `COMMONS_HOOK_RECALL_SIM` | `0.6` | Min similarity for prompt-time recall snippets injected by hooks | capture.py |

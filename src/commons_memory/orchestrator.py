@@ -124,6 +124,14 @@ class Profiles:
         return sorted([x for x in out if x[0] > -1e8], key=lambda x: -x[0])
 
 
+def _ws(s: Store, st: dict) -> dict:
+    from . import workspace as W
+    try:
+        return W.packet_view(s, st)
+    except Exception as e:  # noqa: BLE001 - never fail a claim over the workspace view
+        return {"folder": W.folder(st["job_id"]), "error": str(e)[:120]}
+
+
 # ============================================================================ planner
 def _items(text: str) -> list[str]:
     items = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", ln).strip() for ln in text.splitlines()
@@ -637,6 +645,7 @@ class Orchestrator:
                 "lease_expires": iso(st["lease_expires"]), "budget": json.loads(st["budget"] or "{}"),
                 "dependency_results": dep_results, "preferences": prefs["text"], "project": project,
                 "related_memory": ctx, "is_gate": bool(st["gate_of"]),
+                "workspace": _ws(self.s, st),
                 "split": "Too big for one sitting, or parts others do better? split_subtask(subtask_id, parts) "
                          "hands them out and you merge the results.",
                 "protocol": "Return your result. Gate tasks (review/red_team/test/vote) must include a line "
@@ -737,17 +746,34 @@ class Orchestrator:
         return out
 
     # ---------------------------------------------------------------- completion & gates
-    def complete(self, subtask_id: str, agent_id: str, result: str, **kw) -> dict:
+    def complete(self, subtask_id: str, agent_id: str, result: str, changes: dict | None = None, **kw) -> dict:
         """Finish a claimed subtask. Runs under the store lock so the reaper, a late heartbeat or a parallel
-        completion of a sibling (job budget read-modify-write) can't interleave with it."""
+        completion of a sibling (job budget read-modify-write) can't interleave with it. changes: what the agent
+        changed in code ({repo, branch, commit, diff}); it lands in the job's workspace with the result."""
         with self.s.lock:
             prev, self.s.defer_embed = self.s.defer_embed, True  # embed after the lock: ONNX stalls every agent
             try:
                 out = self._complete(subtask_id, agent_id, result, **kw)
             finally:
                 self.s.defer_embed = prev
+        if kw.get("success", True):  # after the lock: the commit check is a network call
+            out["workspace"] = self._to_workspace(subtask_id, agent_id, result, changes)
         if not prev:
             self.s.reindex(limit=8)  # newest first: the result memory just written
+        return out
+
+    def _to_workspace(self, subtask_id: str, agent_id: str, result: str, changes: dict | None) -> dict:
+        from . import workspace as W
+        st = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0])
+        out = {"folder": f"{W.folder(st['job_id'])}/{W._safe(st['key'])}"}
+        try:
+            W.save_result(self.s, st, agent_id, result or "")
+            if changes:
+                out |= W.record_changes(self.s, agent_id, subtask=st, source="agent",
+                                        **{k: changes.get(k) or "" for k in ("repo", "branch", "commit", "diff", "stat")})
+        except Exception as e:  # noqa: BLE001 - the subtask is done either way; the workspace is a record of it
+            self.s.audit(agent_id, "workspace.error", subtask_id, str(e)[:200])
+            out["error"] = str(e)[:200]
         return out
 
     def _complete(self, subtask_id: str, agent_id: str, result: str, *, verdict: str | None = None,

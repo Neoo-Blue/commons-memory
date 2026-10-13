@@ -219,12 +219,33 @@ class Capture:
                 self.verbatim(agent_id, project, skey, harness, "assistant", reply)
         out = {"ok": True} | self.flush(agent_id, pid, skey, harness, strip_private(payload.get("transcript_tail", "")),
                                         final=event != "stop", reason=event)
+        if isinstance(payload.get("git"), dict):
+            out["changes"] = self.changes(agent_id, skey, payload["git"])
         if event == "stop" and payload.get("keep_working"):
             mx = payload["keep_working"] if isinstance(payload["keep_working"], int) and payload["keep_working"] > 1 else None
             reason = self.keep_working(agent_id, skey, mx)
             if reason:
                 out["block"] = reason
         return out
+
+    def changes(self, agent_id: str, skey: str, git: dict) -> dict:
+        """The hook saw code changes in the agent's working copy: keep them with the subtask it holds, else its open
+        work claim, else this session, so an agent that forgets to report them loses nothing."""
+        from . import settings
+        from . import workspace as W
+        if not settings.get(self.s, "capture_diffs"):
+            return {}
+        sub = self.s.q("SELECT * FROM subtasks WHERE claimed_by=? AND status='claimed' ORDER BY started_at DESC LIMIT 1",
+                       (agent_id,))
+        claim = None if sub else self.s.q("SELECT id FROM work_claims WHERE agent_id=? AND status='active' "
+                                          "ORDER BY started_at DESC LIMIT 1", (agent_id,))
+        try:
+            return W.record_changes(self.s, agent_id, subtask=dict(sub[0]) if sub else None,
+                                    claim=claim[0]["id"] if claim else None, session=None if sub or claim else skey,
+                                    source="hook", untracked=[str(x) for x in git.get("untracked") or []][:100],
+                                    **{k: str(git.get(k) or "") for k in ("repo", "branch", "commit", "diff", "stat")})
+        except Exception as e:  # noqa: BLE001 - never fail a hook over this
+            return {"error": str(e)[:200]}
 
     def verbatim(self, agent_id, project, skey, harness, role, text) -> str | None:
         """Everything said is memory: the user's messages and the agent's replies are stored word for word (searchable;
@@ -468,12 +489,15 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     event = HARNESS_EVENTS.get(harness, {}).get(hevent) or (hevent if hevent in EVENTS else None)
     if not event:
         return ""
+    sid = str(payload.get("session_id") or payload.get("conversation_id") or "")
+    cwd = payload.get("cwd") or os.getcwd()
     if event == "session_start":
         try:  # keep the always-loaded Commons instructions in step with the installed version
             from .instructions import refresh
             refresh()
         except Exception:  # noqa: BLE001 - never block a session over this
             pass
+        git_changes(cwd, sid, start=True)  # remember where the session began, so its commits count too
     for k in ("prompt", "text"):
         if isinstance(payload.get(k), str):
             payload[k] = strip_private(payload[k])
@@ -482,6 +506,10 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         raw = strip_private(payload.get("last_assistant_message") or payload.get("prompt_response") or "")
         payload["transcript_tail"] = strip_private("\n".join(f"{r}: {c}" for r, c in msgs))[-12000:] or raw
         payload["replies"] = [strip_private(c) for r, c in msgs if r == "assistant"] or ([raw] if raw.strip() else [])
+    if event in ("stop", "session_end"):
+        g = git_changes(cwd, sid)
+        if g:
+            payload["git"] = g
     payload.pop("transcript_path", None)
     payload.setdefault("project", project_from_cwd(payload.get("cwd") or os.getcwd()))
     if event == "stop" and os.environ.get("COMMONS_HOOK_KEEP_WORKING") == "1":
@@ -501,6 +529,47 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     if res and res.get("block") and harness == "claude-code" and hevent == "Stop":
         return json.dumps({"decision": "block", "reason": res["block"]})  # Claude Code keeps going instead of stopping
     return output_for(harness, hevent, (res or {}).get("context", "")) if res else ""
+
+
+def git_changes(cwd: str, session: str, start: bool = False) -> dict | None:
+    """What this session changed in the git working copy at cwd: commits made since the session began plus anything
+    uncommitted (secrets are redacted on the hub). start=True only records the starting commit. COMMONS_HOOK_GIT=0
+    turns it off on this machine. Never raises; each git call is capped at 3 seconds."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    if os.environ.get("COMMONS_HOOK_GIT") == "0" or not cwd:
+        return None
+
+    def git(*a):
+        r = subprocess.run(["git", "-C", top, *a], capture_output=True, text=True, timeout=3)
+        return r.stdout if r.returncode == 0 else ""
+    try:
+        top = cwd
+        top = git("rev-parse", "--show-toplevel").strip()
+        if not top:
+            return None
+        head = git("rev-parse", "HEAD").strip()
+        d = Path(os.environ.get("COMMONS_HOME", Path.home() / ".commons")) / "git-start"
+        mark = d / (hashlib.sha1(f"{session}:{top}".encode()).hexdigest()[:20] + ".txt")
+        if start:
+            if session and head:
+                d.mkdir(parents=True, exist_ok=True)
+                mark.write_text(head)
+            return None
+        base = (mark.read_text().strip() if session and mark.exists() else "") or head
+        if not base:
+            return None
+        diff = git("diff", base)
+        untracked = git("ls-files", "--others", "--exclude-standard").splitlines()[:100]
+        if not diff.strip() and not untracked and head == base:
+            return None
+        m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", git("remote", "get-url", "origin").strip())
+        return {"repo": m.group(1) if m else "", "branch": git("rev-parse", "--abbrev-ref", "HEAD").strip(),
+                "commit": head if head != base else "", "base": base, "stat": git("diff", "--stat", base)[-4000:],
+                "diff": diff[:200_000], "untracked": untracked}
+    except Exception:  # noqa: BLE001 - not a repo, no git, a slow disk: the hook carries on without it
+        return None
 
 
 def _key() -> str:

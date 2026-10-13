@@ -199,11 +199,14 @@ def register_v8(mcp, store, who):
         return _js(W.start(store, me(agent, api_key), what, project or None, paths, force, reason))
 
     @mcp.tool()
-    def finish_work(claim_id: str = "", result: str = "", status: str = "done", agent: str = "", api_key: str = "") -> str:
+    def finish_work(claim_id: str = "", result: str = "", status: str = "done", repo: str = "", branch: str = "",
+                    commit: str = "", diff: str = "", agent: str = "", api_key: str = "") -> str:
         """Close your work claim (all of your open ones when claim_id is empty) with the result: what changed, where,
-        and how it was verified. status: done | dropped. This is what the next agent is shown, so be specific."""
+        and how it was verified. status: done | dropped. Changed code? add repo, branch, commit and/or diff: they are
+        kept with the claim (/work/<claim>/). This is what the next agent is shown, so be specific."""
         from . import work as W
-        return _js(W.finish(store, me(agent, api_key), claim_id, result, status))
+        return _js(W.finish(store, me(agent, api_key), claim_id, result, status,
+                            changes={"repo": repo, "branch": branch, "commit": commit, "diff": diff} if (commit or diff) else None))
 
     @mcp.tool()
     def working_now(project: str = "") -> str:

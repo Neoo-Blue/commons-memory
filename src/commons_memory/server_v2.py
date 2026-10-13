@@ -96,13 +96,17 @@ def register_v2(mcp, store, who):
     def complete_subtask(subtask_id: str, result: str, verdict: str = "", success: bool = True,
                          tokens: int | None = None, tokens_in: int | None = None, cost: float | None = None,
                          model: str = "", leftovers: list[str] | None = None, preferences: list[str] | None = None,
+                         repo: str = "", branch: str = "", commit: str = "", diff: str = "",
                          agent: str = "", api_key: str = "") -> str:
-        """Finish a claimed subtask. Gate tasks need verdict approve|reject (or a 'VERDICT:' line in result).
+        """Finish a claimed subtask. Changed code? pass repo (owner/name), branch, commit and/or diff: they land in the
+        job's workspace (/jobs/<job>/<key>/) with your result. Gate tasks need verdict approve|reject (or a 'VERDICT:' line in result).
         leftovers: unfinished items to carry forward. preferences: user preferences you learned. success=false only when you
         could not do the work (it is retried); a review or test that finds problems is success=true with the findings."""
         return _js(orch.complete(subtask_id, me(agent, api_key), result, verdict=verdict or None, tokens=tokens,
                                  tokens_in=tokens_in, cost=cost, model=model or None, leftovers=leftovers,
-                                 preferences=preferences, success=success))
+                                 preferences=preferences, success=success,
+                                 changes={"repo": repo, "branch": branch, "commit": commit, "diff": diff}
+                                 if (commit or diff) else None))
 
     @mcp.tool()
     def cancel_job(job_id: str, reason: str = "cancelled", agent: str = "", api_key: str = "") -> str:

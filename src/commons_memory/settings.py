@@ -19,6 +19,8 @@ DEFAULTS = {
                    "rules (keyword splitting, always works). Every planner sees who is live, what each agent is good "
                    "at and how much usage it has left."),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
+    "capture_diffs": (True, "Keep each agent's code changes (git diff, secrets redacted) with its work, in the job "
+                            "workspace"),
     "dup_warnings": (True, "Warn agents when someone else is doing, or already did, the same work"),
     "quota_routing": (True, "Route work only to agents with usage headroom, keeping your reserve"),
     "reserve_pct": (20, "Share of each usage window kept for you, %"),

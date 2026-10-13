@@ -58,6 +58,16 @@ Hooks **never block the agent**. They time out after `COMMONS_HOOK_TIMEOUT` (def
 when the server is unreachable they append the event to `~/.commons/hook-queue.jsonl`. The queue drains on the
 next successful call.
 
+## Code changes
+
+When a session starts inside a git repo, the hook notes the commit it began at. When the agent stops, it sends what
+the session changed: commits made since then plus anything uncommitted, the diffstat, new untracked file names, and
+the repo and branch. Commons keeps it with the work in hand: the subtask the agent holds (in the job's workspace,
+`/jobs/<job>/<part>/changes.diff`), else its open `start_work` claim (`/work/<claim>/`), else the session
+(`/sessions/<id>/`). The Drive redacts secrets, keeps every version and skips unchanged diffs, so resending at every
+stop costs nothing. The dashboard shows it on the job's timeline and on the Changes page. Turn it off per machine
+with `COMMONS_HOOK_GIT=0`, or for everyone with "Keep each agent's code changes" on the Setup page.
+
 ## Privacy
 
 - Anything inside `<private>…</private>` is stripped **on the client** before it is sent, and again on the server.

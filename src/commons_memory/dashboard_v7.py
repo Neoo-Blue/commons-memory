@@ -23,6 +23,13 @@ def breakdown_view(self, q):
     return breakdown(self.s, jid)
 
 
+def changes_view(self, q):
+    from .workspace import recent
+    return {"changes": recent(self.s, q.get("agent") or None, int(q.get("limit", 30))),
+            "agents": [r["name"] for r in self.s.q("SELECT DISTINCT a.name FROM drive_files f JOIN agents a ON a.id=f.updated_by "
+                                                   "WHERE f.path LIKE '%/changes.json' ORDER BY a.name")]}
+
+
 def routing_view(self, q):
     from .routing import Router
     r = Router(self.s)
@@ -107,7 +114,7 @@ def post(self, path, body):
 
 
 def install(API) -> None:
-    for f in (mission, jobs_index, breakdown_view, routing_view, presence_view, drive_ls, drive_file):
+    for f in (mission, jobs_index, breakdown_view, changes_view, routing_view, presence_view, drive_ls, drive_file):
         setattr(API, f.__name__, f)
     orig = API.post
 
@@ -117,10 +124,11 @@ def install(API) -> None:
     API.post = post_v7
 
 
-TABS = ["Mission control", "Task breakdown", "Routing", "Presence", "Drive"]
+TABS = ["Mission control", "Task breakdown", "Changes", "Routing", "Presence", "Drive"]
 ICONS = {
     "Mission control": '<circle cx="12" cy="12" r="9"/><path d="M12 12l5-3M12 3v2M21 12h-2M12 21v-2M3 12h2"/>',
     "Task breakdown": '<rect x="9" y="2.5" width="6" height="4" rx="1"/><rect x="2.5" y="17.5" width="6" height="4" rx="1"/><rect x="15.5" y="17.5" width="6" height="4" rx="1"/><rect x="9" y="10" width="6" height="4" rx="1"/><path d="M12 6.5V10M12 14v1.5H5.5v2M12 15.5h6.5v2"/>',
+    "Changes": '<path d="M6 3v12M18 9v12M6 15a3 3 0 100 6 3 3 0 000-6zM18 3a3 3 0 100 6 3 3 0 000-6zM6 15c0-4 12-2 12-6"/>',
     "Routing": '<path d="M4 6h10l4 4-4 4H4M4 18h7"/>',
     "Presence": '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/><circle cx="19" cy="5" r="2" fill="currentColor"/>',
     "Drive": '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
@@ -134,9 +142,16 @@ return `<div class="grid4"><div class="card stat"><div class="mut">Running jobs<
  <table>${p.jobs.map(j=>`<tr><td><a href="#Task breakdown" onclick="window.bj=${J(j.id)};go('Task breakdown');return false">${E(j.title.slice(0,70))}</a></td><td>${pill(j.status)}</td><td class="mut">p${j.priority||0}</td><td style="width:30%"><div style="background:#8883;border-radius:4px"><div style="width:${Math.round(j.progress*100)}%;background:#4caf50;height:8px;border-radius:4px"></div></div></td><td class="mut">${Object.entries(j.subtasks).map(([k,v])=>E(k)+":"+v).join(" ")}</td></tr>`).join("")}</table></div>`).join(""):empty("🛰","Nothing running","Submit jobs in several projects; they run concurrently with fair share.")}</div>
 <div class="card"><h3>Agents · load vs capacity</h3><table>${d.agents.map(a=>{const never=a.seen===false;const cls=never?"offline":dotFor(a.state);return `<tr><td><span class="dot ${cls}"></span><b>${E(a.agent)}</b></td><td>${pill(never?"offline":a.state)} ${never?'<span class="mut">never seen</span>':""}</td><td style="width:25%"><div style="background:#8883;border-radius:4px"><div style="width:${Math.min(100,Math.round(a.load/Math.max(1,a.capacity)*100))}%;background:#2196f3;height:8px;border-radius:4px"></div></div></td><td class="mut">${a.load}/${a.capacity}</td><td class="mut">${a.working_on.map(w=>E(w.title.slice(0,40))).join("<br>")}</td></tr>`}).join("")}</table></div>`};
 
+const diffHtml=t=>`<pre style="max-height:420px;overflow:auto;font-size:12px;line-height:1.45">${(t||"").split("\n").map(l=>{const c=l.startsWith("@@")?"color:var(--acc)":l.startsWith("+")&&!l.startsWith("+++")?"background:#2e7d3226":l.startsWith("-")&&!l.startsWith("---")?"background:#c6282826":l.startsWith("diff --git")?"font-weight:600":"";return `<span style="display:block;${c}">${E(l)||" "}</span>`}).join("")}</pre>`;
+const chgHtml=c=>!c?"":`<h4>Changes</h4><div class="mut">${E(c.by||"")} · ${E((c.at||"").replace("T"," ").slice(0,16))} · ${E(c.source||"")}${c.repo?` · <code>${E(c.repo)}${c.branch?"@"+E(c.branch):""}</code>`:""}${c.commit?` · commit <code>${E(c.commit.slice(0,10))}</code> ${pill((c.verified||"").startsWith("verified")?"verified":"unverified")}`:""}</div>
+${(c.files||[]).length?`<div class="mut sm">${c.files.length} file(s): ${c.files.slice(0,12).map(f=>`<code>${E(f)}</code>`).join(" ")}${c.files.length>12?" …":""}</div>`:""}${(c.untracked||[]).length?`<div class="mut sm">new, not yet in git: ${c.untracked.slice(0,8).map(E).join(", ")}</div>`:""}
+${c.diff?`<details open><summary>Diff</summary>${diffHtml(c.diff)}</details>`:c.stat?`<pre>${E(c.stat)}</pre>`:""}`;
+V["Changes"]=async function(){const d=await api("changes_view?agent="+encodeURIComponent(window.cagent||""));
+return `<div class="card"><h3>Code changes <select aria-label="filter by agent" onchange="window.cagent=this.value;render()"><option value="">every agent</option>${d.agents.map(a=>`<option ${window.cagent==a?"selected":""}>${E(a)}</option>`).join("")}</select> <span class="mut sm">what each agent changed, kept with its job part, work claim or session</span></h3>
+${d.changes.length?d.changes.map(c=>`<details class="card" style="margin:8px 0"><summary><b>${E(c.by||"")}</b> · ${(c.files||[]).length} file(s) · <span class="mut">${E((c.at||"").replace("T"," ").slice(0,16))} · ${E(c.path)}</span>${c.commit?` · <code>${E(c.commit.slice(0,10))}</code> ${pill((c.verified||"").startsWith("verified")?"verified":"unverified")}`:""}</summary>${c.path.startsWith("/jobs/")?`<p><a href="#Task breakdown" onclick="window.bj=${J(c.path.split("/")[2])};window.bn=${J(c.path.split("/").slice(3).join("/"))};go('Task breakdown');return false">open the job →</a></p>`:""}${chgHtml(c)}</details>`).join(""):empty("🧾","No recorded changes yet","Agents report what they changed with complete_subtask / finish_work (repo, branch, commit, diff), and the hooks keep each session's git diff.")}</div>`};
 V["Task breakdown"]=async function(){const jobs=await api("jobs_index");const d=await api("breakdown_view?job="+(window.bj||""));
 if(!d.job)return empty("🧩","No jobs yet","<code>commons submit \"...\"</code>");
-const jobSel=`<div class="card"><h3>Job <select onchange="window.bj=this.value;window.bn=null;render()">${jobs.map(j=>`<option value="${E(j.id)}" ${j.id==d.job.id?"selected":""}>${E((j.title||"").slice(0,60))} · ${E(j.status)}</option>`).join("")}</select></h3>`;
+const jobSel=`<div class="card"><h3>Job <select style="max-width:100%" onchange="window.bj=this.value;window.bn=null;render()">${jobs.map(j=>`<option value="${E(j.id)}" ${j.id==d.job.id?"selected":""}>${E((j.title||"").slice(0,60))} · ${E(j.status)}</option>`).join("")}</select></h3>`;
 if(!d.nodes||!d.nodes.length)return jobSel+empty("🧩","No subtasks","This job has no breakdown yet.")+"</div>";
 const lv={},deps={},vis=new Set();(d.edges||[]).forEach(e=>{(deps[e.to]=deps[e.to]||[]).push(e.from)});
 const L=k=>{if(lv[k]!==undefined)return lv[k];if(vis.has(k))return 0;vis.add(k);const m=(deps[k]||[]).reduce((acc,x)=>Math.max(acc,L(x)+1),0);vis.delete(k);lv[k]=m;return m};d.nodes.forEach(n=>L(n.key));
@@ -147,15 +162,20 @@ const col={done:"#4caf50",claimed:"#2196f3",pending:"#9e9e9e",failed:"#f44336",b
 const svg=`<svg width="${mw}" height="${mh}" style="max-width:100%">${d.edges.map(e=>{const a=pos[e.from],b=pos[e.to];if(!a||!b)return"";return `<path d="M${a[0]+W},${a[1]+H/2} C${a[0]+W+25},${a[1]+H/2} ${b[0]-25},${b[1]+H/2} ${b[0]},${b[1]+H/2}" fill="none" stroke="${e.kind=="review"?"#ff9800":"#888"}" stroke-dasharray="${e.kind=="review"?"4 3":""}"/>`}).join("")}
 ${d.nodes.map(n=>{const p=pos[n.key];return `<g style="cursor:pointer" onclick="window.bn=${J(n.key)};render()"><rect x="${p[0]}" y="${p[1]}" width="${W}" height="${H}" rx="8" fill="${col[n.status]||"#999"}22" stroke="${col[n.status]||"#999"}" stroke-width="${window.bn==n.key?3:1.2}"/><text x="${p[0]+8}" y="${p[1]+18}" font-size="12" font-weight="bold" fill="currentColor">${E(n.key)} · ${E(n.type)}</text><text x="${p[0]+8}" y="${p[1]+34}" font-size="11" fill="currentColor">${E((n.agent||"unassigned").slice(0,14))} ${n.model?"· "+E(n.model.split("/").pop().slice(0,16)):""}</text><text x="${p[0]+8}" y="${p[1]+49}" font-size="10" fill="currentColor" opacity=".7">${E(n.status)} · ${E(n.effort||"-")} · try ${n.attempts} · $${n.cost}</text></g>`}).join("")}</svg>`;
 const n=d.nodes.find(x=>x.key==window.bn)||d.nodes[0];
-return `<div class="card"><h3>Job <select onchange="window.bj=this.value;window.bn=null;render()">${jobs.map(j=>`<option value="${E(j.id)}" ${j.id==d.job.id?"selected":""}>${E((j.title||"").slice(0,60))} · ${E(j.status)}</option>`).join("")}</select></h3>
+return `<div class="card"><h3>Job <select style="max-width:100%" onchange="window.bj=this.value;window.bn=null;render()">${jobs.map(j=>`<option value="${E(j.id)}" ${j.id==d.job.id?"selected":""}>${E((j.title||"").slice(0,60))} · ${E(j.status)}</option>`).join("")}</select></h3>
 <div class="mut">${E(d.job.project||"")} · ${pill(d.job.status)} · pattern ${E(d.planning.pattern)} · ${E(d.planning.summary)} · total $${d.totals.cost} · ${d.totals.tokens} tokens${d.job.after.length?" · waits for "+d.job.after.map(E).join(", "):""}</div>
 <details><summary>Planning step</summary><pre style="white-space:pre-wrap">${E(d.job.body)}</pre>${d.planning.events.map(e=>`<div class="mut">${E(e.event)} ${E(e.by||"")}: ${E(e.detail.slice(0,400))}</div>`).join("")}</details>
 <div style="overflow:auto">${svg}</div></div>
+<div class="cols"><div class="card"><h3>Timeline <select aria-label="filter by agent" onchange="window.bagent=this.value;render()"><option value="">every agent</option>${(d.agents||[]).map(a=>`<option ${window.bagent==a?"selected":""}>${E(a)}</option>`).join("")}</select></h3>
+<ul class="feed">${(d.timeline||[]).filter(e=>!window.bagent||e.by==window.bagent).map(e=>`<li><span class="t">${e.at?new Date(e.at*1000).toLocaleTimeString():""}</span><span><a href="#" onclick="window.bn=${J(e.part)};render();return false">${E(e.part)}</a> ${E(e.event)} <b>${E(e.by||"")}</b> <span class="mut">${E((e.detail||"").slice(0,140))}</span></span></li>`).join("")||'<li class="mut">Nothing yet.</li>'}</ul></div>
+<div class="card"><h3>Workspace <span class="mut sm">${E(d.workspace.folder||"")}</span></h3>${d.workspace.files.length?`<table>${d.workspace.files.map(f=>`<tr><td><a href="#Drive" onclick="window.dp=${J(d.job.project||"")};window.df=${J(f.path)};go('Drive');return false">${E(f.path.replace(d.workspace.folder+"/",""))}</a></td><td class="mut">v${f.version}</td><td class="mut">${E(f.updated_by||"")}</td></tr>`).join("")}</table>`:'<p class="mut">Results, diffs and files the agents add land here.</p>'}
+${(d.decisions||[]).length?`<h4>Decisions</h4>${d.decisions.map(x=>`<div><b>${E(x.by||"")}</b> <span class="mut">${E((x.summary||"").slice(0,160))}</span></div>`).join("")}`:""}</div></div>
 <div class="cols"><div class="card"><h3>Tree</h3><ul>${d.nodes.filter(x=>!x.gate_of).map(x=>`<li><a href="#" onclick="window.bn=${J(x.key)};render();return false">${E(x.key)}</a> ${pill(x.status)} ${E(x.title.slice(0,60))}<ul>${d.nodes.filter(g=>g.gate_of==x.key).map(g=>`<li><a href="#" onclick="window.bn=${J(g.key)};render();return false">${E(g.key)}</a> ${pill(g.type)} ${pill(g.status)} ${g.verdict?E(JSON.stringify(g.verdict).slice(0,40)):""}</li>`).join("")}</ul></li>`).join("")}</ul></div>
-<div class="card"><h3>${E(n.key)} · ${E(n.title)}</h3><table><tr><td>agent</td><td>${E(n.agent||"-")}</td></tr><tr><td>model</td><td><code>${E(n.model||"-")}</code></td></tr><tr><td>effort</td><td>${E(n.effort||"-")} (difficulty ${E(n.difficulty||"-")})</td></tr><tr><td>why</td><td class="mut">${E(n.rationale||"-")}</td></tr><tr><td>attempts</td><td>${n.attempts}/${n.max_attempts}</td></tr><tr><td>tokens / cost</td><td>${n.tokens.in}+${n.tokens.out} · $${n.cost}</td></tr></table>
+<div class="card"><h3>${E(n.key)} · ${E(n.title)}</h3><div style="overflow-x:auto"><table style="table-layout:fixed;width:100%;min-width:0;word-break:break-word"><tr><td style="width:34%">agent</td><td>${E(n.agent||"-")}</td></tr><tr><td>model</td><td><code>${E(n.model||"-")}</code></td></tr><tr><td>effort</td><td>${E(n.effort||"-")} (difficulty ${E(n.difficulty||"-")})</td></tr><tr><td>why</td><td class="mut">${E(n.rationale||"-")}</td></tr><tr><td>attempts</td><td>${n.attempts}/${n.max_attempts}</td></tr><tr><td>tokens / cost</td><td>${n.tokens.in}+${n.tokens.out} · $${n.cost}</td></tr></table></div>
 ${n.escalations.length>1?`<h4>Escalations</h4><table>${n.escalations.map(x=>`<tr><td>#${x.attempt}</td><td>${E(x.agent||"")}</td><td><code>${E(x.model||"")}</code></td><td>${E(x.effort||"")}</td><td>${pill(x.outcome||"open")}</td></tr>`).join("")}</table>`:""}
 <h4>Timeline</h4><ul class="feed">${n.timeline.map(t=>`<li><span class="t">${new Date(t.at*1000).toLocaleTimeString()}</span><span>${E(t.event)} ${E(t.by||"")} <span class="mut">${E(t.detail)}</span></span></li>`).join("")}</ul>
-${n.artifacts.length?`<h4>Artifacts</h4>${n.artifacts.map(a=>`<div><a href="#Drive" onclick="window.dp=${J(a.project||"")};window.df=${J(a.path)};go('Drive');return false">${E(a.path)}</a> v${a.version}</div>`).join("")}`:""}
+${chgHtml(n.changes)}
+${n.artifacts.length?`<h4>Artifacts</h4>${n.artifacts.map(a=>`<div style="word-break:break-all"><a href="#Drive" onclick="window.dp=${J(a.project||"")};window.df=${J(a.path)};go('Drive');return false">${E(a.path)}</a> v${a.version}</div>`).join("")}`:""}
 <h4>Output</h4><pre style="white-space:pre-wrap;max-height:300px;overflow:auto">${E(n.result||"")}${n.result_truncated?"…":""}</pre></div></div>`};
 
 V["Routing"]=async function(){const d=await api("routing_view");const lv=["minimal","low","medium","high","max"],tiers=["cheap","standard","top","coding"];

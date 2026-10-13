@@ -183,7 +183,8 @@ def start(s: Store, agent_id: str, what: str, project: str | None = None, paths:
                   "result) (or handoff) when done."}
 
 
-def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status: str = "done") -> dict:
+def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status: str = "done",
+           changes: dict | None = None) -> dict:
     if status not in ("done", "dropped"):
         raise CommonsError("status is done or dropped")
     from .redact import redact
@@ -204,6 +205,13 @@ def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status
         from .status import put as status_put
         status_put(s, agent_id, "done", (result or "finished").split("\n")[0])
     out = {"closed": ids, "status": status}
+    if changes and ids:
+        from . import workspace as WS
+        try:
+            out["changes"] = WS.record_changes(s, agent_id, claim=ids[0], source="agent",
+                                               **{k: changes.get(k) or "" for k in ("repo", "branch", "commit", "diff")})
+        except Exception as e:  # noqa: BLE001 - the claim is closed either way
+            out["changes"] = {"error": str(e)[:200]}
     if check and status == "done":
         out |= {"check_related": check,
                 "do": "Your change may have made these outdated. Update each one it affects (remember with related_ids, "
