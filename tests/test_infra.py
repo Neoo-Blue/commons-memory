@@ -32,8 +32,8 @@ def test_snapshot_builds_layers_and_marks_what_disappears_stale(tmp_path):
     assert r["nodes"] == 8 and r["edges"] == 7
     o = I.overview(s)
     pve = o["tree"][0]
-    assert pve["name"] == "pve" and {c["name"] for c in pve["children"]} == {"arrstack", "docker"}
-    arr = [c for c in pve["children"] if c["name"] == "arrstack"][0]
+    assert pve["name"] == "pve" and {c["name"] for c in pve["children"]} == {"arrstack (LXC 106)", "docker (LXC 100)"}
+    arr = [c for c in pve["children"] if c["name"] == "arrstack (LXC 106)"][0]
     assert [c["name"] for c in arr["children"]] == ["radarr"]
     I.ingest_snapshot(s, _snap(at=now() + 60))                          # same snapshot again: no duplicates
     assert len(I.nodes(s)) == 8
@@ -61,7 +61,7 @@ def test_memory_facts_join_discovered_nodes_by_vmid_ip_and_hostname(tmp_path):
     assert "LXC 106 (192.168.50.205)" not in names and "Proxmox PVE host" not in names   # joined arrstack and pve
     assert sum(1 for n in I.nodes(s) if n["name"].lower() == "radarr") == 1               # joined the container
     radarr = I.node(s, I.resolve(s, "radarr"))
-    assert [c["name"] for c in radarr["chain"]] == ["arrstack", "pve"]
+    assert [c["name"] for c in radarr["chain"]] == ["arrstack (LXC 106)", "pve"]
     assert {x["name"] for x in radarr["out"] if x["rel"] == "part_of"} == {"Plex"}
     assert not [x for x in radarr["out"] if x["rel"] == "talks_to"]                       # uncited links are dropped
     assert radarr["notes"] and radarr["notes"][0]["id"] == m1
@@ -88,9 +88,9 @@ def test_describe_overview_and_one_node_for_agents(tmp_path):
     assert "empty" in I.describe(s)
     I.ingest_snapshot(s, _snap())
     over = I.describe(s)
-    assert "- pve (machine)" in over and "  - arrstack (guest)" in over and "    - radarr (service)" in over
+    assert "- pve (machine)" in over and "  - arrstack (LXC 106) (guest)" in over and "    - radarr (service)" in over
     one = I.describe(s, "LXC 106")
-    assert one.startswith("arrstack (guest)") and "Runs on: pve" in one and "Hosts: radarr" in one
+    assert one.startswith("arrstack (LXC 106) (guest)") and "Runs on: pve" in one and "Hosts: radarr" in one
     assert "Mounts: /mnt/library" in one
     assert "Nothing in the infrastructure map" in I.describe(s, "no-such-thing")
 

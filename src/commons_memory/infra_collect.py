@@ -1390,6 +1390,21 @@ def _safe_call(fn, *args):
         }
 
 
+def submit(payload: dict) -> dict:
+    """POST snapshots to the hub's /agent/infra with the same URL and key the capture hooks use."""
+    import os
+    import urllib.request
+    from .capture import _key
+    url = (os.environ.get("COMMONS_URL") or "").rstrip("/").removesuffix("/mcp")
+    if not url:
+        raise SystemExit("--submit needs COMMONS_URL (the hub, e.g. http://192.168.50.111:8770) and COMMONS_API_KEY "
+                         "or COMMONS_AGENT with ~/.commons/agents/<agent>.key")
+    req = urllib.request.Request(url + "/agent/infra", data=json.dumps(payload).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {_key()}"})
+    with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 - the operator's own hub
+        return json.loads(r.read() or b"{}")
+
+
 def main(argv: list[str] | None = None) -> int:
     """`commons infra collect [--proxmox pve] [--docker ALIAS ...] [--tailscale] [--cloudflared] [--out FILE]`.
 
@@ -1408,6 +1423,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tailscale", action="store_true")
     parser.add_argument("--cloudflared", action="store_true")
     parser.add_argument("--out", help="write JSON here (default stdout)")
+    parser.add_argument("--submit", action="store_true", help="send the snapshot to the hub ($COMMONS_URL, agent key)")
     args = parser.parse_args(argv)
     flagged = any(
         a == "--proxmox" or a.startswith("--proxmox=") or a == "--docker" or a.startswith("--docker=")
@@ -1434,6 +1450,12 @@ def main(argv: list[str] | None = None) -> int:
         if got is not None:
             snaps.append(got)
     text = json.dumps({"snapshots": snaps}, indent=2) + "\n"
+    if args.submit:
+        got = submit({"snapshots": [x for x in snaps if x]})
+        for m in got.get("merged", []):
+            print(f"hub: {m['source']}: {m['nodes']} nodes, {m['edges']} links, {m['stale']} now stale", file=sys.stderr)
+        if not args.out:
+            return 0
     if args.out:
         path = Path(args.out)
         path.parent.mkdir(parents=True, exist_ok=True)

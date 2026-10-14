@@ -54,7 +54,9 @@ def _norm(name: str) -> str:
 def _keys(kind: str, name: str, attrs: dict, extra: list[str] = ()) -> list[str]:
     """Identity keys, strongest first. A service's name is only unique on its host, so it gets no bare-name key."""
     ks = list(extra)
-    text = f"{name} {attrs.get('ip') or ''} {' '.join(attrs.get('ips') or [])}"
+    # the primary IP and the name only: every docker host also has 172.17.0.1, so a full address list would merge
+    # unrelated guests into one
+    text = f"{name} {attrs.get('ip') or ''}"
     if kind in ("machine", "guest"):
         if attrs.get("vmid") or (kind == "guest" and VMID.search(name or "")):
             ks.append(f"vmid:{attrs.get('vmid') or VMID.search(name).group(1)}")
@@ -70,8 +72,14 @@ def _keys(kind: str, name: str, attrs: dict, extra: list[str] = ()) -> list[str]
     return [k for k in dict.fromkeys(ks) if k and not k.endswith(":")]
 
 
+WEAK = ("svcname:",) + tuple(f"{k}:" for k in KINDS)  # a bare name: two guests can both be called "docker"
+
+
 def _find(s: Store, keys: list[str]) -> str | None:
-    for k in keys:
+    """Match on strong keys (snapshot key, vmid, IP, URL, path, service@host, credential) when there are any; a bare
+    name only identifies something that has nothing stronger."""
+    strong = [k for k in keys if not k.startswith(WEAK)]
+    for k in strong or keys:
         r = s.q("SELECT node FROM infra_keys WHERE key=?", (k,))
         if r and s.q("SELECT 1 FROM infra_nodes WHERE id=?", (r[0]["node"],)):
             return r[0]["node"]
@@ -96,7 +104,7 @@ def upsert_node(s: Store, kind: str, name: str, *, attrs: dict | None = None, no
         if nid:
             r = s.q("SELECT * FROM infra_nodes WHERE id=?", (nid,))[0]
             merged = json.loads(r["attrs"] or "{}") | attrs
-            disc = source.startswith("discovery")
+            disc = source.startswith(("discovery", "vault"))
             s.x("UPDATE infra_nodes SET name=?, note=?, attrs=?, sources=?, evidence=?, last_seen=?, stale=0 WHERE id=?",
                 (name if disc or not json.loads(r["sources"] or "[]") else r["name"], note or r["note"],
                  json.dumps(merged), _merge_list(r["sources"], [source]), _merge_list(r["evidence"], list(evidence)),
@@ -114,12 +122,18 @@ def upsert_edge(s: Store, src: str, rel: str, dst: str, *, source: str, evidence
                 at: float | None = None) -> str | None:
     if rel not in RELS or src == dst:
         return None
-    at = at or now()
+    at, attrs = at or now(), dict(attrs or {})
+    bind = {k: attrs.pop(k) for k in ("host_path", "guest_path", "container_path", "read_only") if k in attrs}
+    if bind:  # one container can bind several paths from the same guest: keep them all on the one link
+        attrs["binds"] = [bind]
     r = s.q("SELECT * FROM infra_edges WHERE src=? AND rel=? AND dst=?", (src, rel, dst))
     if r:
         r = r[0]
+        old = json.loads(r["attrs"] or "{}")
+        if bind:
+            attrs["binds"] = [b for b in old.get("binds", []) if b != bind] + [bind]
         s.x("UPDATE infra_edges SET attrs=?, sources=?, evidence=?, last_seen=?, stale=0 WHERE id=?",
-            (json.dumps(json.loads(r["attrs"] or "{}") | (attrs or {})), _merge_list(r["sources"], [source]),
+            (json.dumps(old | attrs), _merge_list(r["sources"], [source]),
              _merge_list(r["evidence"], list(evidence)), max(at, r["last_seen"] or 0), r["id"]))
         return r["id"]
     eid = new_id("ine")
@@ -146,7 +160,10 @@ def ingest_snapshot(s: Store, snap: dict) -> dict:
         attrs = dict(e.get("attrs") or {})
         if kind in ("storage", "directory") and hosts.get(e["key"]):
             attrs.setdefault("host", ids.get(hosts[e["key"]], ""))
-        ids[e["key"]] = upsert_node(s, kind, e.get("name") or e["key"], attrs=attrs, source=src, at=at, host=host,
+        name = e.get("name") or e["key"]
+        if kind == "guest" and attrs.get("vmid") and str(attrs["vmid"]) not in name:  # two guests can share a name
+            name = f"{name} ({'VM' if attrs.get('type') in ('qemu', 'vm') else 'LXC'} {attrs['vmid']})"
+        ids[e["key"]] = upsert_node(s, kind, name, attrs=attrs, source=src, at=at, host=host,
                                     keys=[f"dkey:{snap.get('source')}:{e['key']}"])
     edges = 0
     for r in snap.get("relations", []):
@@ -316,6 +333,21 @@ def _reconcile(s: Store) -> int:
     return n
 
 
+def known_names(s: Store, limit: int = 400) -> str:
+    """What live discovery already found, so a note's "Plex Media Server" comes back as the discovered "plex"."""
+    rows = s.q("SELECT n.name, n.kind, n.attrs, (SELECT h.name FROM infra_edges e JOIN infra_nodes h ON h.id=e.dst "
+               "WHERE e.src=n.id AND e.rel='runs_on' LIMIT 1) host FROM infra_nodes n WHERE n.hidden=0 AND n.stale=0 AND "
+               "n.sources LIKE '%discovery%' AND n.kind IN ('machine','guest','service') ORDER BY n.kind, n.name LIMIT ?", (limit,))
+    if not rows:
+        return ""
+    def one(r):
+        a = json.loads(r["attrs"] or "{}")
+        extra = ", ".join(str(x) for x in (f"vmid {a['vmid']}" if a.get("vmid") else None, a.get("ip")) if x)
+        return f"- {r['name']} ({r['kind']}{', ' + extra if extra else ''}{', on ' + r['host'] if r['host'] else ''})"
+    return ("Already discovered live (use these exact names when a note refers to one of them, e.g. a note's "
+            "'Plex Media Server' running in Docker on LXC 100 is the service 'plex'):\n" + "\n".join(one(r) for r in rows) + "\n\n")
+
+
 def extract(s: Store, model: str | None = None, since: float | None = None, limit: int | None = None,
             dry_run: bool = False, log=lambda m: None) -> dict:
     """Read candidate notes in batches and merge what the model finds. dry_run: count notes and batches, estimate cost."""
@@ -333,10 +365,12 @@ def extract(s: Store, model: str | None = None, since: float | None = None, limi
     model = model or pl.role_model("librarian") or pl.role_model("kb_summarizer")
     if not model:
         raise CommonsError("no model for the map: set the librarian role or add a provider key on the Setup page")
+    known = known_names(s)
     cost, merged = 0.0, defaultdict(int)
     for i, b in enumerate(batches):
         text = "\n".join(f"[{n['id']}] {iso(n['created_at'])[:10]} ({n['project'] or 'no project'}): {n['c']}" for n in b)
-        r = pl.chat(model, f"Notes:\n{text}", system=EXTRACT_SYS, max_tokens=32000, role="librarian", schema=EXTRACT_SCHEMA)
+        r = pl.chat(model, f"Notes:\n{text}", system=EXTRACT_SYS, max_tokens=32000, role="librarian", schema=EXTRACT_SCHEMA,
+                    cache_prefix=known)
         cost += r.get("cost", 0) or 0
         try:
             got = ingest_extraction(s, json.loads(r["text"]), b)
@@ -465,6 +499,8 @@ def resolve(s: Store, query: str) -> str | None:
     for k in [f"vmid:{m.group(1)}" for m in [VMID.search(q)] if m] + [f"ip:{a}" for a in IP.findall(q)] + ["url:" + q.lower().rstrip("/")]:
         if key(k):
             return key(k)
+    if key(f"system:{n}"):  # "Plex" means the system (its parts and where they run), not the container called plex
+        return key(f"system:{n}")
     svc = {r["node"] for r in s.q("SELECT node FROM infra_keys WHERE key LIKE ?", (f"svc:{n}@%",))} if n else set()
     if len(svc) == 1:
         return svc.pop()
@@ -499,22 +535,47 @@ def describe(s: Store, query: str = "") -> str:
     if not nid:
         return f"Nothing in the infrastructure map matches {query!r}."
     n = node(s, nid)
-    head = f"{n['name']} ({n['kind']})" + (f": {n['note']}" if n["note"] else "")
-    lines = [head]
+    lines = [f"{n['name']} ({n['kind']})" + (f": {n['note']}" if n["note"] else "")]
     if n["chain"]:
-        lines.append("Runs on: " + " > ".join(f"{c['name']}" for c in n["chain"]))
-    attrs = {k: v for k, v in n["attrs"].items() if k not in ("host",) and v not in (None, "", [], {})}
-    if attrs:
-        lines.append("Details: " + "; ".join(f"{k}={v}" for k, v in list(attrs.items())[:12]))
+        lines.append("Runs on: " + " > ".join(c["name"] for c in n["chain"]))
+    a = n["attrs"]
+    lan = [x for x in a.get("ips") or [] if IP.fullmatch(x) and not re.match(r"172\.(1[6-9]|2\d|3[01])\.", x)]
+    shown = {"ip": a.get("ip") or ", ".join(lan) or None, "vmid": a.get("vmid"), "status": a.get("status"),
+             "cores": a.get("cores"), "memory": f"{a['memory_mb']} MB" if a.get("memory_mb") else None,
+             "os": a.get("os") or a.get("ostype"), "image": a.get("image"), "fs": a.get("fs"), "source": a.get("source"),
+             "port": a.get("port"), "hostname": a.get("hostname")}
+    det = "; ".join(f"{k} {v}" for k, v in shown.items() if v not in (None, "", [], {}))
+    if det:
+        lines.append("Details: " + det)
+    def path(x, inbound=False):
+        parts = []
+        for b in x["attrs"].get("binds") or []:
+            src, dst = b.get("host_path") or b.get("guest_path"), b.get("container_path") or b.get("guest_path")
+            parts.append((f"{src} -> {dst}" if src and dst and src != dst else (src or "")) + (" read-only" if b.get("read_only") else ""))
+        parts = [p for p in parts if p]
+        if not parts:
+            return x["name"]
+        if not inbound and x["kind"] == "storage":
+            return "; ".join(parts)  # the storage name is the host path already in the arrow
+        return f"{x['name']} ({'; '.join(parts)})"
     by = defaultdict(list)
     for x in n["out"]:
-        by[x["label"]].append(x["name"] + (" (stale)" if x["stale"] else ""))
+        if x["rel"] == "runs_on":
+            continue  # the chain above says it
+        by[x["label"]].append((path(x) if x["rel"] == "mounts" else x["name"]) + (" (stale)" if x["stale"] else ""))
     for x in n["in"]:
-        by[{"runs_on": "hosts", "part_of": "has part", "mounts": "mounted by", "talks_to": "used by",
-            "uses_credential": "credential for", "reachable_at": "endpoint of", "stores_in": "holds data of",
-            "exposed_via": "exposes", "deploys_from": "deployed to"}.get(x["rel"], "linked from")].append(x["name"])
+        lab = {"runs_on": "hosts", "part_of": "has part", "mounts": "mounted by", "talks_to": "used by",
+               "uses_credential": "credential for", "reachable_at": "endpoint of", "stores_in": "holds data of",
+               "exposed_via": "exposes", "deploys_from": "deployed to"}.get(x["rel"], "linked from")
+        if x["rel"] == "part_of":
+            up = s.q("SELECT n.name FROM infra_edges e JOIN infra_nodes n ON n.id=e.dst WHERE e.src=? AND e.rel='runs_on' "
+                     "AND (e.verdict IS NULL OR e.verdict<>'no') LIMIT 1", (x["id"],))
+            by[lab].append(x["name"] + (f" (on {up[0]['name']})" if up else ""))
+            continue
+        by[lab].append(path(x, True) if x["rel"] == "mounts" else x["name"])
     for k, v in by.items():
-        lines.append(f"{k[0].upper() + k[1:]}: " + ", ".join(sorted(set(v))[:30]))
+        v = sorted(set(v))
+        lines.append(f"{k[0].upper() + k[1:]}: " + ", ".join(v[:30]) + (f" and {len(v) - 30} more" if len(v) > 30 else ""))
     lines.append("Sources: " + ", ".join(n["sources"]) + (f"; {n['evidence']} notes" if n["evidence"] else "") +
                  (f"; last seen {n['last_seen']}" if n["last_seen"] else ""))
     return "\n".join(lines)

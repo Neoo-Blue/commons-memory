@@ -162,6 +162,13 @@ def add_parsers(sub) -> None:
     c.add_argument("--tailscale", action="store_true", help="local tailscale peers")
     c.add_argument("--cloudflared", action="store_true", help="local cloudflared tunnels")
     c.add_argument("--out", help="write JSON to this file (default stdout)")
+    c.add_argument("--submit", action="store_true", help="send it to the hub ($COMMONS_URL + agent key) for the map")
+    x = inf_sub.add_parser("show", help="the infrastructure map as an agent sees it (this database)")
+    x.add_argument("query", nargs="?", default="")
+    x = inf_sub.add_parser("extract", help="build the map from memories with a small model (spends credit)")
+    x.add_argument("--dry-run", action="store_true", help="count notes and estimate the cost only")
+    x.add_argument("--full", action="store_true", help="every note, not just the ones since the last run")
+    x.add_argument("--model", help="provider/model (default: the librarian role, else the preset small model)")
 
 
 def _import(args) -> int:
@@ -363,9 +370,17 @@ def handle_nostore(args) -> int:
         return 0
     if c == "infra":
         from .infra_collect import main as infra_main
-        if getattr(args, "action", None) != "collect":
-            print("infra: only 'collect' is implemented", file=sys.stderr)
-            return 2
+        if args.action in ("show", "extract"):  # these read the map in this database
+            from . import infra as I
+            from .store import Store
+            st = Store(args.db)
+            if args.action == "show":
+                print(I.describe(st, args.query))
+                return 0
+            r = I.extract(st, model=args.model, since=0.0 if args.full else None, dry_run=args.dry_run,
+                          log=lambda m: print(m, file=sys.stderr, flush=True))
+            print(json.dumps(r, indent=2))
+            return 0
         # Rebuild flags so an explicit source does not also pick up the no-flag default.
         fwd = ["collect"]
         if args.proxmox:
@@ -378,6 +393,8 @@ def handle_nostore(args) -> int:
             fwd.append("--cloudflared")
         if args.out:
             fwd += ["--out", args.out]
+        if args.submit:
+            fwd.append("--submit")
         return infra_main(fwd)
     if c == "bench":
         from . import bench
