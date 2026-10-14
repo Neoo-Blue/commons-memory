@@ -39,6 +39,8 @@ All notable changes, newest first. The README describes the current release only
   notes under soul-pool look like Poise, 1,650 sure") on the Projects page and on the affected project; move the sure
   ones or all with Undo, or keep them where they are. A similarity-only version was tried first and was too noisy on
   real data to trust.
+- **Fixes.** The test suite no longer touches the real home directory: a simulated session start had refreshed the
+  Commons block in `~/.claude/CLAUDE.md`; every test run now gets its own temporary home.
 - **Identity, carefully.** Two LXCs can both be named `docker` and every Docker host has 172.17.0.1, so nodes match on
   strong keys (vmid, primary IP, URL, collector key) and fall back to a bare name only when nothing stronger exists.
 

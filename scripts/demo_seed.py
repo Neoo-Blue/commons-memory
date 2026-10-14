@@ -118,8 +118,8 @@ def seed(path: str) -> None:
     I.ingest_snapshot(s, {
         "collector": "proxmox", "source": "pve", "at": now_t - 7200,
         "entities": [
-            {"key": "hv01", "kind": "machine", "name": "hv01", "attrs": {"ip": "10.20.0.10", "cpus": 32, "ram_gb": 64, "os": "Proxmox VE 8.2"}},
-            {"key": "hv01/lxc/209", "kind": "guest", "name": "staging-runner", "attrs": {"vmid": 209, "ip": "10.20.0.29", "status": "stopped", "cores": 2, "memory": "4GB"}},
+            {"key": "hv01", "kind": "machine", "name": "hv01", "attrs": {"ip": "10.20.0.10", "cpu_count": 32, "memory_total": 68719476736, "memory_used": 30064771072, "os": "Proxmox VE 8.2"}},
+            {"key": "hv01/lxc/209", "kind": "guest", "name": "staging-runner", "attrs": {"vmid": 209, "ip": "10.20.0.29", "status": "stopped", "cores": 2, "memory_mb": 4096}},
         ],
         "relations": [
             {"src": "hv01/lxc/209", "rel": "runs_on", "dst": "hv01"}
@@ -128,11 +128,11 @@ def seed(path: str) -> None:
 
     # Active snapshot representing current discovery
     snap_ents = [
-        {"key": "hv01", "kind": "machine", "name": "hv01", "attrs": {"ip": "10.20.0.10", "cpus": 32, "ram_gb": 64, "os": "Proxmox VE 8.2"}},
+        {"key": "hv01", "kind": "machine", "name": "hv01", "attrs": {"ip": "10.20.0.10", "cpu_count": 32, "memory_total": 68719476736, "memory_used": 30064771072, "os": "Proxmox VE 8.2"}},
         {"key": "nas01", "kind": "machine", "name": "nas01", "attrs": {"ip": "10.20.0.15", "os": "TrueNAS CORE", "storage": "16TB ZFS"}},
-        {"key": "nas01/volume1/media", "kind": "storage", "name": "/volume1/media", "attrs": {"fs": "zfs", "source": "10.20.0.15:/volume1/media", "capacity": "12TB", "host": "nas01"}},
-        {"key": "hv01/lxc/201", "kind": "guest", "name": "media", "attrs": {"vmid": 201, "ip": "10.20.0.21", "status": "running", "cores": 4, "memory": "8GB"}},
-        {"key": "hv01/lxc/202", "kind": "guest", "name": "apps", "attrs": {"vmid": 202, "ip": "10.20.0.22", "status": "running", "cores": 8, "memory": "16GB"}},
+        {"key": "nas01/volume1/media", "kind": "storage", "name": "/volume1/media", "attrs": {"fs": "zfs", "source": "10.20.0.15:/volume1/media", "total": "12884901888", "used": "7730941132", "host": "nas01"}},
+        {"key": "hv01/lxc/201", "kind": "guest", "name": "media", "attrs": {"vmid": 201, "ip": "10.20.0.21", "status": "running", "cores": 4, "memory_mb": 8192}},
+        {"key": "hv01/lxc/202", "kind": "guest", "name": "apps", "attrs": {"vmid": 202, "ip": "10.20.0.22", "status": "running", "cores": 8, "memory_mb": 16384}},
         {"key": "hv01/lxc/201/mediaserver", "kind": "service", "name": "mediaserver", "attrs": {"image": "plexinc/pms-docker:latest", "status": "active", "version": "1.40.1"}},
         {"key": "hv01/lxc/201/requests", "kind": "service", "name": "requests", "attrs": {"image": "overseerr:latest", "status": "active"}},
         {"key": "hv01/lxc/202/atlas-api", "kind": "service", "name": "atlas-api", "attrs": {"runtime": "python-3.12", "port": 8080, "status": "active"}},

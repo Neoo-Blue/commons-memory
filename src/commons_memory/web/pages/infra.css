@@ -1825,3 +1825,8 @@
     overflow-x: hidden;
   }
 }
+
+/* the icon sits inside the box, the text starts after it */
+.infra-search-box{position:relative}
+.infra-search-box svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--fg-subtle);pointer-events:none}
+.infra-search-box .infra-search-input{padding-left:32px !important}

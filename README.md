@@ -149,6 +149,7 @@ Captured from a demo hub (`python scripts/demo_seed.py demo.db`): made-up agents
 | ![Memory](docs/screenshots/memory.png)<br>**Memory**: search first, filter chips, drawers, bulk actions | ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent**: pick the AI, create its key, one command, watch it connect |
 | ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: an auto-built, cited knowledge base per project | ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph |
 | ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: fair-share scheduling and agent load against capacity | ![A project](docs/screenshots/projects.png)<br>**A project**: everything about one product in one place: active work, timeline, diffs, memory and who did what |
+| ![Infrastructure](docs/screenshots/infrastructure.png)<br>**Infrastructure**: where everything runs: capacity and every guest's allocation, then a zoomable map, the graph and a drawer per thing | |
 
 ## Multi-agent in 5 commands
 ```sh
