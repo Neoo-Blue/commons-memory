@@ -575,7 +575,7 @@ V["Setup"] = async function () {
                         autocomplete="off">
                       <button type="button" class="btn sm pri" onclick="suProv('${p.kind}', 'pk_${p.kind}', 'sv_prov_${p.kind}')">Save</button>
                       ${p.ready ? `
-                        <button type="button" class="btn sm bad" onclick="confirm('Remove key for ${E(p.label)}?') && post('setup/provider_rm', {kind: '${p.kind}'})">Remove</button>
+                        <button type="button" class="btn sm bad" onclick="confirm(${J('Remove key for ' + p.label + '?')}) && post('setup/provider_rm', {kind: ${J(p.kind)}})">Remove</button>
                       ` : ""}
                     </div>
 
@@ -654,7 +654,7 @@ V["Setup"] = async function () {
                       </div>
                       <div class="row-actions">
                         <button type="button" class="btn sm" onclick="openSecretDrawer(${J(c)})">Details</button>
-                        <button type="button" class="btn sm bad" onclick="confirm('Remove ${E(c.credential)} from the vault?') && post('vault/rm', {name: ${J(c.credential)}})">Remove</button>
+                        <button type="button" class="btn sm bad" onclick="confirm(${J('Remove ' + c.credential + ' from the vault?')}) && post('vault/rm', {name: ${J(c.credential)}})">Remove</button>
                       </div>
                     </div>
                   `).join("")}
@@ -884,7 +884,7 @@ V["Setup"] = async function () {
                   </div>
                 </div>
                 <div class="sys-setting-control">
-                  <button type="button" class="btn sm" onclick="K.copy(location.origin + '${E(d.hook_path || "")}')">Copy webhook URL</button>
+                  <button type="button" class="btn sm" onclick="K.copy(location.origin + ${J(d.hook_path || "")})">Copy webhook URL</button>
                 </div>
               </div>
 
@@ -1115,9 +1115,9 @@ V["Secrets"] = async function () {
                     </div>
                   </div>
                   <div class="row-actions">
-                    <button type="button" class="btn sm" onclick="K.copy('vault://${E(c.credential)}')">Copy ref</button>
+                    <button type="button" class="btn sm" onclick="K.copy(${J('vault://' + c.credential)})">Copy ref</button>
                     <button type="button" class="btn sm" onclick="openSecretDrawer(${J(c)})">Inspect</button>
-                    <button type="button" class="btn sm bad" onclick="confirm('Remove ${E(c.credential)} from vault?') && post('vault/rm', {name: ${J(c.credential)}})">Remove</button>
+                    <button type="button" class="btn sm bad" onclick="confirm(${J('Remove ' + c.credential + ' from the vault?')}) && post('vault/rm', {name: ${J(c.credential)}})">Remove</button>
                   </div>
                 </div>
               `).join("")}
@@ -1415,10 +1415,10 @@ V["Recurring"] = async function () {
               </div>
 
               <div class="sys-recurring-actions">
-                <button type="button" class="btn sm pri" onclick="post('maintenance/run', {job: 'recurring'}).then(() => toast('Maintenance pass triggered for ${E(s.name)}'))">
+                <button type="button" class="btn sm pri" onclick="post('maintenance/run', {job: 'recurring'}).then(() => toast(${J('Maintenance pass triggered for ' + s.name)}))">
                   Run now
                 </button>
-                <button type="button" class="btn sm" onclick="openRecurringDrawer('${s.id}', ${J(s)})">
+                <button type="button" class="btn sm" onclick="openRecurringDrawer(${J(s.id)}, ${J(s)})">
                   Inspect
                 </button>
               </div>
@@ -1435,7 +1435,7 @@ V["Recurring"] = async function () {
                 <span><b>Last run:</b> ${s.last_run ? K.fmt.ago(s.last_run) : "Never"}</span>
                 ${s.last_job ? `
                   <span>·</span>
-                  <span><b>Last job:</b> <a href="#Workflow?job=${encodeURIComponent(s.last_job)}" onclick="go('Workflow')"><code>${E(s.last_job)}</code></a></span>
+                  <span><b>Last job:</b> <a href="#Workflow?drawer=job:${encodeURIComponent(s.last_job)}" onclick="K.drawer.openId(${J('job:' + s.last_job)});return false"><code>${E(s.last_job)}</code></a></span>
                 ` : ""}
                 ${s.last_status ? `
                   <span>·</span>
