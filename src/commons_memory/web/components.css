@@ -1277,3 +1277,6 @@ aside.drawer.open,
 .progress.ok .progress-bar { background: var(--ok); }
 .progress.warn .progress-bar { background: var(--warn); }
 .progress.bad .progress-bar { background: var(--bad); }
+
+/* the panel takes focus for the focus trap; only its controls show a focus ring */
+aside.drawer:focus, aside.drawer:focus-visible { outline: none; }

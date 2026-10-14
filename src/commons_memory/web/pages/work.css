@@ -1,0 +1,645 @@
+/* ==========================================================================
+   COMMONS DESIGN SYSTEM: WORK WORKSPACE (pages/work.css)
+   Workflow, Orchestration, Task breakdown, Mission control, Changes,
+   Sessions, Drive, Routing, and the shared Job Detail Drawer.
+   Built for 1440 desktop and 390 mobile in light and dark themes.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Layout & Common Containers
+   -------------------------------------------------------------------------- */
+.work-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.work-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-1);
+}
+
+.work-head-main {
+  flex: 1;
+  min-width: 220px;
+}
+
+.work-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--fg-default);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.work-subtitle {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin: 4px 0 0 0;
+}
+
+.work-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.work-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+}
+
+.work-search {
+  height: 36px;
+  min-width: 180px;
+  flex: 1;
+  max-width: 320px;
+  padding: 0 var(--space-3);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-default);
+  font-size: var(--text-xs);
+  box-sizing: border-box;
+}
+
+.work-search:focus {
+  outline: none;
+  border-color: var(--acc);
+  box-shadow: 0 0 0 2px var(--acc-subtle);
+}
+
+.work-select {
+  height: 36px;
+  padding: 0 var(--space-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-default);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.work-select:focus {
+  outline: none;
+  border-color: var(--acc);
+}
+
+.work-scroll-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------------------------
+   Jobs Cockpit & List Rows
+   -------------------------------------------------------------------------- */
+.work-job-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.work-job-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+  box-sizing: border-box;
+}
+
+.work-job-row:last-child {
+  border-bottom: 0;
+}
+
+.work-job-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.work-job-main {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.work-job-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.work-job-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-default);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.work-job-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  flex-wrap: wrap;
+}
+
+.work-job-progress-col {
+  width: 170px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.work-progress-track {
+  height: 6px;
+  width: 100%;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.work-progress-bar {
+  height: 100%;
+  background: var(--ok);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.work-progress-bar.warn {
+  background: var(--warn);
+}
+
+.work-progress-bar.bad {
+  background: var(--bad);
+}
+
+.work-job-step-info {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.work-job-cost-col {
+  width: 110px;
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-job-cost-val {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.work-job-age {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.work-job-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.work-job-row:hover .work-job-actions,
+.work-job-row:focus-within .work-job-actions {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .work-job-actions {
+    opacity: 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Job Detail Drawer Specifics
+   -------------------------------------------------------------------------- */
+.drawer-job-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.drawer-job-banner {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.drawer-job-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: var(--space-2);
+}
+
+.drawer-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawer-stat-lbl {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.drawer-stat-val {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-default);
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-links-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.drawer-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-default);
+  text-decoration: none;
+}
+
+.drawer-link-btn:hover {
+  border-color: var(--acc);
+  color: var(--acc);
+  text-decoration: none;
+}
+
+/* Six-Stage Spine in Drawer */
+.drawer-spine {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.drawer-stage-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 3px solid var(--border-strong);
+}
+
+.drawer-stage-card.done { border-left-color: var(--ok); }
+.drawer-stage-card.running { border-left-color: var(--warn); }
+.drawer-stage-card.failed { border-left-color: var(--bad); }
+
+.drawer-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.drawer-stage-title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-default);
+}
+
+.drawer-stage-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.drawer-gate-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  color: var(--fg-default);
+}
+
+.drawer-gate-badge.waiting {
+  background: var(--bad-subtle);
+  border-color: var(--bad-border);
+  color: var(--bad);
+}
+
+/* Steps List inside Drawer */
+.drawer-step-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.drawer-step-item:hover {
+  border-color: var(--border-strong);
+}
+
+.drawer-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.drawer-step-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.drawer-step-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  flex-wrap: wrap;
+}
+
+.drawer-step-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Changes & Diff Viewer
+   -------------------------------------------------------------------------- */
+.diff-file-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+  box-shadow: var(--shadow-sm);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  user-select: none;
+}
+
+.diff-file-path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-default);
+  word-break: break-all;
+}
+
+.diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-add {
+  color: var(--ok);
+}
+
+.diff-del {
+  color: var(--bad);
+}
+
+.diff-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-card);
+  margin: 0;
+  padding: var(--space-2) 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.diff-line {
+  display: flex;
+  padding: 1px var(--space-3);
+  min-height: 19px;
+  box-sizing: border-box;
+}
+
+.diff-line.add {
+  background: rgba(76, 195, 138, 0.14);
+  color: var(--fg-default);
+  border-left: 3px solid var(--ok);
+}
+
+.diff-line.del {
+  background: rgba(239, 107, 107, 0.14);
+  color: var(--fg-default);
+  border-left: 3px solid var(--bad);
+}
+
+.diff-line.hunk {
+  background: rgba(227, 131, 95, 0.10);
+  color: var(--acc);
+  font-weight: 500;
+  border-left: 3px solid var(--acc);
+}
+
+/* --------------------------------------------------------------------------
+   Drive Page Specifics
+   -------------------------------------------------------------------------- */
+.drive-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+}
+
+.drive-crumb-item {
+  color: var(--acc);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.drive-crumb-item:hover {
+  text-decoration: underline;
+}
+
+.drive-crumb-sep {
+  color: var(--fg-subtle);
+}
+
+.drive-dropzone-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5) var(--space-4);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  box-sizing: border-box;
+}
+
+.drive-dropzone-box:hover,
+.drive-dropzone-box.dragover {
+  border-color: var(--acc);
+  background: var(--acc-subtle);
+}
+
+.drive-dropzone-icon {
+  font-size: 24px;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+
+.drive-dropzone-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.drive-dropzone-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Mobile (<= 640px) & Touch Responsiveness
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .work-job-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .work-job-progress-col {
+    width: 100%;
+  }
+
+  .work-job-cost-col {
+    width: 100%;
+    text-align: left;
+    flex-direction: row;
+    justify-content: space-between;
+  }
+
+  .work-job-actions {
+    width: 100%;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+
+  .work-search {
+    max-width: 100%;
+  }
+
+  /* 44px touch targets */
+  button,
+  .work-select,
+  .work-search,
+  .chip,
+  .seg-item,
+  .drawer-link-btn {
+    min-height: 44px;
+  }
+}
