@@ -132,3 +132,19 @@ def test_cli_audit_chain_exit_code(tmp_path, capsys):
     assert main(["--db", s.path, "audit-chain"]) == 1
     body = json.loads(capsys.readouterr().out)
     assert body["ok"] is False and body["bad_id"] == row_id
+
+
+def test_verify_retries_when_a_prune_moves_the_anchor_mid_walk(tmp_path, monkeypatch):
+    from commons_memory import auditexport as A
+    s = make_store(tmp_path, "race.db")
+    s.audit("a", "x", "1")
+    real, calls = A._walk, []
+    def walk(store):
+        calls.append(1)
+        if len(calls) == 1:  # a prune lands between the anchor read and the batches
+            store.x("INSERT OR REPLACE INTO meta VALUES('audit_anchor', 'moved')")
+            return {"ok": False, "rows": 1, "head": "", "bad_id": 1, "reason": "prev does not match the previous hash"}
+        store.x("DELETE FROM meta WHERE key='audit_anchor'")
+        return real(store)
+    monkeypatch.setattr(A, "_walk", walk)
+    assert A.verify_live(s)["ok"] and len(calls) == 2

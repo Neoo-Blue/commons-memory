@@ -123,7 +123,17 @@ def verify(text: str, pin: str | None = None) -> dict:
 
 
 def verify_live(store: Store) -> dict:
-    """Recompute the live chain in id order. Rows are read in batches so a long log is not one giant query."""
+    """Recompute the live chain in id order, in batches so a long log is not one giant query. Appends during the walk
+    are harmless; a prune that moves the anchor mid-walk would look like a gap, so the walk starts over (3 tries)."""
+    for _ in range(3):
+        anchor = store.q("SELECT value FROM meta WHERE key='audit_anchor'")
+        r = _walk(store)
+        if r["ok"] or store.q("SELECT value FROM meta WHERE key='audit_anchor'") == anchor:
+            return r
+    return r
+
+
+def _walk(store: Store) -> dict:
     anc = store.q("SELECT value FROM meta WHERE key='audit_anchor'")
     prev = (anc[0]["value"] or "") if anc else ""
     head = ""

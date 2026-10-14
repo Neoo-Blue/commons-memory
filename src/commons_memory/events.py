@@ -43,12 +43,11 @@ def _seen(s: Store, key: str) -> bool:
 
 
 def _outside(it: dict, repo: str) -> bool:
-    """An issue or PR whose author isn't owner, member or collaborator (unknown counts as outside), or a CI run of a
-    fork's branch."""
+    """An issue or PR whose author isn't owner, member or collaborator, or a CI run not from the repo itself (a fork's
+    branch, or a fork deleted since, which leaves head_repository empty). Unknown counts as outside."""
     if "number" in it:
         return it.get("author_association") not in INSIDE
-    head = (it.get("head_repository") or {}).get("full_name")
-    return bool(head) and head != repo
+    return (it.get("head_repository") or {}).get("full_name") != repo
 
 
 def _gh_job(s: Store, repo: str, kind: str, it: dict) -> str | None:
