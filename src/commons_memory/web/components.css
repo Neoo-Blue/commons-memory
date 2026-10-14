@@ -1,0 +1,1279 @@
+/* ==========================================================================
+   COMMONS DESIGN SYSTEM: COMPONENTS (components.css)
+   Linear / Vercel inspired component library for future and modular views.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. .tile (Metric Tile: Label, Tabular Value, Delta Chip, Sparkline Slot)
+   Markup:
+   <div class="tile">
+     <div class="tile-header">
+       <span class="tile-label">Daily Spend</span>
+       <span class="tile-badge">24h</span>
+     </div>
+     <div class="tile-value">$3.2136</div>
+     <div class="tile-footer">
+       <span class="chip delta pos">+12.4%</span>
+       <span class="tile-hint">vs yesterday</span>
+     </div>
+     <div class="tile-sparkline"><svg viewBox="0 0 100 24">...</svg></div>
+   </div>
+   -------------------------------------------------------------------------- */
+.tile {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.tile:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.tile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.tile-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-subtle);
+}
+
+.tile-badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--fg-subtle);
+  background: var(--border-subtle);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+
+.tile-value {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--fg-default);
+  line-height: 1.15;
+  font-feature-settings: "cv02", "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+
+.tile-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.tile-sparkline {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.tile-sparkline svg {
+  width: 100%;
+  height: 100%;
+  stroke: var(--acc);
+  fill: none;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+/* --------------------------------------------------------------------------
+   2. .list and .row (Hover-Reveal Actions, Always Visible on Touch)
+   Markup:
+   <div class="list">
+     <div class="row">
+       <div class="row-prefix"><span class="status-dot live"></span></div>
+       <div class="row-content">
+         <div class="row-title">Build CSV Export</div>
+         <div class="row-subtitle">Assigned to claude-code</div>
+       </div>
+       <div class="row-actions">
+         <button class="btn sm">Inspect</button>
+         <button class="btn sm bad">Cancel</button>
+       </div>
+     </div>
+   </div>
+   -------------------------------------------------------------------------- */
+.list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row:hover {
+  background: var(--bg-card-hover);
+}
+
+.row-prefix {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-default);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-subtitle {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.row:hover .row-actions,
+.row:focus-within .row-actions {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .row-actions {
+    opacity: 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   3. .badge and .chip (Selectable, Removable)
+   Markup:
+   <span class="badge ok">Ready</span>
+   <button class="chip" aria-pressed="false">Infrastructure</button>
+   <button class="chip active" aria-pressed="true">Web <span class="chip-remove">&times;</span></button>
+   -------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  background: var(--border-subtle);
+  color: var(--fg-default);
+  border: 1px solid var(--border-default);
+}
+
+.badge.ok {
+  background: var(--ok-subtle);
+  color: var(--ok);
+  border-color: var(--ok-border);
+}
+
+.badge.warn {
+  background: var(--warn-subtle);
+  color: var(--warn);
+  border-color: var(--warn-border);
+}
+
+.badge.bad {
+  background: var(--bad-subtle);
+  color: var(--bad);
+  border-color: var(--bad-border);
+}
+
+.badge.info {
+  background: var(--info-subtle);
+  color: var(--info);
+  border-color: var(--info-border);
+}
+
+.badge.accent {
+  background: var(--acc-subtle);
+  color: var(--acc);
+  border-color: var(--acc-border);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 28px;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--fg-default);
+}
+
+.chip.active,
+.chip.on {
+  background: var(--acc-subtle);
+  border-color: var(--acc-border);
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.chip.delta.pos {
+  background: var(--ok-subtle);
+  color: var(--ok);
+  border-color: var(--ok-border);
+  font-feature-settings: "cv02", "tnum";
+}
+
+.chip.delta.neg {
+  background: var(--bad-subtle);
+  color: var(--bad);
+  border-color: var(--bad-border);
+  font-feature-settings: "cv02", "tnum";
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  margin-left: 2px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.chip-remove:hover {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   4. .kbd (Keyboard Shortcut Indicator)
+   Markup:
+   <kbd class="kbd">⌘K</kbd>
+   -------------------------------------------------------------------------- */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-surface);
+  color: var(--fg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+  min-width: 18px;
+  line-height: 1.4;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+/* --------------------------------------------------------------------------
+   5. .seg (Segmented Control)
+   Markup:
+   <div class="seg" role="tablist">
+     <button class="seg-item on" role="tab" aria-selected="true">Cockpit</button>
+     <button class="seg-item" role="tab" aria-selected="false">Team Now</button>
+   </div>
+   -------------------------------------------------------------------------- */
+.seg {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-item,
+.seg > button {
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  padding: 4px var(--space-3);
+  min-height: 28px;
+  height: 28px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.seg-item:hover,
+.seg > button:hover {
+  color: var(--fg-default);
+  background: var(--border-subtle);
+}
+
+.seg-item.on,
+.seg > button.on {
+  background: var(--bg-card);
+  color: var(--fg-default);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   6. .switch (Toggle)
+   Markup:
+   <label class="switch">
+     <input type="checkbox">
+     <span class="switch-slider"></span>
+   </label>
+   -------------------------------------------------------------------------- */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background-color: var(--border-strong);
+  border-radius: var(--radius-full);
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #ffffff;
+  border-radius: var(--radius-full);
+  transition: transform var(--duration-fast) var(--ease-out);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.switch input:checked + .switch-slider {
+  background-color: var(--acc);
+}
+
+.switch input:checked + .switch-slider::before {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible + .switch-slider {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   7. .drawer (Right Slide-over 480px, Full Width on Mobile)
+   Markup:
+   <div class="drawer-backdrop open">
+     <aside class="drawer open">
+       <header class="drawer-header">
+         <h3 class="drawer-title">Details</h3>
+         <button class="drawer-close">&times;</button>
+       </header>
+       <div class="drawer-body">...</div>
+       <footer class="drawer-footer">
+         <button class="btn">Cancel</button>
+         <button class="btn pri">Save</button>
+       </footer>
+     </aside>
+   </div>
+   -------------------------------------------------------------------------- */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 60;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out);
+}
+
+.drawer-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 100vw;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--shadow-modal);
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+
+.drawer.open,
+.drawer-backdrop.open .drawer {
+  transform: translateX(0);
+}
+
+.drawer-header {
+  height: 56px;
+  padding: 0 var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.drawer-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg-default);
+  letter-spacing: -0.01em;
+}
+
+.drawer-close {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--fg-muted);
+  border-radius: var(--radius-xs);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.drawer-close:hover {
+  background: var(--border-subtle);
+  color: var(--fg-default);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.drawer-footer {
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .drawer {
+    width: 100vw;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   8. .toast-stack and .toast (Notifications with Countdown Progress)
+   Markup:
+   <div class="toast-stack">
+     <div class="toast ok">
+       <span class="toast-icon">✓</span>
+       <span class="toast-text">Task completed</span>
+       <button class="toast-action">Undo</button>
+       <div class="toast-progress" style="--toast-duration: 4s;"></div>
+     </div>
+   </div>
+   -------------------------------------------------------------------------- */
+.toast-stack {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 70;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-width: 280px;
+  max-width: 400px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  overflow: hidden;
+  animation: toast-slide var(--duration-normal) var(--ease-out);
+}
+
+.toast-icon {
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-default);
+}
+
+.toast-action {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--acc);
+  background: var(--acc-subtle);
+  border: 1px solid var(--acc-border);
+  border-radius: var(--radius-xs);
+  padding: 3px var(--space-2);
+  min-height: 26px;
+  height: 26px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toast-action:hover {
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+.toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--acc);
+  transform-origin: left;
+  animation: toast-countdown var(--toast-duration, 4s) linear forwards;
+}
+
+@keyframes toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* --------------------------------------------------------------------------
+   9. .palette (Command Palette Modal: Input, Grouped Results, Footer)
+   Markup:
+   <div class="palette-backdrop open">
+     <div class="palette">
+       <div class="palette-search">
+         <span class="palette-icon">⌕</span>
+         <input class="palette-input" placeholder="Type a command...">
+       </div>
+       <div class="palette-results">
+         <div class="palette-group">
+           <div class="palette-group-title">Navigation</div>
+           <div class="palette-item selected">
+             <span>Overview</span>
+             <kbd class="kbd">1</kbd>
+           </div>
+         </div>
+       </div>
+       <div class="palette-footer">
+         <span><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> Navigate</span>
+         <span><kbd class="kbd">↵</kbd> Select</span>
+         <span><kbd class="kbd">esc</kbd> Close</span>
+       </div>
+     </div>
+   </div>
+   -------------------------------------------------------------------------- */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  z-index: 65;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+}
+
+.palette {
+  width: min(600px, 92vw);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  animation: modal-enter var(--duration-normal) var(--ease-out);
+}
+
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.palette-icon {
+  font-size: 16px;
+  color: var(--fg-subtle);
+}
+
+.palette-input {
+  width: 100%;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: var(--text-base) !important;
+  color: var(--fg-default) !important;
+  box-shadow: none !important;
+  min-height: auto !important;
+}
+
+.palette-input:focus {
+  outline: none !important;
+}
+
+.palette-results {
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.palette-group {
+  margin-bottom: var(--space-2);
+}
+
+.palette-group-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-subtle);
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--fg-default);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.palette-item:hover,
+.palette-item.selected {
+  background: var(--acc-subtle);
+  color: var(--acc);
+}
+
+.palette-footer {
+  padding: var(--space-2) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--fg-subtle);
+  background: var(--bg-card);
+}
+
+/* --------------------------------------------------------------------------
+   10. .menu (Popover Menu Anchored to a Trigger)
+   Markup:
+   <div class="menu open">
+     <button class="menu-item"><span class="menu-icon">✎</span> Edit</button>
+     <button class="menu-item"><span class="menu-icon">⎘</span> Duplicate</button>
+     <div class="menu-divider"></div>
+     <button class="menu-item bad"><span class="menu-icon">✕</span> Delete</button>
+   </div>
+   -------------------------------------------------------------------------- */
+.menu {
+  min-width: 180px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  z-index: 55;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-default);
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  min-height: 32px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.menu-item:hover {
+  background: var(--bg-card-hover);
+}
+
+.menu-item.bad {
+  color: var(--bad);
+}
+
+.menu-item.bad:hover {
+  background: var(--bad-subtle);
+}
+
+.menu-icon {
+  font-size: 14px;
+  color: var(--fg-subtle);
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-1) 0;
+}
+
+/* --------------------------------------------------------------------------
+   11. .empty (Empty State with Icon, Title, Hint, Actions)
+   Markup:
+   <div class="empty">
+     <div class="empty-icon">📂</div>
+     <div class="empty-title">No memories found</div>
+     <div class="empty-hint">Try adjusting your filters or search keywords.</div>
+     <div class="empty-actions">
+       <button class="btn pri">Clear Filters</button>
+     </div>
+   </div>
+   -------------------------------------------------------------------------- */
+.empty {
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.empty-icon {
+  font-size: 32px;
+  color: var(--fg-subtle);
+  margin-bottom: var(--space-1);
+  opacity: 0.85;
+}
+
+.empty-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg-default);
+  letter-spacing: -0.01em;
+}
+
+.empty-hint {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.empty-actions {
+  margin-top: var(--space-3);
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* --------------------------------------------------------------------------
+   12. .skeleton (Shimmer Skeleton Lines and Blocks)
+   Markup:
+   <div class="skeleton skeleton-line"></div>
+   <div class="skeleton skeleton-block" style="height: 100px;"></div>
+   -------------------------------------------------------------------------- */
+.skeleton {
+  background: linear-gradient(90deg, var(--border-subtle) 25%, var(--border-strong) 50%, var(--border-subtle) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-line {
+  height: 14px;
+  margin: var(--space-2) 0;
+  width: 100%;
+}
+
+.skeleton-block {
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+   13. .kv (Key/Value Payload Tags for JSON Data)
+   Markup:
+   <div class="kv-group">
+     <span class="kv"><span class="k">imported</span><span class="v">480</span></span>
+     <span class="kv"><span class="k">status</span><span class="v">ok</span></span>
+   </div>
+   -------------------------------------------------------------------------- */
+.kv-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.kv {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.kv .k {
+  padding: 1px 6px;
+  color: var(--fg-subtle);
+  background: var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.kv .v {
+  padding: 1px 6px;
+  color: var(--fg-default);
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   14. .crumbs (Breadcrumbs)
+   Markup:
+   <nav class="crumbs" aria-label="Breadcrumb">
+     <a href="#Work" class="crumb">Work</a>
+     <span class="crumb-separator">/</span>
+     <span class="crumb active">Build CSV Export</span>
+   </nav>
+   -------------------------------------------------------------------------- */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.crumb {
+  color: var(--fg-muted);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.crumb:hover {
+  color: var(--fg-default);
+}
+
+.crumb.active {
+  color: var(--fg-default);
+  font-weight: 600;
+}
+
+.crumb-separator {
+  color: var(--fg-subtle);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------------------------
+   15. .page-head (Title, Subtitle, Actions on Right)
+   Markup:
+   <div class="page-head">
+     <div class="page-head-main">
+       <h2 class="page-head-title">Agent Fleet</h2>
+       <p class="page-head-subtitle">Manage connected agent runtimes and quotas</p>
+     </div>
+     <div class="page-head-actions">
+       <button class="btn">Filter</button>
+       <button class="btn pri">Register Agent</button>
+     </div>
+   </div>
+   -------------------------------------------------------------------------- */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.page-head-main {
+  flex: 1;
+  min-width: 240px;
+}
+
+.page-head-title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg-default);
+  margin: 0;
+}
+
+.page-head-subtitle {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  margin: var(--space-1) 0 0;
+}
+
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   16. .tabs (Underline Sub-Tabs)
+   Markup:
+   <div class="tabs" role="tablist">
+     <button class="tabs-item on" role="tab" aria-selected="true">Cockpit</button>
+     <button class="tabs-item" role="tab" aria-selected="false">Team Now</button>
+     <button class="tabs-item" role="tab" aria-selected="false">Live Feed</button>
+   </div>
+   -------------------------------------------------------------------------- */
+.tabs {
+  display: flex;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+  margin-bottom: var(--space-4);
+}
+
+.tabs-item {
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: var(--space-2) 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.tabs-item:hover {
+  color: var(--fg-default);
+}
+
+.tabs-item.on {
+  color: var(--fg-default);
+  font-weight: 600;
+}
+
+.tabs-item.on::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--acc);
+  border-radius: var(--radius-full);
+}
+
+/* --------------------------------------------------------------------------
+   17. .bnav (Mobile Bottom Navigation Bar Under 640px)
+   Markup:
+   <nav class="bnav">
+     <a href="#Overview" class="bnav-item on"><span class="bnav-icon">⛬</span><span class="bnav-label">Overview</span></a>
+     <a href="#Board" class="bnav-item"><span class="bnav-icon">◫</span><span class="bnav-label">Board</span></a>
+     <a href="#Agents" class="bnav-item"><span class="bnav-icon">👥</span><span class="bnav-label">Agents</span></a>
+     <a href="#Workflow" class="bnav-item"><span class="bnav-icon">⚡</span><span class="bnav-label">Work</span></a>
+   </nav>
+   -------------------------------------------------------------------------- */
+.bnav {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .bnav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-default);
+    backdrop-filter: blur(12px);
+    z-index: 45;
+    justify-content: space-around;
+    align-items: center;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .bnav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--fg-subtle);
+    text-decoration: none;
+    flex: 1;
+    height: 100%;
+  }
+
+  .bnav-item:hover {
+    color: var(--fg-default);
+  }
+
+  .bnav-item.on {
+    color: var(--acc);
+    font-weight: 600;
+  }
+
+  .bnav-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   18. .dropzone (File Upload Trigger Area)
+   Markup:
+   <div class="dropzone">
+     <span class="dropzone-icon">⇪</span>
+     <div class="dropzone-title">Upload database backup</div>
+     <div class="dropzone-hint">Drag and drop or browse files (SQLite, JSON)</div>
+   </div>
+   -------------------------------------------------------------------------- */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-5);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.dropzone:hover {
+  border-color: var(--acc);
+  background: var(--acc-subtle);
+}
+
+.dropzone-icon {
+  font-size: 26px;
+  color: var(--fg-subtle);
+  margin-bottom: var(--space-2);
+}
+
+.dropzone-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.dropzone-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   19. .avatar (Agent Initials Squircle)
+   Markup:
+   <div class="avatar">
+     <span>CC</span>
+     <span class="status-dot live"></span>
+   </div>
+   -------------------------------------------------------------------------- */
+.avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--acc-subtle);
+  color: var(--acc);
+  border: 1px solid var(--acc-border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.avatar .status-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  border: 2px solid var(--bg-card);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   20. .status-dot (Slow 2.4s Pulse for Live)
+   Markup:
+   <span class="status-dot live"></span>
+   <span class="status-dot busy"></span>
+   <span class="status-dot idle"></span>
+   <span class="status-dot offline"></span>
+   -------------------------------------------------------------------------- */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+.status-dot.live {
+  background: var(--ok);
+  box-shadow: 0 0 0 0 var(--ok-subtle);
+  animation: dot-pulse 2.4s var(--ease-out) infinite;
+}
+
+.status-dot.busy {
+  background: var(--warn);
+  box-shadow: 0 0 0 0 var(--warn-subtle);
+  animation: dot-pulse 2.4s var(--ease-out) infinite;
+}
+
+.status-dot.idle {
+  background: var(--fg-subtle);
+}
+
+.status-dot.offline {
+  background: rgba(120, 120, 130, 0.4);
+}
+
+/* --------------------------------------------------------------------------
+   21. .progress (Progress Bar)
+   Markup:
+   <div class="progress" role="progressbar" aria-valuenow="70" aria-valuemin="0" aria-valuemax="100">
+     <div class="progress-bar" style="width: 70%;"></div>
+   </div>
+   -------------------------------------------------------------------------- */
+.progress {
+  height: 6px;
+  width: 100%;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--acc);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+.progress.ok .progress-bar { background: var(--ok); }
+.progress.warn .progress-bar { background: var(--warn); }
+.progress.bad .progress-bar { background: var(--bad); }
