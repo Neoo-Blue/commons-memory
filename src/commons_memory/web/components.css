@@ -439,7 +439,7 @@
 }
 
 /* --------------------------------------------------------------------------
-   7. .drawer (Right Slide-over 480px, Full Width on Mobile)
+   7. aside.drawer (Right Slide-over 480px, Full Width on Mobile)
    Markup:
    <div class="drawer-backdrop open">
      <aside class="drawer open">
@@ -471,7 +471,7 @@
   pointer-events: auto;
 }
 
-.drawer {
+aside.drawer {
   position: fixed;
   top: 0;
   right: 0;
@@ -488,8 +488,8 @@
   transition: transform var(--duration-slow) var(--ease-out);
 }
 
-.drawer.open,
-.drawer-backdrop.open .drawer {
+aside.drawer.open,
+.drawer-backdrop.open aside.drawer {
   transform: translateX(0);
 }
 
@@ -550,7 +550,7 @@
 }
 
 @media (max-width: 640px) {
-  .drawer {
+  aside.drawer {
     width: 100vw;
   }
 }

@@ -984,7 +984,7 @@ def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, backg
 # every file is plain CSS or JS, served inline in one response.
 WEB = Path(__file__).with_name("web")
 CSS_FILES = ["legacy.css", "theme.css", "components.css", "shell.css"]
-JS_FILES = ["legacy.js", "shell.js"]
+JS_FILES = ["legacy.js", "kit.js", "shell.js"]
 
 
 def _page() -> str:
