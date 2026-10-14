@@ -176,7 +176,7 @@ Six workspaces, each a group of pages (on a phone: the bottom bar, with the grou
 | Workspace | Pages |
 |---|---|
 | Home | Overview (what needs you first: one-tap answers and approvals; spend, running jobs, the team, activity), Board |
-| Projects | Projects (one page per product: active work, timeline, work, changes, memory, people; group a product's several names in one tap), Tasks (one-off work and jobs under no project) |
+| Projects | Projects (one page per product: active work, timeline, work, changes, memory, people; group a product's several names in one tap; Check filing moves imported or folder notes that belong to another project, with Undo), Tasks (one-off work and jobs under no project) |
 | Work | Workflow (every job; a job opens in a drawer with its stage spine, steps, routing, and retry / move / cancel), Orchestration, Task breakdown, Mission control, Changes (diffs), Sessions, Drive, Routing |
 | Agents | Agents (the fleet; an agent opens in a drawer with presence, quota, models, recent steps and Update now), Presence, Capacity, Usage, Models (API seats, provider key tests), Connect, Skills, Discover, MCP hub |
 | Knowledge | Memory (search, filter chips, drawers, bulk actions), Knowledge, Infrastructure (the layered map of where everything runs), Context, Graph, Preferences, Org chart, Librarian, Import, Retro learning |

@@ -22,12 +22,23 @@ All notable changes, newest first. The README describes the current release only
   the dashboard, after an estimate (a batch of notes costs about $0.07); later runs read only new notes.
 - **Vault links.** Each vault credential attaches to the services its base URLs or name point at; the map shows the name,
   never the value.
-- **For people.** Knowledge > Infrastructure: a zoomable map (machine, then its guests, then their containers), an
-  inventory with filters, an Ask view showing exactly what an agent gets, and a drawer per thing with its chain, details,
-  links (confirm or reject each one), evidence notes, Hide and "Same as". Each project page gains a System tab.
+- **For people.** Knowledge > Infrastructure: an Overview of charts (each machine's capacity and every guest's memory,
+  cores, services and ports; storage used against total; counts by kind), a zoomable map (machine, then its guests, then
+  their containers, with the host's own services in their own row), the graph explorer on the same data (force and radial
+  layouts, search, a node's neighbourhood at depth 1 to 3), an inventory, an Ask view showing exactly what an agent gets,
+  and a drawer per thing: its chain, details, links (confirm or reject each one), the projects whose notes mention it,
+  what else runs on the same host, evidence notes, "Show in graph", Hide and "Same as". Each project page gains a System tab.
 - **For agents:** `infra()` (now a core tool) gives the whole tree; `infra("plex")`, `infra("LXC 106")` or
   `infra("192.168.50.205")` gives one thing: what it runs on, its details, mounts, endpoints, links, credential names and
   sources. Ask it before guessing where something lives.
+- **Notes filed under the wrong project, re-filed.** The owner found Poise decisions on the soul-pool page: the
+  claude-mem import had labelled about 2,200 Poise notes with soul-pool (it labels by the folder it ran in), and folder
+  buckets like `home` (5,678 notes) and `workspace` (2,662) hold everything. "Check filing" on the Projects page sends
+  imported and folder notes, never notes captured live, to a small model through the half-price batch API against a
+  catalog of your real projects, after an estimate (about $3 for 20,000 notes). Proposals come back grouped ("1,704
+  notes under soul-pool look like Poise, 1,650 sure") on the Projects page and on the affected project; move the sure
+  ones or all with Undo, or keep them where they are. A similarity-only version was tried first and was too noisy on
+  real data to trust.
 - **Identity, carefully.** Two LXCs can both be named `docker` and every Docker host has 172.17.0.1, so nodes match on
   strong keys (vmid, primary IP, URL, collector key) and fall back to a bare name only when nothing stronger exists.
 
