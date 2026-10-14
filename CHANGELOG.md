@@ -2,6 +2,19 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.26.0: API seats, so work keeps moving when your subscription agents can't take it
+- **API seats.** Switch on `api_seats` (Setup, or Turn on in the Models page's API seats card): one seat agent uses
+  three models from your own API key (by default Anthropic Haiku 5.5, Sonnet 5.5 and Opus 5.5, or your
+  `seat_models`). Each step it takes runs on the tier its card asks for, so a summary goes to the cheap model and a
+  plan review to the top one, at the routed effort.
+- **Only as a fallback.** A step goes to the seat only when no subscription agent who can do it is free (offline, out
+  of usage, or busy), and never when it needs a repo or a shell: code, tests, releases and steps that require
+  evidence stay with the agents that can commit and run things.
+- **A spend cap.** The seat stops once it has spent `seat_daily_cap` dollars (default $2) in the last 24 hours and
+  tells you; the Models page shows the spend and runs. Each run records its tokens and cost once, so the cap, the job
+  budget and usage reports agree. It runs in its own threads on the hub, so a slow model call never holds up wakes.
+- **For agents:** nothing changes; the seat shows up as the agent `api-seats` on steps it took.
+
 ## v0.25.0: spec to release as one workflow, with tiered models and you approving the steps that matter
 - **Six-stage workflow.** `submit_task(task, pattern="sdlc")`, or the `/sdlc` slash command, runs an idea through
   define (a spec with numbered acceptance criteria) → plan (PRD, contracts, build workstreams) → build → verify →

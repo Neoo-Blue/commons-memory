@@ -54,7 +54,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, capture.py, cli_v7.py, expose.py, setup.py, wakeclient.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, capture.py, cli_v7.py, cli_v8.py, expose.py, setup.py, wakeclient.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
 | `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
@@ -119,6 +119,9 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ROUTING_LEARN_N` | `5` | Outcomes needed before routing trusts a learned agent/model/effort score | routing.py |
 | `COMMONS_ROUTING_MODE` | `balanced` | Execution-target routing: `balanced`, `quality`, `cheap`, `fast` | routing.py |
 | `COMMONS_ROUTING_VALIDATE_N` | `5` | A/B samples before a routing proposal is validated | providers.py |
+| `COMMONS_SEATS` | — | Set to 0 or off to never start the API seat loop in this process (the api_seats setting turns seats on and off) | seats.py |
+| `COMMONS_SEAT_PARALLEL` | `2` | How many steps the API seats run at once (default 2) | seats.py |
+| `COMMONS_SEAT_POLL` | `5` | Seconds between API seat checks for ready work (default 5) | seats.py |
 | `COMMONS_SKILL_AUTO_APPROVE` | — | Activate clean skill versions without a second agent (single-user setups only) | server_v4.py, skillpool.py |
 | `COMMONS_SKILL_DISCOVERY` | `1` | Background skill discovery from public catalogs (`0` off) | background.py |
 | `COMMONS_SQLITE_READERS` | `0` | Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host | store.py |

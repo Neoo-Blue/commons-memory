@@ -25,6 +25,10 @@ DEFAULTS = {
                               "days; agents keep working through their keys)"),
     "agent_updates": ("auto", "Agents' own tools (agy, grok, claude): auto = keep them up to date (checked every 10 "
                               "minutes, updated on the machine they run on), notify = tell me when one is out, off"),
+    "api_seats": (False, "Let models from my own API keys take steps when no subscription agent is free (cheap, mid "
+                         "and top tier per step; never code, tests or releases)"),
+    "seat_daily_cap": (2.0, "API seats: most dollars to spend in any 24 hours"),
+    "seat_models": ([], "API seat models: cheap, mid, top (provider/model; empty = from your first provider key)"),
     "capture_verbatim": (True, "Keep every message and reply word for word"),
     "role_presets": (True, "Use a small model from your first provider key (Claude Haiku with an Anthropic key) for "
                            "planning, knowledge-base summaries and preference extraction, unless you set those roles"),
@@ -60,6 +64,10 @@ def put(s: Store, key: str, value) -> dict:
     d = DEFAULTS[key][0]
     if isinstance(d, bool):
         value = value in (True, "true", "on", "1", 1)
+    elif isinstance(d, float):
+        value = float(value)
+        if value < 0:
+            raise CommonsError(f"{key} can't be negative")
     elif isinstance(d, int):
         value = int(value)
         if not 0 <= value <= 90:
@@ -79,6 +87,10 @@ def put(s: Store, key: str, value) -> dict:
             if bad:
                 raise CommonsError(f"repos are owner/name; not {bad}")
             bad = []
+        elif key == "seat_models":
+            if value and (len(value) != 3 or not all("/" in v for v in value)):
+                raise CommonsError("seat_models is three provider/model ids: cheap, mid, top (or empty)")
+            bad = []
         elif key == "plan_chain":
             bad = [v for v in value if not (v in ("agent", "rules") or v.startswith("role:") or "/" in v)]
             if bad:
@@ -93,9 +105,11 @@ def put(s: Store, key: str, value) -> dict:
 
 
 CHOICES = {"agent_updates": ("auto", "notify", "off")}
-RISKY = {"auto_approve_all"}  # off by default and shown as "your risk", never as recommended
+RISKY = {"auto_approve_all"}
+PAID = {"api_seats"}  # off by default: spends money on your own API key  # off by default and shown as "your risk", never as recommended
 
 
 def listing(s: Store) -> list[dict]:
-    return [{"key": k, "value": get(s, k), "default": d, "help": h, "risky": k in RISKY, "choices": CHOICES.get(k)}
+    return [{"key": k, "value": get(s, k), "default": d, "help": h, "risky": k in RISKY, "paid": k in PAID,
+             "choices": CHOICES.get(k)}
             for k, (d, h) in DEFAULTS.items()]

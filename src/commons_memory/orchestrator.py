@@ -531,7 +531,10 @@ class Orchestrator:
                 self.s.x("UPDATE subtasks SET not_before=? WHERE id=?", (min(resets), st["id"]))
                 self.s.audit(None, "subtask.wait_quota", st["id"], {"until": iso(min(resets))})
                 continue
-            ranked = fits
+            from . import seats
+            ranked = seats.fallback(self.s, st, fits)  # your API seats only when no subscription agent is free
+            if not ranked:
+                continue
             from .providers import ProviderLayer
             route = ProviderLayer(self.s).route_for(st["type"])
             if route:  # distributor's routing table nudges allocation
@@ -576,6 +579,8 @@ class Orchestrator:
             key = f"woke:{st['id']}:{st['attempts']}:{int(st.get('not_before') or 0)}"  # once per attempt and per pause
             if not self._deps_ok(st) or (st.get("not_before") or 0) > now() or self.s.q("SELECT 1 FROM meta WHERE key=?", (key,)):
                 continue
+            if self.s.label(st["assigned_agent"])[1] == "api-seats":
+                continue  # the hub's own seat loop picks it up; nobody reads its mailbox
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, st["assigned_agent"]))
             kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
             ev = "debate_turn" if st["type"] == "debate" else None

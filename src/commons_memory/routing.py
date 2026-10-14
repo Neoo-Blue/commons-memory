@@ -347,7 +347,12 @@ class Router:
                 ready_pen, rnote = 0.0, pr["state"]
             else:
                 ready_pen, rnote = 0.15, f"{pr['state']}, wakeable"
-            for m in self._agent_models(a):
+            ms = self._agent_models(a)
+            if a.get("name") == "api-seats":  # the seat's models are the tiers themselves: take the card's tier
+                from .seats import TIERS, models as seat_models
+                tiers = seat_models(self.s)
+                ms = [tiers[TIERS.index(p.get("tier"))] if p.get("tier") in TIERS else tiers[1]] if len(tiers) == 3 else ms
+            for m in ms:
                 from .providers import ProviderLayer
                 q_learn, n = ProviderLayer(self.s).model_score(m, tt) if m else (0.5, 0)
                 q = (q_learn * min(1, n / 5) + prior_quality(m) * (1 - min(1, n / 5)))

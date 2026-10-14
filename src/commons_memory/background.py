@@ -224,6 +224,8 @@ def start_background(s: Store, mode: str | None = None) -> threading.Thread | No
     t.stop = stop  # type: ignore[attr-defined]
     t.start()
     _started[key] = t
+    from .seats import start as start_seats
+    start_seats(s)  # idles until api_seats is switched on
     return t
 
 

@@ -251,16 +251,16 @@ class ProviderLayer:
     # ------------------------------------------------------------------ chat
     def chat(self, model_id: str, prompt: str, system: str = "", max_tokens: int = 1024, role: str = "",
              agent_id: str | None = None, job_id: str | None = None, cache_prefix: str = "",
-             effort: dict | str | None = None, schema: dict | None = None) -> dict:
+             effort: dict | str | None = None, schema: dict | None = None, record: bool = True) -> dict:
         """effort: a level ("minimal|low|medium|high|max") or a dict from routing.effort_spec(); mapped to the
         provider's native knob (Anthropic thinking budget, OpenAI/xAI reasoning_effort, Gemini thinkingBudget,
-        OpenRouter reasoning.effort, Ollama think)."""
+        OpenRouter reasoning.effort, Ollama think). record=False: the caller records the usage itself (once)."""
         from .telemetry import span
         if isinstance(effort, str):
             from .routing import effort_spec
             effort = effort_spec(effort)
         with span("llm.chat", model=model_id, role=role or "chat", job=job_id) as sp:
-            self._effort, self._schema = effort, schema
+            self._effort, self._schema, self._record = effort, schema, record
             out = self._chat(model_id, prompt, system, max_tokens, role, agent_id, job_id, cache_prefix)
             if effort and isinstance(out, dict):
                 out["effort"] = effort.get("level")
@@ -325,8 +325,9 @@ class ProviderLayer:
             cost = ((tin - 0.9 * cached) * (m[0]["cost_in"] or 0) + tout * (m[0]["cost_out"] or 0)) / 1e6
         else:
             cost = estimate_cost(model, int(tin - 0.9 * cached), tout)  # cache reads ~10% of input price
-        self.usage.report(agent_id or self.s.ensure_agent(f"provider:{provider}"), tokens_in=tin, tokens_out=tout,
-                          model=model_id, cost=cost, job_id=job_id, note=f"llm:{role or 'chat'}", cached_tokens=cached)
+        if getattr(self, "_record", True):
+            self.usage.report(agent_id or self.s.ensure_agent(f"provider:{provider}"), tokens_in=tin, tokens_out=tout,
+                              model=model_id, cost=cost, job_id=job_id, note=f"llm:{role or 'chat'}", cached_tokens=cached)
         return {"text": text, "tokens_in": tin, "tokens_out": tout, "cost": round(cost, 6), "model": model_id,
                 "cached_tokens": cached}
 

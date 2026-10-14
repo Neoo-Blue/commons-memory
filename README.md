@@ -72,6 +72,7 @@ effect is real but not yet measured. Rival columns come from each project's own 
 | Project board | your asks survive compaction and agent switches; asked-twice is counted | · | · | · | · |
 | No duplicate work (`start_work`) | two agents never build the same thing (not benchmarked) | · | · | ✓ claim protocol | · |
 | Work splitting (model, live agent or rules plan it; `split_subtask`) | big jobs run in parallel across agents by strength and usage left; live run: 3 jobs, 4 agents (not benchmarked for speed) | · | · | ✓ task delegation (no planner) | · |
+| API seats (your own keys, by tier) | when every subscription agent is busy, offline or out of usage, steps that need no repo (specs, plans, reviews, research, summaries) still run on a cheap, mid or top model from your key, picked per step; stops at your 24-hour dollar cap (off by default) | · | · | · | · |
 | Six-stage workflow (`/spec` `/plan` `/build` `/test` `/review` `/ship`) | an idea goes through spec, plan, build, verify, cross-family review and ship with you approving the spec and the release; leads split work into task cards, each routed to a cheap, mid or top model by difficulty x criticality; build and verify need evidence; every acceptance criterion traced to its tests and verdicts; a failed check stops the checks after it; Workflow page draws it all (token savings measured per job, not benchmarked) | · | · | ◐ task delegation, no stages | · |
 | Job workspace + recorded diffs | every part's result, diff and GitHub-checked commit in one place; reviewers get the diff | · | ◐ file paths only | ✓ patch submit | · |
 | Credential vault + decision agent + owner approvals | agents never see keys; reads allowed, writes need your ask, the rest is one approval link only you can approve (owner password), and approving runs it | · | · | · | · |
@@ -263,8 +264,6 @@ managed platform and Zep claim 92-95% under their own setups), so only the table
 
 ## Roadmap
 - First PyPI release (the publishing workflow is in place; `uvx commons-memory` / `pipx install commons-memory` work once it lands).
-- Hub-run API seats: cheap / mid / top models from your own API keys taking task cards when no subscription agent is
-  free, under a daily spend cap (tiers already route across each agent's own models today).
 - Hosted dashboard auth via OIDC.
 
 History: [CHANGELOG.md](CHANGELOG.md).
