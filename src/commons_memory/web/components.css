@@ -1294,3 +1294,6 @@ aside.drawer:focus, aside.drawer:focus-visible { outline: none; }
   justify-content: flex-end; gap: var(--space-2); background: var(--bg-card); flex-shrink: 0; }
 .drawer-foot:empty { display: none; }
 @media (max-width: 900px) { .drawer-x { width: 44px; height: 44px; min-height: 44px; } }
+
+/* legacy.css styles a .drawer class (Memory's inline detail): none of it may reach the slide-over */
+aside.drawer { padding: 0; margin: 0; border-radius: 0; border-top: 0; border-bottom: 0; border-right: 0; grid-column: auto; }

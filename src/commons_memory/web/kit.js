@@ -321,7 +321,7 @@ function dOpen(o = {}) {
     bd.addEventListener("click", () => dClose());
     el.className = "drawer"; el.tabIndex = -1;
     el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-labelledby", tid);
-    el.innerHTML = `<header class="drawer-head"><div class="drawer-titles"><h2 class="drawer-title" id="${tid}"></h2><div class="drawer-sub"></div></div><button type="button" class="drawer-x" aria-label="Close">×</button></header><div class="drawer-body"></div><footer class="drawer-foot"></footer>`;
+    el.innerHTML = `<div class="drawer-head"><div class="drawer-titles"><h2 class="drawer-title" id="${tid}"></h2><div class="drawer-sub"></div></div><button type="button" class="drawer-x" aria-label="Close">×</button></div><div class="drawer-body"></div><footer class="drawer-foot"></footer>`;
     el.querySelector(".drawer-x").addEventListener("click", () => dClose());
     el.addEventListener("keydown", drawerKey);
     document.body.append(bd, el);

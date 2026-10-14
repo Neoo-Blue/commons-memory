@@ -983,8 +983,8 @@ def serve_dashboard(store: Store, host="127.0.0.1", port=8766, token=None, backg
 # The page is assembled from web/: page.html (the shell), then the stylesheets and scripts in order. No build step:
 # every file is plain CSS or JS, served inline in one response.
 WEB = Path(__file__).with_name("web")
-CSS_FILES = ["legacy.css", "theme.css", "components.css", "shell.css", "pages/system.css", "pages/work.css"]
-JS_FILES = ["legacy.js", "kit.js", "shell.js", "pages/system.js", "pages/work.js"]
+CSS_FILES = ["legacy.css", "theme.css", "components.css", "shell.css", "pages/system.css", "pages/work.css", "pages/agents.css"]
+JS_FILES = ["legacy.js", "kit.js", "shell.js", "pages/system.js", "pages/work.js", "pages/agents.js"]
 
 
 def _page() -> str:
