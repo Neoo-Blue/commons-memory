@@ -37,6 +37,109 @@
     return String(t);
   }
 
+  function humanizeSource(srcStr) {
+    const parts = String(srcStr || "").split(":");
+    if (parts[0] === "discovery" && parts.length >= 2) {
+      const collector = parts[1];
+      const src = parts[2] || "";
+      if (collector === "proxmox" || collector === "docker") {
+        return src || collector;
+      }
+      if (src === "local" || !src) {
+        return collector;
+      }
+      return src;
+    }
+    return srcStr;
+  }
+
+  function countMemoryFacts(overview) {
+    let count = 0;
+    const seen = new Set();
+    function walk(n) {
+      if (!n || !n.id || seen.has(n.id)) return;
+      seen.add(n.id);
+      const srcs = Array.isArray(n.sources) ? n.sources : [];
+      if (srcs.some(s => s === "memory" || s.startsWith("memory"))) {
+        count++;
+      }
+      if (Array.isArray(n.children)) {
+        n.children.forEach(walk);
+      }
+    }
+    (overview.tree || []).forEach(walk);
+    (overview.systems || []).forEach(walk);
+    return count;
+  }
+
+  function getStatusDotClass(node) {
+    if (node && node.stale) return "busy";
+    const st = (node && node.attrs && node.attrs.status) ? String(node.attrs.status).toLowerCase() : "";
+    if (st === "running") return "live";
+    return "offline";
+  }
+
+  function fmtGuestSpecs(attrs) {
+    if (!attrs) return "";
+    const parts = [];
+    const ip = attrs.ip || (Array.isArray(attrs.ips) && attrs.ips.length ? attrs.ips[0] : null);
+    if (ip) parts.push(ip);
+    if (attrs.cores) {
+      parts.push(attrs.cores === 1 ? "1 core" : attrs.cores + " cores");
+    }
+    if (attrs.memory_mb) {
+      const gb = attrs.memory_mb / 1024;
+      const gbStr = gb >= 1 ? (Number.isInteger(gb) ? gb + "GB" : gb.toFixed(1) + "GB") : attrs.memory_mb + "MB";
+      parts.push(gbStr);
+    } else if (attrs.memory) {
+      parts.push(String(attrs.memory).replace(/\s*RAM$/i, ""));
+    }
+    return parts.join(" · ");
+  }
+
+  function truncateMiddle(str, maxLen) {
+    if (!str) return "";
+    maxLen = maxLen || 32;
+    if (str.length <= maxLen) return str;
+    const keep = Math.max(4, Math.floor((maxLen - 3) / 2));
+    return str.slice(0, keep) + "..." + str.slice(-keep);
+  }
+
+  function getServicePorts(svc, gEdges, nodeMap) {
+    const ports = [];
+    const attrs = (svc && svc.attrs) || {};
+    if (attrs.port) {
+      ports.push(String(attrs.port));
+    }
+    if (Array.isArray(attrs.ports)) {
+      attrs.ports.forEach(p => {
+        const hostPart = String(p).split("->")[0].split("/")[0].trim();
+        if (hostPart && !ports.includes(hostPart)) {
+          ports.push(hostPart);
+        }
+      });
+    }
+    if (gEdges && nodeMap && svc.id) {
+      gEdges.forEach(e => {
+        if (e.src === svc.id && e.rel === "reachable_at") {
+          const dst = nodeMap.get(e.dst);
+          if (dst) {
+            const epPort = (dst.attrs && dst.attrs.port) || (dst.name && dst.name.match(/:(\d+)(?:\/|$)/) ? dst.name.match(/:(\d+)(?:\/|$)/)[1] : null);
+            if (epPort && !ports.includes(String(epPort))) {
+              ports.push(String(epPort));
+            }
+          }
+        }
+      });
+    }
+    return ports;
+  }
+
+  function renderPortChips(ports) {
+    if (!ports || !ports.length) return "";
+    return ports.slice(0, 3).map(p => `<span class="infra-port-chip" title="Port ${E(p)}">${E(p)}</span>`).join("");
+  }
+
   function getKindIcon(kind) {
     switch (kind) {
       case "place":
@@ -120,8 +223,8 @@
 
   INFRA.highlightMap = function (q) {
     const term = (q || "").toLowerCase();
-    const cards = document.querySelectorAll(".infra-guest-card, .infra-machine-card, .infra-svc-chip-row");
-    cards.forEach(c => {
+    const items = document.querySelectorAll(".infra-guest-card, .infra-machine-card, .infra-svc-chip-row, .infra-host-chip");
+    items.forEach(c => {
       if (!term) {
         c.classList.remove("infra-highlighted", "infra-dimmed");
         return;
@@ -130,11 +233,31 @@
       if (text.includes(term)) {
         c.classList.add("infra-highlighted");
         c.classList.remove("infra-dimmed");
+        const moreBox = c.closest(".infra-services-more");
+        if (moreBox) {
+          moreBox.style.display = "flex";
+          const toggleBtn = moreBox.nextElementSibling;
+          if (toggleBtn && toggleBtn.classList.contains("infra-more-btn")) {
+            toggleBtn.textContent = "Show less";
+          }
+        }
       } else {
         c.classList.remove("infra-highlighted");
         c.classList.add("infra-dimmed");
       }
     });
+  };
+
+  INFRA.toggleMore = function (btn, evt) {
+    if (evt) evt.stopPropagation();
+    const card = btn.closest(".infra-guest-card");
+    if (!card) return;
+    const moreBox = card.querySelector(".infra-services-more");
+    if (!moreBox) return;
+    const isHidden = moreBox.style.display === "none";
+    moreBox.style.display = isHidden ? "flex" : "none";
+    const count = moreBox.dataset.count || "more";
+    btn.textContent = isHidden ? "Show less" : `+${count} more`;
   };
 
   INFRA.ask = async function (q) {
@@ -477,6 +600,70 @@
     }
   };
 
+  /* ---------- Guest Card Renderer ---------- */
+  function renderGuestCard(g, activeSys) {
+    const gAttrs = g.attrs || {};
+    const gServices = g.children || [];
+    const gMemOnly = !(g.sources || []).some(s => s.startsWith("discovery"));
+    const gHighlighted = activeSys && gServices.some(s => s.name.toLowerCase().includes(activeSys.toLowerCase()));
+    const gDimmed = activeSys && !gHighlighted;
+    const isStopped = gAttrs.status && String(gAttrs.status).toLowerCase() === "stopped";
+    const specsText = fmtGuestSpecs(gAttrs);
+
+    const visibleServices = gServices.slice(0, 8);
+    const hiddenServices = gServices.slice(8);
+
+    return `<div class="infra-guest-card ${g.stale ? 'stale' : ''} ${isStopped ? 'stopped' : ''} ${gHighlighted ? 'infra-highlighted' : ''} ${gDimmed ? 'infra-dimmed' : ''}" data-id="${E(g.id)}" data-search="${E(g.name + ' ' + (gAttrs.ip || '') + ' ' + (gAttrs.vmid || '') + ' ' + (specsText || ''))}">
+      <div class="infra-guest-head">
+        <div class="infra-guest-title-wrap" onclick="INFRA.zoom(${J(g.id)})">
+          <span class="status-dot ${getStatusDotClass(g)}"></span>
+          <span class="infra-guest-title">${E(g.name)}</span>
+          ${specsText ? `<span class="infra-guest-specs mut sm">${E(specsText)}</span>` : ""}
+          ${gMemOnly ? `<span class="badge sm info" title="Discovered from memory notes">from memory</span>` : ""}
+          ${g.stale ? `<span class="badge sm warn">stale</span>` : ""}
+        </div>
+        <div class="infra-guest-actions">
+          <button type="button" class="infra-guest-btn" onclick="INFRA.zoom(${J(g.id)})">Zoom</button>
+          <button type="button" class="infra-guest-btn" onclick="K.drawer.openId(${J('infra:' + g.id)})">Inspect</button>
+        </div>
+      </div>
+
+      ${g.stale && g.last_seen ? `
+        <div class="mut sm" style="font-size:11px">Not seen since ${E(fmtAgo(g.last_seen))}</div>
+      ` : ""}
+
+      <!-- Services inside Guest -->
+      ${gServices.length ? `
+        <div class="infra-services-list">
+          ${visibleServices.map(svc => renderServiceChipRow(svc, activeSys)).join("")}
+          ${hiddenServices.length ? `
+            <div class="infra-services-more" style="display:none" data-count="${hiddenServices.length}">
+              ${hiddenServices.map(svc => renderServiceChipRow(svc, activeSys)).join("")}
+            </div>
+            <button type="button" class="infra-more-btn" onclick="INFRA.toggleMore(this, event)">+${hiddenServices.length} more</button>
+          ` : ""}
+        </div>
+      ` : `<div class="mut sm" style="padding:4px 0">No services running</div>`}
+    </div>`;
+  }
+
+  function renderServiceChipRow(svc, activeSys, gEdges, nodeMap) {
+    const sAttrs = svc.attrs || {};
+    const sHighlighted = activeSys && svc.name.toLowerCase().includes(activeSys.toLowerCase());
+    const sMemOnly = !(svc.sources || []).some(s => s.startsWith("discovery"));
+    const ports = getServicePorts(svc, gEdges, nodeMap);
+
+    return `<div class="infra-svc-chip-row ${sHighlighted ? 'infra-highlighted' : ''}" data-id="${E(svc.id)}" data-search="${E(svc.name + ' ' + (ports.join(' ') || '') + ' ' + (sAttrs.image || ''))}" onclick="K.drawer.openId(${J('infra:' + svc.id)})">
+      <div class="infra-svc-name">
+        ${getKindIcon(svc.kind)}
+        <span>${E(svc.name)}</span>
+        ${renderPortChips(ports)}
+        ${sMemOnly ? `<span class="badge sm info" style="font-size:9.5px;padding:0 4px">memory</span>` : ""}
+        ${svc.stale ? `<span class="badge sm warn" style="font-size:9.5px;padding:0 4px">stale</span>` : ""}
+      </div>
+    </div>`;
+  }
+
   /* ==========================================================================
      PAGE: Infrastructure (V["Infrastructure"])
      ========================================================================== */
@@ -523,11 +710,15 @@
     // Build freshness subtitle
     let freshnessHtml = "";
     if (sources.length) {
-      const srcText = sources.map(s => `Discovered from ${s.source} ${fmtAgo(s.at)}`).join(" · ");
-      freshnessHtml = `<span class="dot"></span><span>${E(srcText)}</span>`;
+      const srcItems = sources.map(s => `${humanizeSource(s.source)} ${fmtAgo(s.at)}`);
+      freshnessHtml = `<span class="dot"></span><span>Discovered from ${E(srcItems.join(" · "))}</span>`;
     }
-    if (overview.watermark) {
-      freshnessHtml += `${sources.length ? ' <span class="mut">·</span> ' : '<span class="dot"></span>'}<span>Knowledge synced ${E(fmtAgo(overview.watermark))}</span>`;
+    const memFacts = countMemoryFacts(overview);
+    if (memFacts > 0) {
+      freshnessHtml += `${sources.length ? ' <span class="mut">·</span> ' : '<span class="dot"></span>'}<span>${memFacts} facts from memory</span>`;
+    }
+    if (!freshnessHtml && overview.watermark) {
+      freshnessHtml = `<span class="dot"></span><span>Knowledge synced ${E(fmtAgo(overview.watermark))}</span>`;
     }
     if (!freshnessHtml) {
       freshnessHtml = '<span>No sources connected yet</span>';
@@ -662,7 +853,10 @@
     out += `<div class="infra-map-canvas">`;
 
     tree.forEach(m => {
-      const guests = m.children || [];
+      const allChildren = m.children || [];
+      const guests = allChildren.filter(c => c.kind === "guest");
+      const hostServices = allChildren.filter(c => c.kind === "service");
+
       const mAttrs = m.attrs || {};
       const mSpecs = [
         mAttrs.ip ? mAttrs.ip : null,
@@ -694,59 +888,34 @@
           </div>
         </div>
 
+        <!-- Host Services Section -->
+        ${hostServices.length ? `
+          <div class="infra-host-services-section">
+            <div class="infra-section-title">On the host (${hostServices.length})</div>
+            <div class="infra-host-chips">
+              ${hostServices.map(svc => {
+                const sAttrs = svc.attrs || {};
+                const sHighlighted = activeSys && svc.name.toLowerCase().includes(activeSys.toLowerCase());
+                const sMemOnly = !(svc.sources || []).some(s => s.startsWith("discovery"));
+                const ports = getServicePorts(svc);
+                return `<div class="infra-host-chip ${sHighlighted ? 'infra-highlighted' : ''}" data-id="${E(svc.id)}" data-search="${E(svc.name + ' ' + svc.kind + ' ' + (ports.join(' ') || ''))}" onclick="K.drawer.openId(${J('infra:' + svc.id)})">
+                  ${getKindIcon(svc.kind)}
+                  <span class="infra-host-chip-name">${E(svc.name)}</span>
+                  ${renderPortChips(ports)}
+                  ${sMemOnly ? `<span class="badge sm info" style="font-size:9.5px;padding:0 4px">memory</span>` : ""}
+                  ${svc.stale ? `<span class="badge sm warn" style="font-size:9.5px;padding:0 4px">stale</span>` : ""}
+                </div>`;
+              }).join("")}
+            </div>
+          </div>
+        ` : ""}
+
         <!-- Guests Section -->
         ${guests.length ? `
           <div class="infra-guests-section">
             <div class="infra-section-title">Guests & Containers (${guests.length})</div>
             <div class="infra-guest-grid">
-              ${guests.map(g => {
-                const gAttrs = g.attrs || {};
-                const gServices = g.children || [];
-                const gMemOnly = !(g.sources || []).some(s => s.startsWith("discovery"));
-                const gHighlighted = activeSys && gServices.some(s => s.name.toLowerCase().includes(activeSys.toLowerCase()));
-                const gDimmed = activeSys && !gHighlighted;
-
-                return `<div class="infra-guest-card ${g.stale ? 'stale' : ''} ${gHighlighted ? 'infra-highlighted' : ''} ${gDimmed ? 'infra-dimmed' : ''}" data-id="${E(g.id)}" data-search="${E(g.name + ' ' + (gAttrs.ip || '') + ' ' + (gAttrs.vmid || ''))}">
-                  <div class="infra-guest-head">
-                    <div class="infra-guest-title-wrap" onclick="INFRA.zoom(${J(g.id)})">
-                      <span class="status-dot ${g.stale ? 'busy' : 'live'}"></span>
-                      <span class="infra-guest-title">${E(g.name)}</span>
-                      ${gAttrs.vmid ? `<span class="badge sm">VMID ${E(gAttrs.vmid)}</span>` : ""}
-                      ${gAttrs.ip ? `<span class="badge sm">${E(gAttrs.ip)}</span>` : ""}
-                      ${gMemOnly ? `<span class="badge sm info" title="Discovered from memory notes">from memory</span>` : ""}
-                      ${g.stale ? `<span class="badge sm warn">stale</span>` : ""}
-                    </div>
-                    <div class="infra-guest-actions">
-                      <button type="button" class="infra-guest-btn" onclick="INFRA.zoom(${J(g.id)})">Zoom</button>
-                      <button type="button" class="infra-guest-btn" onclick="K.drawer.openId(${J('infra:' + g.id)})">Inspect</button>
-                    </div>
-                  </div>
-
-                  ${g.stale && g.last_seen ? `
-                    <div class="mut sm" style="font-size:11px">Not seen since ${E(fmtAgo(g.last_seen))}</div>
-                  ` : ""}
-
-                  <!-- Services inside Guest -->
-                  ${gServices.length ? `
-                    <div class="infra-services-list">
-                      ${gServices.map(svc => {
-                        const sAttrs = svc.attrs || {};
-                        const sHighlighted = activeSys && svc.name.toLowerCase().includes(activeSys.toLowerCase());
-                        const sMemOnly = !(svc.sources || []).some(s => s.startsWith("discovery"));
-                        return `<div class="infra-svc-chip-row ${sHighlighted ? 'infra-highlighted' : ''}" data-id="${E(svc.id)}" onclick="K.drawer.openId(${J('infra:' + svc.id)})">
-                          <div class="infra-svc-name">
-                            ${getKindIcon(svc.kind)}
-                            <span>${E(svc.name)}</span>
-                            ${sMemOnly ? `<span class="badge sm info" style="font-size:9.5px;padding:0 4px">memory</span>` : ""}
-                            ${svc.stale ? `<span class="badge sm warn" style="font-size:9.5px;padding:0 4px">stale</span>` : ""}
-                          </div>
-                          ${sAttrs.port ? `<span class="infra-svc-port">:${E(sAttrs.port)}</span>` : ""}
-                        </div>`;
-                      }).join("")}
-                    </div>
-                  ` : `<div class="mut sm" style="padding:4px 0">No services running</div>`}
-                </div>`;
-              }).join("")}
+              ${guests.map(g => renderGuestCard(g, activeSys)).join("")}
             </div>
           </div>
         ` : `<div class="mut sm">No guests running on this machine</div>`}
@@ -794,33 +963,92 @@
     });
     crumbsHtml += `<span class="infra-crumb-sep">›</span><span class="infra-crumb cur">${E(node.name)}</span>`;
 
-    // Children (e.g. services running in this guest, or guests running on this machine)
+    // Machine view vs Guest/Other view
+    if (node.kind === "machine") {
+      const machineInTree = (tree || []).find(t => t.id === nodeId);
+      const allChildren = (machineInTree && machineInTree.children) ? machineInTree.children : inLinks.filter(l => l.rel === "runs_on");
+      const guests = allChildren.filter(c => c.kind === "guest");
+      const hostServices = allChildren.filter(c => c.kind === "service");
+
+      const specsText = fmtGuestSpecs(attrs);
+
+      let out = `<div class="infra-zoomed-view">
+        <!-- Breadcrumb Bar -->
+        <div class="infra-map-bar">
+          <div class="infra-crumbs">${crumbsHtml}</div>
+          <div class="infra-head-controls">
+            <button type="button" class="btn sm" onclick="INFRA.zoom('')">Zoom out to all</button>
+            <button type="button" class="btn sm" onclick="K.drawer.openId(${J('infra:' + node.id)})">Inspect drawer</button>
+          </div>
+        </div>
+
+        <!-- Node Summary Card -->
+        <div class="infra-zoomed-header-card">
+          <div class="infra-machine-info">
+            <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-xl);font-weight:600">
+              ${getKindIcon(node.kind)} ${E(node.name)}
+            </span>
+            <span class="badge sm">${E(node.kind)}</span>
+            ${attrs.ip ? `<span class="badge sm">${E(attrs.ip)}</span>` : ""}
+            ${specsText ? `<span class="mut sm">${E(specsText)}</span>` : ""}
+            ${attrs.os ? `<span class="mut sm">${E(attrs.os)}</span>` : ""}
+            ${node.stale ? `<span class="badge sm warn">stale · not seen since ${E(fmtAgo(node.last_seen))}</span>` : ""}
+            ${node.last_seen && !node.stale ? `<span class="mut sm">seen ${E(fmtAgo(node.last_seen))}</span>` : ""}
+          </div>
+          ${node.note ? `<div class="mut sm">${E(node.note)}</div>` : ""}
+        </div>
+
+        <!-- Host Services Section -->
+        ${hostServices.length ? `
+          <div class="infra-host-services-section">
+            <div class="infra-section-title">On the host (${hostServices.length})</div>
+            <div class="infra-host-chips">
+              ${hostServices.map(svc => {
+                const sAttrs = svc.attrs || {};
+                const sMemOnly = !(svc.sources || []).some(s => s.startsWith("discovery"));
+                const ports = getServicePorts(svc, gEdges, nodeMap);
+                return `<div class="infra-host-chip" data-id="${E(svc.id)}" onclick="K.drawer.openId(${J('infra:' + svc.id)})">
+                  ${getKindIcon(svc.kind)}
+                  <span class="infra-host-chip-name">${E(svc.name)}</span>
+                  ${renderPortChips(ports)}
+                  ${sMemOnly ? `<span class="badge sm info" style="font-size:9.5px;padding:0 4px">memory</span>` : ""}
+                  ${svc.stale ? `<span class="badge sm warn" style="font-size:9.5px;padding:0 4px">stale</span>` : ""}
+                </div>`;
+              }).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        <!-- Guests Section -->
+        ${guests.length ? `
+          <div class="infra-guests-section">
+            <div class="infra-section-title">Guests & Containers (${guests.length})</div>
+            <div class="infra-guest-grid">
+              ${guests.map(g => renderGuestCard(g, "")).join("")}
+            </div>
+          </div>
+        ` : `<div class="mut sm">No guests running on this machine</div>`}
+      </div>`;
+
+      return out;
+    }
+
+    // Children (runtime services running inside this guest)
     const childIds = new Set(inLinks.filter(l => l.rel === "runs_on").map(l => l.id));
     const childNodes = inLinks.filter(l => l.rel === "runs_on");
 
-    // Gather mounts (from this node or child services)
-    const mounts = [];
-    outLinks.filter(l => l.rel === "mounts").forEach(l => mounts.push(l));
-    gEdges.filter(e => e.rel === "mounts" && childIds.has(e.src)).forEach(e => {
-      const target = nodeMap.get(e.dst);
-      if (target && !mounts.some(m => m.id === target.id)) {
-        mounts.push({
-          id: target.id,
-          name: target.name,
-          kind: target.kind,
-          attrs: e.attrs || {},
-          label: "mounts",
-        });
-      }
-    });
+    // Outbound mounts to storage
+    const outboundMounts = outLinks.filter(l => l.rel === "mounts" || (l.rel === "stores_in" && l.kind === "storage"));
 
-    // Gather connections (talks_to, exposed_via, uses_credential, part_of)
+    // Inbound container binds (containers that bind paths from this guest)
+    const containerBinds = inLinks.filter(l => l.rel === "mounts");
+
+    // Gather connections (talks_to, exposed_via, uses_credential, part_of, reachable_at)
     const connMap = new Map();
-    // Direct links
-    outLinks.filter(l => l.rel !== "runs_on" && l.rel !== "mounts").forEach(l => {
+    outLinks.filter(l => l.rel !== "runs_on" && l.rel !== "mounts" && l.rel !== "stores_in").forEach(l => {
       connMap.set(l.edge || (l.id + l.rel), { ...l, sourceName: node.name });
     });
-    inLinks.filter(l => l.rel !== "runs_on").forEach(l => {
+    inLinks.filter(l => l.rel !== "runs_on" && l.rel !== "mounts").forEach(l => {
       connMap.set(l.edge || (l.id + l.rel), {
         ...l,
         label: l.rel === "talks_to" ? "used by" : l.rel === "uses_credential" ? "credential for" : "linked from",
@@ -830,7 +1058,7 @@
 
     // Child service connections
     gEdges.forEach(e => {
-      if (childIds.has(e.src) && e.rel !== "runs_on") {
+      if (childIds.has(e.src) && e.rel !== "runs_on" && e.rel !== "mounts") {
         const srcNode = nodeMap.get(e.src);
         const dstNode = nodeMap.get(e.dst);
         if (srcNode && dstNode) {
@@ -857,6 +1085,7 @@
     });
 
     const allConns = Array.from(connMap.values());
+    const specsText = fmtGuestSpecs(attrs);
 
     let out = `<div class="infra-zoomed-view">
       <!-- Breadcrumb Bar -->
@@ -875,10 +1104,8 @@
             ${getKindIcon(node.kind)} ${E(node.name)}
           </span>
           <span class="badge sm">${E(node.kind)}</span>
-          ${attrs.vmid ? `<span class="badge sm">VMID ${E(attrs.vmid)}</span>` : ""}
-          ${attrs.ip ? `<span class="badge sm">${E(attrs.ip)}</span>` : ""}
-          ${attrs.cores ? `<span class="mut sm">${E(attrs.cores)} cores</span>` : ""}
-          ${attrs.memory ? `<span class="mut sm">${E(attrs.memory)} RAM</span>` : ""}
+          ${specsText ? `<span class="infra-guest-specs mut sm">${E(specsText)}</span>` : ""}
+          ${attrs.os ? `<span class="mut sm">${E(attrs.os)}</span>` : ""}
           ${node.stale ? `<span class="badge sm warn">stale · not seen since ${E(fmtAgo(node.last_seen))}</span>` : ""}
           ${node.last_seen && !node.stale ? `<span class="mut sm">seen ${E(fmtAgo(node.last_seen))}</span>` : ""}
         </div>
@@ -889,22 +1116,22 @@
       <div class="infra-zoomed-grid">
         <!-- Left: Services or Children -->
         <div class="infra-zoomed-panel">
-          <span class="infra-section-title">${node.kind === 'machine' ? 'Guests & Containers' : 'Runtime & Services'} (${childNodes.length})</span>
+          <span class="infra-section-title">Runtime & Services (${childNodes.length})</span>
           ${childNodes.length ? `
             <div class="infra-services-list">
               ${childNodes.map(child => {
                 const cNode = nodeMap.get(child.id) || child;
                 const cAttrs = cNode.attrs || {};
-                const cPorts = cAttrs.port ? ':' + cAttrs.port : '';
+                const ports = getServicePorts(cNode, gEdges, nodeMap);
                 return `<div class="infra-svc-chip-row" onclick="K.drawer.openId(${J('infra:' + child.id)})">
                   <div class="infra-svc-name">
                     ${getKindIcon(child.kind)}
                     <span>${E(child.name)}</span>
                     <span class="badge sm">${E(child.kind)}</span>
-                    ${cPorts ? `<span class="infra-svc-port">${E(cPorts)}</span>` : ""}
-                    ${cAttrs.image ? `<span class="mut sm" style="font-size:11px">${E(cAttrs.image)}</span>` : ""}
+                    ${renderPortChips(ports)}
+                    ${cAttrs.image ? `<span class="infra-svc-image" title="${E(cAttrs.image)}">${E(truncateMiddle(cAttrs.image, 32))}</span>` : ""}
                   </div>
-                  <div style="display:flex;gap:4px;align-items:center">
+                  <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
                     <button type="button" class="btn sm" onclick="event.stopPropagation();INFRA.zoom(${J(child.id)})">Zoom</button>
                     <button type="button" class="btn sm" onclick="event.stopPropagation();K.drawer.openId(${J('infra:' + child.id)})">Inspect</button>
                   </div>
@@ -913,20 +1140,65 @@
             </div>
           ` : `<div class="mut sm">No runtime children running inside this node</div>`}
 
-          <!-- Storage Mounts -->
-          ${mounts.length ? `
-            <div style="margin-top:var(--space-3)">
-              <span class="infra-section-title">Mounted Storage (${mounts.length})</span>
-              <div class="infra-services-list" style="margin-top:var(--space-2)">
-                ${mounts.map(m => `
-                  <div class="infra-conn-row" onclick="K.drawer.openId(${J('infra:' + m.id)})">
-                    <div class="infra-conn-info">
+          <!-- Outbound Storage Mounts -->
+          ${outboundMounts.length ? `
+            <div class="infra-zoomed-section" style="margin-top:var(--space-3)">
+              <span class="infra-section-title">Mounts (${outboundMounts.length})</span>
+              <div class="infra-binds-list">
+                ${outboundMounts.map(m => {
+                  const binds = (m.attrs && Array.isArray(m.attrs.binds)) ? m.attrs.binds : [];
+                  return `<div class="infra-bind-group">
+                    <div class="infra-bind-head" onclick="K.drawer.openId(${J('infra:' + m.id)})">
                       ${getKindIcon(m.kind || 'storage')}
-                      <span><b>${E(m.name)}</b> ${m.attrs && m.attrs.guest_path ? `<span class="mut sm">at ${E(m.attrs.guest_path)}</span>` : ''}</span>
+                      <span style="font-weight:600">${E(m.name)}</span>
+                      <span class="badge sm">${E(m.kind || 'storage')}</span>
+                      ${m.attrs && m.attrs.volume ? `<span class="mut sm">${E([m.attrs.volume, m.attrs.size].filter(Boolean).join(' · '))}</span>` : ''}
                     </div>
-                    <button type="button" class="btn sm" onclick="event.stopPropagation();K.drawer.openId(${J('infra:' + m.id)})">Inspect</button>
-                  </div>
-                `).join("")}
+                    ${binds.length ? `
+                      <div class="infra-bind-items">
+                        ${binds.map(b => {
+                          const srcPath = b.host_path || b.guest_path || "";
+                          const dstPath = b.guest_path || b.container_path || "";
+                          return `<div class="infra-bind-item">
+                            <code class="infra-bind-path">${E(srcPath)}${dstPath && dstPath !== srcPath ? ' → ' + E(dstPath) : ''}</code>
+                            ${b.read_only ? `<span class="badge sm">read-only</span>` : ""}
+                          </div>`;
+                        }).join("")}
+                      </div>
+                    ` : ""}
+                  </div>`;
+                }).join("")}
+              </div>
+            </div>
+          ` : ""}
+
+          <!-- Inbound Container Binds -->
+          ${containerBinds.length ? `
+            <div class="infra-zoomed-section" style="margin-top:var(--space-3)">
+              <span class="infra-section-title">Container binds (${containerBinds.length})</span>
+              <div class="infra-binds-list">
+                ${containerBinds.map(cb => {
+                  const binds = (cb.attrs && Array.isArray(cb.attrs.binds)) ? cb.attrs.binds : [];
+                  return `<div class="infra-bind-group">
+                    <div class="infra-bind-head" onclick="K.drawer.openId(${J('infra:' + cb.id)})">
+                      ${getKindIcon(cb.kind)}
+                      <span style="font-weight:600">${E(cb.name)}</span>
+                      <span class="badge sm">${E(cb.kind)}</span>
+                    </div>
+                    ${binds.length ? `
+                      <div class="infra-bind-items">
+                        ${binds.map(b => {
+                          const srcPath = b.host_path || b.guest_path || "";
+                          const dstPath = b.container_path || "";
+                          return `<div class="infra-bind-item">
+                            <code class="infra-bind-path">${E(srcPath)} → ${E(dstPath)}</code>
+                            ${b.read_only ? `<span class="badge sm">read-only</span>` : ""}
+                          </div>`;
+                        }).join("")}
+                      </div>
+                    ` : ""}
+                  </div>`;
+                }).join("")}
               </div>
             </div>
           ` : ""}
@@ -954,7 +1226,7 @@
                       ` : ""}
                     </div>
                   </div>
-                  <div style="display:flex;align-items:center;gap:6px">
+                  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
                     <span class="badge sm">${E(l.kind)}</span>
                     ${!isCred ? `<button type="button" class="btn sm" onclick="event.stopPropagation();K.drawer.openId(${J('infra:' + l.id)})">Inspect</button>` : ""}
                   </div>
@@ -1036,7 +1308,7 @@
               ${list.map(n => {
                 const attrs = n.attrs || {};
                 const attrPills = [
-                  attrs.ip ? attrs.ip : null,
+                  attrs.ip ? attrs.ip : (Array.isArray(attrs.ips) && attrs.ips.length ? attrs.ips[0] : null),
                   attrs.vmid ? "vmid:" + attrs.vmid : null,
                   attrs.port ? "port:" + attrs.port : null,
                   attrs.status ? attrs.status : null,
@@ -1068,8 +1340,8 @@
                   <td>${E(fmtAgo(n.last_seen))}</td>
                   <td>
                     <div style="display:flex;align-items:center;gap:6px">
-                      <span class="status-dot ${n.stale ? 'busy' : 'live'}"></span>
-                      <span>${n.stale ? 'Stale' : 'Active'}</span>
+                      <span class="status-dot ${getStatusDotClass(n)}"></span>
+                      <span>${n.stale ? 'Stale' : (n.attrs && n.attrs.status ? (n.attrs.status.charAt(0).toUpperCase() + n.attrs.status.slice(1)) : 'Active')}</span>
                     </div>
                   </td>
                 </tr>`;
