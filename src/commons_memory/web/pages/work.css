@@ -396,10 +396,10 @@
   color: var(--fg-default);
 }
 
-.drawer-gate-badge.waiting {
-  background: var(--bad-subtle);
-  border-color: var(--bad-border);
-  color: var(--bad);
+.drawer-gate-badge.waiting {  /* waiting on a check or on you: attention, not failure */
+  background: var(--warn-subtle);
+  border-color: var(--warn-border);
+  color: var(--fg-default);
 }
 
 /* Steps List inside Drawer */
