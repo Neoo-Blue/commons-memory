@@ -233,8 +233,10 @@ html[data-theme="light"],
   box-sizing: border-box;
 }
 
+/* the window scrolls, never body: a fixed-height body with overflow becomes its own scroller (no iOS bar collapse) */
 html, body {
-  height: 100%;
+  height: auto;
+  min-height: 100%;
 }
 
 body {
@@ -1724,7 +1726,7 @@ details[open] summary {
 
 @media (max-width: 640px) {
   html, body {
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .grid8 {

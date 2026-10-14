@@ -1,0 +1,670 @@
+/* ==========================================================================
+   COMMONS DESIGN SYSTEM: SYSTEM PAGES (system.css)
+   Linear / Vercel inspired settings, secrets, recurring, and system views.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Layout & Navigation
+   -------------------------------------------------------------------------- */
+.sys-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.sys-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.sys-nav {
+  position: sticky;
+  top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2);
+}
+
+.sys-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  transition: color var(--duration-fast), background var(--duration-fast);
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sys-nav-item:hover {
+  color: var(--fg-default);
+  background: var(--bg-card-hover);
+}
+
+.sys-nav-item.active {
+  color: var(--acc);
+  background: var(--acc-subtle);
+  font-weight: 500;
+}
+
+.sys-mobile-nav {
+  display: none;
+  width: 100%;
+  margin-bottom: var(--space-4);
+}
+
+.sys-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Cards & Sections
+   -------------------------------------------------------------------------- */
+.sys-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  scroll-margin-top: var(--space-4);
+}
+
+.sys-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sys-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sys-card-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg-default);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sys-card-desc {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Settings Rows & Switches
+   -------------------------------------------------------------------------- */
+.sys-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sys-setting-row:last-child {
+  border-bottom: none;
+}
+
+.sys-setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.sys-setting-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-default);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sys-setting-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.sys-setting-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.sys-inline-saved {
+  font-size: var(--text-2xs);
+  color: var(--ok);
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sys-inline-saved.visible {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Checklist (Getting started)
+   -------------------------------------------------------------------------- */
+.sys-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sys-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  transition: background var(--duration-fast);
+}
+
+.sys-check-item.done {
+  border-color: var(--ok-border);
+  background: var(--ok-subtle);
+}
+
+.sys-check-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.sys-check-item.done .sys-check-icon {
+  color: var(--ok);
+}
+
+.sys-check-item:not(.done) .sys-check-icon {
+  color: var(--fg-subtle);
+}
+
+.sys-check-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.sys-check-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg-default);
+}
+
+.sys-check-desc {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Model Providers
+   -------------------------------------------------------------------------- */
+.sys-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sys-provider-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.sys-provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sys-provider-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sys-provider-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.sys-provider-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sys-provider-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.sys-test-result {
+  font-size: var(--text-xs);
+  margin-top: var(--space-1);
+}
+
+/* --------------------------------------------------------------------------
+   Decision Chain Editor
+   -------------------------------------------------------------------------- */
+.sys-chain-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sys-chain-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  user-select: none;
+}
+
+.sys-chain-handle {
+  color: var(--fg-subtle);
+  cursor: grab;
+  display: flex;
+  align-items: center;
+}
+
+.sys-chain-item.dragging {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+.sys-chain-entry {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sys-chain-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Kill Switch (Pause all work)
+   -------------------------------------------------------------------------- */
+.sys-killswitch-card {
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.sys-killswitch-card.paused {
+  border-color: var(--warn-border);
+  background: var(--warn-subtle);
+}
+
+.sys-killswitch-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 260px;
+}
+
+.sys-killswitch-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-subtle);
+}
+
+.sys-killswitch-card.paused .sys-killswitch-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-subtle);
+}
+
+.sys-killswitch-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+.sys-killswitch-desc {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Secret & Decision Logs
+   -------------------------------------------------------------------------- */
+.sys-decision-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-fast);
+}
+
+.sys-decision-card:hover {
+  border-color: var(--border-default);
+}
+
+.sys-decision-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sys-decision-call {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-default);
+  background: var(--border-subtle);
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+}
+
+.sys-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sys-filter-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* --------------------------------------------------------------------------
+   Recurring Schedules List
+   -------------------------------------------------------------------------- */
+.sys-recurring-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sys-recurring-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--duration-fast);
+}
+
+.sys-recurring-item:hover {
+  border-color: var(--border-strong);
+}
+
+.sys-recurring-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sys-recurring-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sys-cron-pill {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 2px 6px;
+  background: var(--border-subtle);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-muted);
+}
+
+.sys-recurring-body {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.sys-recurring-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+}
+
+.sys-recurring-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  flex-wrap: wrap;
+}
+
+.sys-recurring-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* --------------------------------------------------------------------------
+   Trust & Metrics
+   -------------------------------------------------------------------------- */
+.sys-trust-bar {
+  height: 6px;
+  width: 100%;
+  max-width: 120px;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.sys-trust-fill {
+  height: 100%;
+  background: var(--acc);
+  border-radius: var(--radius-full);
+}
+
+.sys-grid-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+
+/* --------------------------------------------------------------------------
+   Key / Value Payload Pills (kit.js K.kv integration)
+   -------------------------------------------------------------------------- */
+.kv {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.kv-pill {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.kv-k {
+  padding: 1px 6px;
+  color: var(--fg-subtle);
+  background: var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.kv-v {
+  padding: 1px 6px;
+  color: var(--fg-default);
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive & Mobile Adaptations (390px phone friendly)
+   -------------------------------------------------------------------------- */
+@media (max-width: 899px) {
+  .sys-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sys-nav {
+    display: none;
+  }
+
+  .sys-mobile-nav {
+    display: block;
+    min-height: 44px;
+    font-size: var(--text-sm);
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .sys-grid-stats {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .sys-grid-stats .tile {
+    padding: var(--space-3);
+  }
+
+  .sys-grid-stats .tile-value {
+    font-size: var(--text-xl);
+  }
+
+  .sys-setting-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .sys-setting-control {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .sys-provider-row {
+    padding: var(--space-3);
+  }
+
+  .sys-provider-controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sys-provider-input {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .sys-recurring-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sys-recurring-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  button, input, select, textarea {
+    min-height: 44px;
+  }
+
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+  }
+}
