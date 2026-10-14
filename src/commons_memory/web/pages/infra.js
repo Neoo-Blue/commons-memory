@@ -12,10 +12,13 @@
 
   window.INFRA = window.INFRA || {};
   window.INFRA_STATE = window.INFRA_STATE || {
-    view: "map",
+    view: "overview",
     q: "",
     zoom: "",
     sys: "",
+    root: "",
+    rootName: "",
+    depth: "2",
     askQ: "",
     askText: "",
     jobPollTimer: null,
@@ -23,7 +26,38 @@
 
   const S = window.INFRA_STATE;
 
+  const KIND_COLORS = {
+    machine: "#f97316",
+    guest: "#3b82f6",
+    service: "#22c55e",
+    system: "#eab308",
+    endpoint: "#a855f7",
+    tunnel: "#ec4899",
+    storage: "#14b8a6",
+    credential: "#ef4444",
+  };
+
   /* ---------- Helpers ---------- */
+  function fmtBytes(bytes) {
+    if (bytes == null || isNaN(bytes) || bytes === "") return "0 B";
+    const b = Number(bytes);
+    if (b <= 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
+    const i = Math.floor(Math.log(b) / Math.log(k));
+    const val = b / Math.pow(k, i);
+    const str = val >= 100 || Number.isInteger(val) ? Math.round(val) : val.toFixed(1);
+    return str + " " + sizes[i];
+  }
+
+  function fmtGuestMem(mb) {
+    if (!mb) return "0 MB";
+    if (mb >= 1024) {
+      const gb = mb / 1024;
+      return (Number.isInteger(gb) ? gb : gb.toFixed(1)) + " GB";
+    }
+    return mb + " MB";
+  }
   function fmtAgo(t) {
     if (!t) return "";
     if (window.K && window.K.fmt && window.K.fmt.ago) return window.K.fmt.ago(t);
@@ -191,6 +225,32 @@
     render();
   };
 
+  INFRA.setGraphScope = function (val) {
+    S.root = val || "";
+    S.rootName = "";
+    updateUrl({ view: "graph", root: S.root || null, depth: S.root ? S.depth : null });
+    render();
+  };
+
+  INFRA.setGraphDepth = function (d) {
+    S.depth = String(d);
+    updateUrl({ view: "graph", root: S.root || null, depth: String(d) });
+    render();
+  };
+
+  INFRA.showInGraph = function (nodeId, nodeName) {
+    S.view = "graph";
+    S.root = nodeId || "";
+    S.rootName = nodeName || "";
+    S.depth = "2";
+    updateUrl({ view: "graph", root: S.root, depth: "2" });
+    if (typeof tab !== "undefined" && tab !== "Infrastructure") {
+      go("Infrastructure");
+    } else {
+      render();
+    }
+  };
+
   INFRA.setSystemFilter = function (sys) {
     S.sys = S.sys === sys ? "" : sys;
     updateUrl({ sys: S.sys });
@@ -209,8 +269,45 @@
       INFRA.filterList(S.q);
     } else if (S.view === "map") {
       INFRA.highlightMap(S.q);
+    } else if (S.view === "overview") {
+      INFRA.highlightOverview(S.q);
     }
   };
+
+  INFRA.highlightOverview = function (q) {
+    const term = (q || "").toLowerCase();
+    const items = document.querySelectorAll(".infra-machine-cap-card, .infra-storage-row");
+    items.forEach(c => {
+      if (!term) {
+        c.style.display = "";
+        return;
+      }
+      const text = (c.textContent || "").toLowerCase();
+      c.style.display = text.includes(term) ? "" : "none";
+    });
+  };
+
+  /* Listen for graph explorer commons:open node request */
+  if (!window._infraMessageBound) {
+    window._infraMessageBound = true;
+    window.addEventListener(
+      "message",
+      (ev) => {
+        if (ev.origin !== location.origin) return;
+        const d = ev.data;
+        if (!d || typeof d !== "object" || d.type !== "commons:open" || typeof d.id !== "string" || !d.id) return;
+        const rawHash = location.hash.slice(1);
+        const page = rawHash.split("?")[0];
+        if (page === "Infrastructure") {
+          ev.stopImmediatePropagation();
+          if (window.K && window.K.drawer && window.K.drawer.openId) {
+            window.K.drawer.openId("infra:" + d.id);
+          }
+        }
+      },
+      true
+    );
+  }
 
   INFRA.filterList = function (q) {
     const rows = document.querySelectorAll(".infra-table tbody tr");
@@ -374,6 +471,37 @@
       subtitle: "Infrastructure node",
       actions: [
         {
+          label: "Show in graph",
+          kind: "primary",
+          run: (ctx) => {
+            ctx.close();
+            INFRA.showInGraph(nid);
+          },
+        },
+        {
+          label: "Same as...",
+          kind: "default",
+          run: async (ctx) => {
+            const target = prompt("Which node is this the same as? A name, IP, vmid or URL:");
+            if (!target || !target.trim()) return;
+            let keep;
+            try { keep = (await api("infra_node?id=" + encodeURIComponent(target.trim()))).id; }
+            catch (e) { if (window.K && window.K.toast) window.K.toast("Nothing in the map matches " + target.trim(), { kind: "err" }); return; }
+            if (keep === nid) return;
+            const r = await postRaw("infra/merge", { keep, drop: nid });
+            if (r && r.error) {
+              if (window.K && window.K.toast) window.K.toast(r.error, { kind: "err" });
+              return;
+            }
+            if (window.K && window.K.toast) window.K.toast("Nodes merged", { kind: "ok" });
+            ctx.close();
+            render();
+            if (r && r.id) {
+              setTimeout(() => K.drawer.openId("infra:" + r.id), 200);
+            }
+          },
+        },
+        {
           label: "Hide node",
           kind: "bad",
           run: async (ctx) => {
@@ -387,25 +515,6 @@
             if (window.K && window.K.toast) window.K.toast("Node hidden", { kind: "ok" });
             ctx.close();
             render();
-          },
-        },
-        {
-          label: "Same as...",
-          kind: "primary",
-          run: async (ctx) => {
-            const target = prompt("Enter the target node name or ID to merge into:");
-            if (!target || !target.trim()) return;
-            const r = await postRaw("infra/merge", { keep: target.trim(), drop: nid });
-            if (r && r.error) {
-              if (window.K && window.K.toast) window.K.toast(r.error, { kind: "err" });
-              return;
-            }
-            if (window.K && window.K.toast) window.K.toast("Nodes merged", { kind: "ok" });
-            ctx.close();
-            render();
-            if (r && r.id) {
-              setTimeout(() => K.drawer.openId("infra:" + r.id), 200);
-            }
           },
         },
       ],
@@ -434,6 +543,9 @@
         const outLinks = Array.isArray(node.out) ? node.out : [];
         const inLinks = Array.isArray(node.in) ? node.in : [];
         const notes = Array.isArray(node.notes) ? node.notes : [];
+        const projects = Array.isArray(node.projects) ? node.projects : [];
+        const siblings = Array.isArray(node.siblings) ? node.siblings : [];
+        const hostName = (chain.length > 0 && chain[0].name) ? chain[0].name : "the host";
 
         // Group relations
         const relGroups = {};
@@ -477,6 +589,10 @@
             }).join("")}
             ${node.stale ? `<span class="badge sm warn">stale · not seen since ${E(fmtAgo(node.last_seen))}</span>` : ""}
             ${node.last_seen && !node.stale ? `<span class="mut sm">seen ${E(fmtAgo(node.last_seen))}</span>` : ""}
+            <button type="button" class="btn sm" onclick="if(window.K&&window.K.drawer)K.drawer.close();INFRA.showInGraph(${J(node.id)}, ${J(node.name)})" style="display:inline-flex;align-items:center;gap:4px">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h3M14 12h3"/></svg>
+              Show in graph
+            </button>
           </div>
 
           <!-- Runs On Chain -->
@@ -489,6 +605,38 @@
                 </button>
                 ${i < chain.length - 1 ? '<span style="color:var(--fg-subtle)">›</span>' : ""}
               `).join("")}
+            </div>
+          ` : ""}
+
+          <!-- Projects Section -->
+          ${projects.length ? `
+            <div class="infra-drawer-section">
+              <span class="infra-drawer-section-title">Projects (${projects.length})</span>
+              <div class="infra-drawer-chips">
+                ${projects.map(p => `
+                  <a href="#Projects?p=${encodeURIComponent(p.id)}" class="infra-project-chip" onclick="if(window.K&&window.K.drawer)K.drawer.close();if(typeof go==='function')go('Projects');">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+                    <span style="font-weight:500">${E(p.title || p.id)}</span>
+                    ${p.notes ? `<span class="badge sm" style="font-size:10px">${p.notes} ${p.notes === 1 ? 'note' : 'notes'}</span>` : ''}
+                  </a>
+                `).join("")}
+              </div>
+            </div>
+          ` : ""}
+
+          <!-- Sibling Nodes (Also on host) -->
+          ${siblings.length ? `
+            <div class="infra-drawer-section">
+              <span class="infra-drawer-section-title">Also on ${E(hostName)} (${siblings.length})</span>
+              <div class="infra-drawer-chips">
+                ${siblings.map(s => `
+                  <button type="button" class="infra-sibling-chip" onclick="K.drawer.openId(${J('infra:' + s.id)})">
+                    ${getKindIcon(s.kind)}
+                    <span style="font-weight:500">${E(s.name)}</span>
+                    <span class="badge sm" style="font-size:10px">${E(s.kind)}</span>
+                  </button>
+                `).join("")}
+              </div>
             </div>
           ` : ""}
 
@@ -672,10 +820,12 @@
     const qIndex = rawHash.indexOf("?");
     const qs = new URLSearchParams(qIndex >= 0 ? rawHash.slice(qIndex + 1) : "");
 
-    S.view = qs.get("view") || "map";
+    S.view = qs.get("view") || "overview";
     S.q = qs.get("q") || "";
     S.zoom = qs.get("zoom") || "";
     S.sys = qs.get("sys") || "";
+    S.root = qs.get("root") || "";
+    S.depth = qs.get("depth") || "2";
 
     let overview;
     try {
@@ -742,7 +892,9 @@
               </div>
             ` : ""}
             <div class="seg" role="tablist">
+              <button type="button" class="seg-btn ${S.view === "overview" ? "on" : ""}" role="tab" aria-selected="${S.view === "overview"}" onclick="INFRA.setView('overview')">Overview</button>
               <button type="button" class="seg-btn ${S.view === "map" ? "on" : ""}" role="tab" aria-selected="${S.view === "map"}" onclick="INFRA.setView('map')">Map</button>
+              <button type="button" class="seg-btn ${S.view === "graph" ? "on" : ""}" role="tab" aria-selected="${S.view === "graph"}" onclick="INFRA.setView('graph')">Graph</button>
               <button type="button" class="seg-btn ${S.view === "list" ? "on" : ""}" role="tab" aria-selected="${S.view === "list"}" onclick="INFRA.setView('list')">List</button>
               <button type="button" class="seg-btn ${S.view === "ask" ? "on" : ""}" role="tab" aria-selected="${S.view === "ask"}" onclick="INFRA.setView('ask')">Ask</button>
             </div>
@@ -766,8 +918,12 @@
     // View Content
     if (!hasAnyNodes && S.view !== "ask") {
       out += renderEmptyState();
+    } else if (S.view === "overview") {
+      out += await renderOverviewView(overview);
     } else if (S.view === "map") {
       out += await renderMapView(overview, S.zoom, S.sys);
+    } else if (S.view === "graph") {
+      out += renderGraphView(overview, S.root, S.depth);
     } else if (S.view === "list") {
       out += await renderListView(S.q);
     } else if (S.view === "ask") {
@@ -816,6 +972,426 @@
             <button type="button" class="btn sm" onclick="K.copy('commons infra collect --submit')">Copy</button>
           </div>
         </div>
+      </div>
+    </div>`;
+  }
+
+  /* ---------- Overview View (Charts & KPIs) ---------- */
+  async function renderOverviewView(overview) {
+    let stats;
+    try {
+      stats = await api("infra_stats");
+    } catch (e) {
+      return `<div class="empty"><div class="mut">Could not load infrastructure stats: ${E(e && e.message ? e.message : e)}</div></div>`;
+    }
+
+    stats = stats || {};
+    const machines = stats.machines || [];
+    const storage = stats.storage || [];
+    const counts = stats.counts || {};
+    const staleCount = stats.stale || 0;
+
+    // Tally guest running vs stopped
+    let runningGuests = 0;
+    let stoppedGuests = 0;
+    machines.forEach(m => {
+      (m.guests || []).forEach(g => {
+        if (g.status && String(g.status).toLowerCase() === "stopped") {
+          stoppedGuests++;
+        } else {
+          runningGuests++;
+        }
+      });
+    });
+
+    const totalGuests = counts.guest || (runningGuests + stoppedGuests);
+    const totalServices = counts.service || 0;
+    const totalEndpoints = (counts.endpoint || 0) + (counts.tunnel || 0);
+    const totalStoragePools = storage.length || counts.storage || 0;
+    const totalMachines = counts.machine || machines.length;
+
+    // Total storage capacity
+    const totalStorageBytes = storage.reduce((acc, s) => acc + (s.total || 0), 0);
+
+    // Distribution bar strip
+    const totalNodes = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+    const kindOrder = ["machine", "guest", "service", "system", "endpoint", "tunnel", "storage", "credential"];
+    Object.keys(counts).forEach(k => {
+      if (!kindOrder.includes(k)) kindOrder.push(k);
+    });
+    const stripKinds = kindOrder.filter(k => (counts[k] || 0) > 0);
+
+    let out = `<div class="infra-overview-view">
+      <!-- KPI Tiles -->
+      <div class="infra-kpi-grid">
+        <div class="infra-kpi-card" onclick="INFRA.setView('map')">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Machines</span>
+            ${getKindIcon('machine')}
+          </div>
+          <div class="infra-kpi-val">${totalMachines}</div>
+          <div class="infra-kpi-sub mut sm">${totalMachines === 1 ? '1 physical or virtual host' : totalMachines + ' physical or virtual hosts'}</div>
+        </div>
+
+        <div class="infra-kpi-card" onclick="INFRA.setView('map')">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Guests</span>
+            ${getKindIcon('guest')}
+          </div>
+          <div class="infra-kpi-val">${totalGuests}</div>
+          <div class="infra-kpi-sub mut sm">
+            <span class="infra-pill-live">${runningGuests} running</span>
+            <span class="infra-crumb-sep">·</span>
+            <span class="infra-pill-stopped">${stoppedGuests} stopped</span>
+          </div>
+        </div>
+
+        <div class="infra-kpi-card" onclick="INFRA.setView('list')">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Services</span>
+            ${getKindIcon('service')}
+          </div>
+          <div class="infra-kpi-val">${totalServices}</div>
+          <div class="infra-kpi-sub mut sm">Across all machines and guests</div>
+        </div>
+
+        <div class="infra-kpi-card" onclick="INFRA.setView('list')">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Endpoints</span>
+            ${getKindIcon('endpoint')}
+          </div>
+          <div class="infra-kpi-val">${totalEndpoints}</div>
+          <div class="infra-kpi-sub mut sm">${counts.tunnel ? counts.tunnel + ' tunnels · ' : ''}${counts.endpoint || 0} reachable URLs</div>
+        </div>
+
+        <div class="infra-kpi-card">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Storage pools</span>
+            ${getKindIcon('storage')}
+          </div>
+          <div class="infra-kpi-val">${totalStoragePools}</div>
+          <div class="infra-kpi-sub mut sm">${fmtBytes(totalStorageBytes)} total capacity</div>
+        </div>
+
+        <div class="infra-kpi-card ${staleCount > 0 ? 'warn' : ''}">
+          <div class="infra-kpi-head">
+            <span class="infra-kpi-lbl">Stale items</span>
+            <span class="status-dot ${staleCount > 0 ? 'busy' : 'live'}"></span>
+          </div>
+          <div class="infra-kpi-val ${staleCount > 0 ? 'infra-warn-text' : ''}">${staleCount}</div>
+          <div class="infra-kpi-sub mut sm">${staleCount > 0 ? 'Not seen in recent collector runs' : 'All items recently verified'}</div>
+        </div>
+      </div>
+
+      <!-- Counts by Kind Compact Bar Strip -->
+      <div class="card infra-strip-card">
+        <div class="infra-strip-head">
+          <span class="infra-section-title">Counts by kind (${totalNodes} nodes)</span>
+          <button type="button" class="btn sm" onclick="INFRA.setView('list')">View list</button>
+        </div>
+        <div class="infra-bar-strip">
+          ${stripKinds.map(k => {
+            const c = counts[k] || 0;
+            const pct = Math.max(0.5, ((c / totalNodes) * 100)).toFixed(1);
+            const color = KIND_COLORS[k] || '#64748b';
+            return `<div class="infra-strip-seg" style="width:${pct}%;background:${color}" title="${E(k)}: ${c} (${pct}%)"></div>`;
+          }).join("")}
+        </div>
+        <div class="infra-strip-legend">
+          ${stripKinds.map(k => {
+            const c = counts[k] || 0;
+            const pct = Math.round((c / totalNodes) * 100);
+            const color = KIND_COLORS[k] || '#64748b';
+            return `<div class="infra-strip-chip">
+              <span class="infra-legend-dot" style="background:${color}"></span>
+              <span class="infra-strip-kind">${E(k)}</span>
+              <span class="infra-strip-num infra-num">${c}</span>
+              <span class="infra-strip-pct mut sm">(${pct}%)</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+
+      <!-- Capacity Cards per Machine -->
+      <div class="infra-machines-section">
+        <div class="infra-section-header">
+          <span class="infra-section-title">Machine capacity & guest allocations</span>
+        </div>
+
+        <div class="infra-machines-capacity-grid">
+          ${machines.map(m => renderMachineCapacityCard(m)).join("")}
+        </div>
+      </div>
+
+      <!-- Storage Pools Section -->
+      ${storage.length ? `
+        <div class="card infra-storage-card">
+          <div class="infra-storage-head">
+            <div>
+              <span class="infra-section-title">Storage pools (${storage.length})</span>
+              <div class="mut sm" style="font-size:12px">Used vs total disk capacity across pools</div>
+            </div>
+            <span class="badge sm">${fmtBytes(totalStorageBytes)} total</span>
+          </div>
+
+          <div class="infra-storage-list">
+            ${storage.map(p => {
+              const usedStr = fmtBytes(p.used);
+              const totalStr = fmtBytes(p.total);
+              const pct = p.total > 0 ? Math.min(100, Math.round(((p.used || 0) / p.total) * 100)) : 0;
+              const isHigh = pct >= 85;
+              return `<div class="infra-storage-row" onclick="K.drawer.openId(${J('infra:' + p.id)})">
+                <div class="infra-storage-row-top">
+                  <div class="infra-storage-name">
+                    ${getKindIcon('storage')}
+                    <span style="font-weight:600">${E(p.name)}</span>
+                    ${p.stale ? `<span class="badge sm warn">stale</span>` : ""}
+                  </div>
+                  <div class="infra-storage-vals">
+                    <span class="infra-num">${E(usedStr)}</span>
+                    <span class="mut sm">of</span>
+                    <span class="infra-num">${E(totalStr)}</span>
+                    <span class="badge sm ${isHigh ? 'warn' : ''} infra-num">${pct}%</span>
+                  </div>
+                </div>
+                <div class="infra-bar-track">
+                  <div class="infra-bar-fill ${isHigh ? 'warn' : 'storage'}" style="width:${pct}%"></div>
+                </div>
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      ` : ""}
+    </div>`;
+
+    return out;
+  }
+
+  /* ---------- Machine Capacity Card ---------- */
+  function renderMachineCapacityCard(m) {
+    const guests = m.guests || [];
+    const guestsByMem = guests.slice().sort((a, b) => (b.memory_mb || 0) - (a.memory_mb || 0));
+    const guestsByCores = guests.slice().sort((a, b) => (b.cores || 0) - (a.cores || 0));
+    const guestsBySvcs = guests.slice().sort((a, b) => (b.services || 0) - (a.services || 0) || (b.ports || 0) - (a.ports || 0));
+
+    const maxGuestMem = Math.max(...guests.map(g => g.memory_mb || 0), 1);
+    const maxGuestCores = Math.max(...guests.map(g => g.cores || 0), 1);
+    const maxGuestSvcs = Math.max(...guests.map(g => g.services || 0), 1);
+
+    // Host memory metrics
+    const hasHostMem = m.memory_total && m.memory_total > 0;
+    const memUsedStr = fmtBytes(m.memory_used);
+    const memTotalStr = fmtBytes(m.memory_total);
+    const hostMemPct = hasHostMem ? Math.min(100, Math.round(((m.memory_used || 0) / m.memory_total) * 100)) : 0;
+
+    // Total guest allocated memory and cores
+    const totalAllocMemMb = guests.reduce((sum, g) => sum + (g.memory_mb || 0), 0);
+    const totalAllocCores = guests.reduce((sum, g) => sum + (g.cores || 0), 0);
+
+    return `<div class="card infra-machine-cap-card" data-id="${E(m.id)}">
+      <!-- Machine Header -->
+      <div class="infra-machine-cap-head">
+        <div class="infra-machine-cap-info">
+          <div class="infra-machine-cap-title" onclick="K.drawer.openId(${J('infra:' + m.id)})">
+            ${getKindIcon('machine')}
+            <span>${E(m.name)}</span>
+          </div>
+          <span class="badge sm">machine</span>
+          ${m.cpu_count ? `<span class="badge sm">${m.cpu_count} CPU threads</span>` : ""}
+          ${m.host_services ? `<span class="badge sm ok">${m.host_services} host services</span>` : ""}
+          <span class="mut sm">${guests.length} ${guests.length === 1 ? 'guest' : 'guests'}</span>
+        </div>
+        <div class="infra-machine-cap-actions">
+          <button type="button" class="btn sm" onclick="INFRA.zoom(${J(m.id)});INFRA.setView('map')">Zoom in map</button>
+          <button type="button" class="btn sm" onclick="K.drawer.openId(${J('infra:' + m.id)})">Inspect</button>
+        </div>
+      </div>
+
+      <!-- Capacity Stats Bar (Memory Used vs Total & CPU Threads) -->
+      <div class="infra-machine-capacity-banner">
+        <div class="infra-cap-stat-item">
+          <div class="infra-cap-stat-label">
+            <span>Memory used vs total</span>
+            <span class="infra-num">${hasHostMem ? `${memUsedStr} of ${memTotalStr} (${hostMemPct}%)` : `${fmtGuestMem(totalAllocMemMb)} allocated`}</span>
+          </div>
+          <div class="infra-bar-track">
+            <div class="infra-bar-fill" style="width:${hasHostMem ? hostMemPct : 100}%"></div>
+          </div>
+        </div>
+
+        <div class="infra-cap-stat-item">
+          <div class="infra-cap-stat-label">
+            <span>CPU threads & allocation</span>
+            <span class="infra-num">${m.cpu_count ? `${m.cpu_count} threads · ${totalAllocCores} cores allocated` : `${totalAllocCores} cores allocated`}</span>
+          </div>
+          <div class="infra-bar-track">
+            <div class="infra-bar-fill cores" style="width:${m.cpu_count ? Math.min(100, Math.round((totalAllocCores / m.cpu_count) * 100)) : 100}%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Guest Allocation Charts: 3 Columns -->
+      ${guests.length ? `
+        <div class="infra-machine-charts-grid">
+          <!-- Col 1: Allocated Memory -->
+          <div class="infra-chart-col">
+            <div class="infra-chart-title">
+              <span>Allocated memory</span>
+              <span class="mut sm infra-num">${fmtGuestMem(totalAllocMemMb)}</span>
+            </div>
+            <div class="infra-chart-list">
+              ${guestsByMem.map(g => {
+                const memVal = g.memory_mb || 0;
+                const pct = Math.max(4, Math.round((memVal / maxGuestMem) * 100));
+                const isStopped = g.status && String(g.status).toLowerCase() === "stopped";
+                const barClass = g.stale ? "stale" : isStopped ? "stopped" : "guest";
+                return `<div class="infra-bar-row ${isStopped ? 'stopped' : ''} ${g.stale ? 'stale' : ''}" onclick="K.drawer.openId(${J('infra:' + g.id)})" title="${E(g.name)}: ${fmtGuestMem(memVal)}">
+                  <div class="infra-bar-row-label">
+                    <span class="infra-bar-row-name">${E(g.name)}</span>
+                    <span class="infra-bar-row-val infra-num">${fmtGuestMem(memVal)}</span>
+                  </div>
+                  <div class="infra-bar-track">
+                    <div class="infra-bar-fill ${barClass}" style="width:${pct}%"></div>
+                  </div>
+                </div>`;
+              }).join("")}
+            </div>
+          </div>
+
+          <!-- Col 2: Allocated Cores -->
+          <div class="infra-chart-col">
+            <div class="infra-chart-title">
+              <span>Allocated cores</span>
+              <span class="mut sm infra-num">${totalAllocCores} cores</span>
+            </div>
+            <div class="infra-chart-list">
+              ${guestsByCores.map(g => {
+                const coresVal = g.cores || 0;
+                const pct = Math.max(4, Math.round((coresVal / maxGuestCores) * 100));
+                const isStopped = g.status && String(g.status).toLowerCase() === "stopped";
+                const barClass = g.stale ? "stale" : isStopped ? "stopped" : "cores";
+                return `<div class="infra-bar-row ${isStopped ? 'stopped' : ''} ${g.stale ? 'stale' : ''}" onclick="K.drawer.openId(${J('infra:' + g.id)})" title="${E(g.name)}: ${coresVal} cores">
+                  <div class="infra-bar-row-label">
+                    <span class="infra-bar-row-name">${E(g.name)}</span>
+                    <span class="infra-bar-row-val infra-num">${coresVal} ${coresVal === 1 ? 'core' : 'cores'}</span>
+                  </div>
+                  <div class="infra-bar-track">
+                    <div class="infra-bar-fill ${barClass}" style="width:${pct}%"></div>
+                  </div>
+                </div>`;
+              }).join("")}
+            </div>
+          </div>
+
+          <!-- Col 3: Services per Guest -->
+          <div class="infra-chart-col">
+            <div class="infra-chart-title">
+              <span>Services per guest</span>
+              <span class="mut sm infra-num">${guests.reduce((sum, g) => sum + (g.services || 0), 0)} svc</span>
+            </div>
+            <div class="infra-chart-list">
+              ${guestsBySvcs.map(g => {
+                const svcsVal = g.services || 0;
+                const portsVal = g.ports || 0;
+                const pct = Math.max(4, Math.round((svcsVal / maxGuestSvcs) * 100));
+                const isStopped = g.status && String(g.status).toLowerCase() === "stopped";
+                const barClass = g.stale ? "stale" : isStopped ? "stopped" : "service";
+                return `<div class="infra-bar-row ${isStopped ? 'stopped' : ''} ${g.stale ? 'stale' : ''}" onclick="K.drawer.openId(${J('infra:' + g.id)})" title="${E(g.name)}: ${svcsVal} services, ${portsVal} ports">
+                  <div class="infra-bar-row-label">
+                    <span class="infra-bar-row-name">${E(g.name)}</span>
+                    <span class="infra-bar-row-val infra-num">${svcsVal} svc · ${portsVal} ${portsVal === 1 ? 'port' : 'ports'}</span>
+                  </div>
+                  <div class="infra-bar-track">
+                    <div class="infra-bar-fill ${barClass}" style="width:${pct}%"></div>
+                  </div>
+                </div>`;
+              }).join("")}
+            </div>
+          </div>
+        </div>
+      ` : `<div class="mut sm" style="padding:16px 0">No guests running on this machine</div>`}
+    </div>`;
+  }
+
+  /* ---------- Graph View ---------- */
+  function renderGraphView(overview, root, depth) {
+    depth = String(depth || "2");
+    const src = root
+      ? "/graph.html?source=infra&root=" + encodeURIComponent(root) + "&depth=" + encodeURIComponent(depth)
+      : "/graph.html?source=infra";
+
+    const tree = overview.tree || [];
+    const systems = overview.systems || [];
+
+    const machines = [];
+    const guests = [];
+    tree.forEach(m => {
+      if (m.kind === "machine") machines.push(m);
+      (m.children || []).forEach(c => {
+        if (c.kind === "guest") guests.push(c);
+      });
+    });
+
+    const isKnown = !root || machines.some(m => m.id === root) || guests.some(g => g.id === root) || systems.some(s => s.id === root);
+
+    const depths = ["1", "2", "3"].map(d =>
+      `<button type="button" class="seg-btn ${d === depth ? "on" : ""}" aria-pressed="${d === depth}" onclick="INFRA.setGraphDepth(${J(d)})">${d}</button>`
+    ).join("");
+
+    return `<div class="infra-graph-view">
+      <div class="card infra-graph-controls-card">
+        <div class="infra-graph-controls">
+          <div class="infra-graph-controls-left">
+            <label class="infra-graph-label">
+              <span>Scope</span>
+              <select class="infra-graph-select" aria-label="Graph scope" onchange="INFRA.setGraphScope(this.value)">
+                <option value="">Everything</option>
+                ${machines.length ? `
+                  <optgroup label="Machines">
+                    ${machines.map(m => `<option value="${E(m.id)}"${m.id === root ? " selected" : ""}>${E(m.name)}</option>`).join("")}
+                  </optgroup>
+                ` : ""}
+                ${guests.length ? `
+                  <optgroup label="Guests & Containers">
+                    ${guests.map(g => `<option value="${E(g.id)}"${g.id === root ? " selected" : ""}>${E(g.name)}</option>`).join("")}
+                  </optgroup>
+                ` : ""}
+                ${systems.length ? `
+                  <optgroup label="Systems">
+                    ${systems.map(s => `<option value="${E(s.id)}"${s.id === root ? " selected" : ""}>${E(s.name)}</option>`).join("")}
+                  </optgroup>
+                ` : ""}
+                ${!isKnown ? `<option value="${E(root)}" selected>Node ${E(S.rootName || root)}</option>` : ""}
+              </select>
+            </label>
+
+            ${root ? `
+              <div class="infra-graph-depth-wrap">
+                <span class="infra-filter-label">Depth</span>
+                <div class="seg" role="group" aria-label="Depth">
+                  ${depths}
+                </div>
+              </div>
+            ` : ""}
+
+            <a href="${src}" target="_blank" rel="noopener" class="btn sm infra-graph-fullscreen-btn">Full screen</a>
+          </div>
+
+          <div class="infra-graph-legend">
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#f97316"></span>machine</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#3b82f6"></span>guest</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#22c55e"></span>service</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#eab308"></span>system</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#a855f7"></span>endpoint</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#ec4899"></span>tunnel</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#14b8a6"></span>storage</span>
+            <span class="infra-legend-item"><span class="infra-legend-dot" style="background:#ef4444"></span>credential</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="infra-graph-frame-wrap">
+        <iframe title="Infrastructure Graph" class="infra-graph-iframe" src="${src}"></iframe>
       </div>
     </div>`;
   }

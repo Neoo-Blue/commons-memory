@@ -205,7 +205,7 @@ console.log(JSON.stringify({{
     # Extract functions from the IIFE or redefine for the test if private
     # Let's extract the helper function definitions from infra.js
     helpers_src = re.findall(
-        r"(function\s+(?:humanizeSource|truncateMiddle|fmtGuestSpecs|getStatusDotClass)\s*\(.*?\n  \})",
+        r"(function\s+(?:humanizeSource|truncateMiddle|fmtGuestSpecs|getStatusDotClass|fmtBytes|fmtGuestMem)\s*\(.*?\n  \})",
         js,
         re.DOTALL,
     )
@@ -221,6 +221,10 @@ console.log(JSON.stringify({{
   dot_running: getStatusDotClass({{ attrs: {{ status: "running" }} }}),
   dot_stopped: getStatusDotClass({{ attrs: {{ status: "stopped" }} }}),
   dot_stale: getStatusDotClass({{ stale: true, attrs: {{ status: "running" }} }}),
+  bytes1: fmtBytes(429496729600),
+  bytes2: fmtBytes(1099511627776),
+  gmem1: fmtGuestMem(20480),
+  gmem2: fmtGuestMem(512),
 }}));
 """
     proc = subprocess.run([node_bin, "-e", test_code], capture_output=True, text=True)
@@ -237,3 +241,92 @@ console.log(JSON.stringify({{
     assert res["dot_running"] == "live"
     assert res["dot_stopped"] == "offline"
     assert res["dot_stale"] == "busy"
+    assert "GB" in res["bytes1"]
+    assert "TB" in res["bytes2"]
+    assert res["gmem1"] == "20 GB"
+    assert res["gmem2"] == "512 MB"
+
+
+def test_segmented_control_order_and_default():
+    """Verify Overview is first and default, followed by Map, Graph, List, Ask."""
+    web_dir = Path(dashboard.__file__).with_name("web")
+    js = (web_dir / "pages" / "infra.js").read_text(encoding="utf-8")
+
+    # Segmented control order
+    buttons = re.findall(r"INFRA\.setView\(['\"](\w+)['\"]\)", js)
+    assert buttons[:5] == ["overview", "map", "graph", "list", "ask"], f"Buttons order mismatch: {buttons[:5]}"
+    assert 'view: "overview"' in js, "Default view must be overview"
+
+
+def test_graph_view_embedding_and_controls():
+    """Verify Graph view embeds iframe and provides scope, depth, legend, and commons:open listener."""
+    web_dir = Path(dashboard.__file__).with_name("web")
+    js = (web_dir / "pages" / "infra.js").read_text(encoding="utf-8")
+    css = (web_dir / "pages" / "infra.css").read_text(encoding="utf-8")
+
+    assert "/graph.html?source=infra" in js, "Must embed graph explorer with source=infra"
+    assert "renderGraphView" in js, "Must define renderGraphView"
+    assert "Graph scope" in js, "Must have Graph scope select"
+    assert "setGraphScope" in js, "Must have setGraphScope handler"
+    assert "setGraphDepth" in js, "Must have setGraphDepth handler"
+    assert "infra-graph-iframe" in css, "Must define iframe styling in infra.css"
+    assert "min-height: 560px" in css, "Must have min 560px on desktop"
+    assert "min-height: 70vh" in css or "height: 70vh" in css, "Must have 70vh on phones"
+
+    # Kind colors legend
+    for hex_color in ("#f97316", "#3b82f6", "#22c55e", "#eab308", "#a855f7", "#ec4899", "#14b8a6", "#ef4444"):
+        assert hex_color in js, f"Must include legend kind color {hex_color} in infra.js"
+
+    # commons:open message listener
+    assert "commons:open" in js, "Must listen for commons:open message"
+    assert "location.origin" in js, "Must check event.origin === location.origin"
+    assert 'openId("infra:" + ' in js or "openId('infra:' + " in js, "Must open infra drawer on message"
+
+
+def test_overview_charts_and_kpis():
+    """Verify Overview charts: KPI tiles, capacity cards, guest memory & cores, storage, kind bar strip."""
+    web_dir = Path(dashboard.__file__).with_name("web")
+    js = (web_dir / "pages" / "infra.js").read_text(encoding="utf-8")
+    css = (web_dir / "pages" / "infra.css").read_text(encoding="utf-8")
+
+    assert 'api("infra_stats")' in js, "Must call api('infra_stats') in infra.js"
+    assert "renderOverviewView" in js, "Must define renderOverviewView"
+    assert "renderMachineCapacityCard" in js, "Must define renderMachineCapacityCard"
+
+    # KPI tiles
+    assert "infra-kpi-card" in js, "Must render KPI cards"
+    assert "Storage pools" in js, "Must include Storage pools tile"
+    assert "Stale items" in js, "Must include Stale items tile"
+
+    # Guest memory, cores, services
+    assert "Allocated memory" in js, "Must include Allocated memory chart"
+    assert "Allocated cores" in js, "Must include Allocated cores chart"
+    assert "Services per guest" in js, "Must include Services per guest list"
+
+    # Storage pools
+    assert "infra-storage-card" in js, "Must render storage card"
+    assert "infra-bar-strip" in js, "Must render counts by kind bar strip"
+
+    # CSS classes
+    assert ".infra-kpi-grid" in css, "Must define .infra-kpi-grid in infra.css"
+    assert ".infra-machine-cap-card" in css, "Must define .infra-machine-cap-card in infra.css"
+    assert ".infra-bar-strip" in css, "Must define .infra-bar-strip in infra.css"
+    assert "tabular-nums" in css, "Must use tabular numbers"
+
+
+def test_richer_drawer_projects_siblings_and_show_in_graph():
+    """Verify Richer drawer contains Projects, Also on <host>, and Show in graph action."""
+    web_dir = Path(dashboard.__file__).with_name("web")
+    js = (web_dir / "pages" / "infra.js").read_text(encoding="utf-8")
+    css = (web_dir / "pages" / "infra.css").read_text(encoding="utf-8")
+
+    assert "Show in graph" in js, "Must contain 'Show in graph' drawer action in infra.js"
+    assert "showInGraph" in js, "Must define showInGraph handler in infra.js"
+    assert "Projects (" in js, "Must contain 'Projects' section in infra.js"
+    assert "#Projects?p=" in js, "Must link to #Projects?p= in infra.js"
+    assert "Also on " in js, "Must contain 'Also on <host>' section in infra.js"
+    assert "infra-project-chip" in js, "Must render project chips"
+    assert "infra-sibling-chip" in js, "Must render sibling chips"
+    assert ".infra-project-chip" in css, "Must define .infra-project-chip in infra.css"
+    assert ".infra-sibling-chip" in css, "Must define .infra-sibling-chip in infra.css"
+
