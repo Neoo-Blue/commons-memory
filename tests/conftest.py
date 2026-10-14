@@ -6,6 +6,13 @@ import pytest
 
 from commons_memory.store import Store
 
+# Never the real home: a simulated session start refreshes ~/.claude/CLAUDE.md, hooks queue in ~/.commons. The model
+# cache stays where it is (fastembed falls back to the system temp dir), and git gets a throwaway identity.
+_HOME = tempfile.mkdtemp(prefix="commons-test-home-")
+with open(os.path.join(_HOME, ".gitconfig"), "w") as _f:
+    _f.write("[user]\n\tname = Commons Tests\n\temail = tests@example.invalid\n[init]\n\tdefaultBranch = main\n")
+os.environ["HOME"] = _HOME
+os.environ.pop("COMMONS_HOME", None)
 os.environ.setdefault("COMMONS_EMBEDDER", "hash")  # deterministic tests; fastembed is exercised explicitly
 os.environ["COMMONS_DRIVE_DIR"] = tempfile.mkdtemp(prefix="commons-test-drive-")  # never the real ~/.commons/drive
 os.environ["COMMONS_VAULT_KEY_FILE"] = os.path.join(tempfile.mkdtemp(prefix="commons-test-vault-"), "vault.key")
