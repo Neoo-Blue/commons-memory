@@ -16,7 +16,8 @@ from collections import defaultdict
 from .ids import iso, now
 from .store import CommonsError, Store
 
-COLUMNS = [("projects", "title", "TEXT"), ("projects", "parent_id", "TEXT"), ("projects", "kind", "TEXT")]
+COLUMNS = [("projects", "title", "TEXT"), ("projects", "parent_id", "TEXT"), ("projects", "kind", "TEXT"),
+           ("projects", "description", "TEXT")]
 KINDS = ("project", "task", "folder")
 # names that are where an agent happened to run, not what it worked on
 FOLDERISH = {"home", "workspace", "tmp", "temp", "desktop", "downloads", "documents", "src", "code", "projects", "dev",
@@ -27,7 +28,7 @@ DAY = 86400
 
 
 def _rows(s: Store) -> dict[str, dict]:
-    return {r["id"]: dict(r) for r in s.q("SELECT id, name, title, parent_id, kind, created_at FROM projects")}
+    return {r["id"]: dict(r) for r in s.q("SELECT id, name, title, parent_id, kind, created_at, description FROM projects")}
 
 
 def _groups(rows: dict[str, dict]) -> dict[str, list[str]]:
@@ -150,7 +151,7 @@ def listing(s: Store) -> dict:
         r, agg = rows[root], _sum(st, ids)
         if not agg:
             continue  # a name nobody ever wrote anything under
-        e = {"id": root, "name": r["name"], "title": r["title"] or r["name"], "kind": _kind(r, agg),
+        e = {"id": root, "name": r["name"], "title": r["title"] or r["name"], "kind": _kind(r, agg), "description": r["description"] or "",
              "members": [rows[i]["name"] for i in ids], "last": iso(agg["last"]) if agg.get("last") else None,
              "counts": {k: agg.get(k, 0) for k in ("items", "decisions", "sessions", "jobs", "open_jobs", "open_asks", "claims")},
              "cost_30d": agg.get("cost", 0)}
@@ -207,7 +208,7 @@ def detail(s: Store, pid: str) -> dict:
             for r in s.q(f"SELECT id, kind, text, status, created_at FROM board WHERE project_id IN ({ph}) AND status='open' "
                          "ORDER BY created_at DESC LIMIT 20", ids)]
     return {"id": root, "name": rows[root]["name"], "title": rows[root]["title"] or rows[root]["name"],
-            "kind": _kind(rows[root], agg), "kind_set": rows[root]["kind"],
+            "kind": _kind(rows[root], agg), "kind_set": rows[root]["kind"], "description": rows[root]["description"] or "",
             "members": [{"id": i, "name": rows[i]["name"], "items": _sum(st, [i]).get("items", 0)} for i in ids],
             "first": iso(min(rows[i]["created_at"] or now() for i in ids)), "last": iso(agg["last"]) if agg.get("last") else None,
             "counts": {k: agg.get(k, 0) for k in ("items", "decisions", "sessions", "jobs", "open_jobs", "open_asks", "claims")}
@@ -361,7 +362,8 @@ def ungroup(s: Store, pid: str) -> dict:
     return {"ok": True, "id": pid}
 
 
-def update(s: Store, pid: str, title: str | None = None, kind: str | None = None) -> dict:
+def update(s: Store, pid: str, title: str | None = None, kind: str | None = None, description: str | None = None) -> dict:
+    """Rename, set the kind, or say in a line what the project is (the filing check reads it: "the pool-playing agent")."""
     rows = _rows(s)
     root = _root(pid, rows)
     if kind is not None and kind not in KINDS + ("",):
@@ -370,7 +372,9 @@ def update(s: Store, pid: str, title: str | None = None, kind: str | None = None
         s.x("UPDATE projects SET title=? WHERE id=?", (title.strip()[:80] or None, root))
     if kind is not None:
         s.x("UPDATE projects SET kind=? WHERE id=?", (kind or None, root))
-    s.audit(None, "project.update", root, {"title": title, "kind": kind})
+    if description is not None:
+        s.x("UPDATE projects SET description=? WHERE id=?", (description.strip()[:300] or None, root))
+    s.audit(None, "project.update", root, {"title": title, "kind": kind, "description": description})
     return {"ok": True, "id": root}
 
 

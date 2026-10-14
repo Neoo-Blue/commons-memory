@@ -73,3 +73,30 @@ def test_start_is_owner_only_and_runs_once(tmp_path, monkeypatch):
     gate.set()
     __import__("time").sleep(0.2)
     assert second["status"] == "running" and len(calls) == 1
+
+
+def test_a_description_lets_notes_leave_for_unsorted(tmp_path, monkeypatch):
+    import commons_memory.providers as prov
+    s = make_store(tmp_path, "rf3.db")
+    wrong, right, live, home = _seed(s)
+    stray = s.add_item("memory", "Quarterly tax filing reminder for the accountant", project="soul-pool",
+                       meta={"imported": True})["id"]
+    sp = [e for e in P.listing(s)["projects"] if e["name"] == "soul-pool"][0]
+    P.update(s, sp["id"], description="The pool-playing agent: only notes about playing pool")
+    assert P.detail(s, "soul-pool")["description"].startswith("The pool-playing agent")
+    seen = {}
+
+    class DescPL(FakePL):
+        def chat(self, model, prompt, system="", cache_prefix="", **kw):
+            seen["prefix"], seen["system"] = cache_prefix, system
+            out = json.loads(super().chat(model, prompt, system=system, cache_prefix=cache_prefix, **kw)["text"])
+            out["moves"] += [{"id": ln[1:ln.index("]")], "to": "NONE", "confidence": "high"} for ln in prompt.splitlines()
+                             if ln.startswith("[") and "tax filing" in ln]
+            return {"text": json.dumps(out), "cost": 0.0}
+    monkeypatch.setattr(prov, "ProviderLayer", DescPL)
+    R.run(s)
+    assert "is: The pool-playing agent" in seen["prefix"] and "NONE" in seen["system"]
+    flow = [f for f in R.suggestions(s) if f["to_title"] == "unsorted"][0]
+    R.apply(s, flow["key"])
+    assert s.q("SELECT project_id FROM items WHERE id=?", (stray,))[0]["project_id"] == s.project_id("unsorted")
+    assert "unsorted" in [e["name"] for e in P.listing(s)["folders"]]

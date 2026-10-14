@@ -1081,3 +1081,8 @@
 .proj-refile-samples li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .proj-refile-actions{display:flex;gap:8px;flex-wrap:wrap}
 @media (max-width:900px){.proj-refile-actions button{min-height:44px}}
+
+.proj-desc{margin:4px 0 10px;color:var(--fg-muted);font-size:var(--text-sm,13px);max-width:80ch;cursor:text}
+.proj-desc.empty{color:var(--fg-subtle);font-style:italic}
+.proj-desc:hover{color:var(--fg-default)}
+.proj-desc-input{width:min(80ch,100%);font-weight:400;font-size:var(--text-sm,13px);margin:4px 0 10px}

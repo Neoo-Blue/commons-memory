@@ -634,7 +634,7 @@ class API:
             if path == "/api/project/ungroup":
                 return P.ungroup(self.s, body["id"])
             if path == "/api/project/update":
-                return P.update(self.s, body["id"], body.get("title"), body.get("kind"))
+                return P.update(self.s, body["id"], body.get("title"), body.get("kind"), body.get("description"))
             if path == "/api/project/dismiss":
                 return P.dismiss(self.s, body["key"])
         raise CommonsError("unknown action")

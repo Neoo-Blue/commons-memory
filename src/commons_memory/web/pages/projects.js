@@ -317,6 +317,25 @@
       <div class="proj-refile-actions"><button type="button" class="btn sm" onclick="PRJ.refileEstimate()">${checked ? "Check again" : "Check filing"}</button></div></div>`;
   }
   window.PRJ = window.PRJ || {};
+  window.PRJ.editDescription = function (pid, current, el) {
+    const inp = document.createElement("input");
+    inp.className = "proj-rename proj-desc-input"; inp.value = current || ""; inp.maxLength = 300;
+    inp.placeholder = "e.g. The pool-playing agent: only notes about playing pool belong here";
+    inp.setAttribute("aria-label", "What this project is");
+    const done = async save => {
+      if (inp.dataset.done) return;
+      inp.dataset.done = "1";
+      const next = inp.value.trim();
+      if (save && next !== (current || "")) {
+        const r = await postRaw("project/update", { id: pid, description: next });
+        if (r && r.error && window.K) window.K.toast(r.error, { kind: "err" });
+      }
+      render();
+    };
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") done(true); else if (e.key === "Escape") done(false); });
+    inp.addEventListener("blur", () => done(true));
+    el.replaceWith(inp); inp.focus();
+  };
   window.PRJ.refileEstimate = async function () {
     try { S.refileEst = await api("refile_estimate"); } catch (e) { K.toast("Could not count notes: " + (e.message || e), { kind: "err" }); return; }
     if (!S.refileEst.notes) { S.refileEst = null; K.toast("No imported or folder notes to check"); return; }
@@ -817,6 +836,7 @@
             </button>
           </div>
         </div>
+        <p class="proj-desc${data.description ? "" : " empty"}" title="What this project is; the filing check reads it" onclick="PRJ.editDescription(${J(data.id)}, ${J(data.description || "")}, this)">${data.description ? E(data.description) : "Add a line on what this project is (the filing check uses it)"}</p>
 
         <div class="proj-detail-members-row">
           <span style="font-size:11.5px;color:var(--fg-subtle);font-weight:500;">Includes:</span>

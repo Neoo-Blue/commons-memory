@@ -24,7 +24,9 @@ often wrong: many were imported from a tool that labelled notes by the folder it
 folders like "home" that hold everything. For each note that clearly belongs to one listed project other than its
 current one, return {id, to, confidence} with `to` the project's code. Leave out notes that fit their current project,
 are generic, or could belong to several. confidence "high" means the note names the product, its repo, its host, or a
-feature only that project has; "medium" means it very likely belongs there."""
+feature only that project has; "medium" means it very likely belongs there. A project's "is:" line is the owner's own
+word on what belongs there and outranks its samples: when a note clearly does not fit its current project's "is:" line
+and no listed project fits it either, return to "NONE" (it moves to Unsorted)."""
 OUT = {"type": "object", "additionalProperties": False, "required": ["moves"], "properties": {"moves": {"type": "array", "items": {
     "type": "object", "additionalProperties": False, "required": ["id", "to", "confidence"],
     "properties": {"id": {"type": "string"}, "to": {"type": "string"}, "confidence": {"type": "string", "enum": ["high", "medium"]}}}}}}
@@ -58,7 +60,8 @@ def catalog(s: Store) -> tuple[list[dict], dict[str, str]]:
         live = [r for r in recent if not _imported(r["meta"])]
         pick = (live if len(live) >= 3 else recent)[:4]
         samples = [((r["title"] or r["summary"] or r["content"] or "")[:90]).replace("\n", " ") for r in pick]
-        out.append({"code": f"P{i + 1}", "id": p["id"], "title": p["title"], "members": p["members"], "samples": samples})
+        out.append({"code": f"P{i + 1}", "id": p["id"], "title": p["title"], "members": p["members"], "samples": samples,
+                    "description": p.get("description") or ""})
     return out, root_of
 
 
@@ -97,9 +100,10 @@ def _prompt(batch: list[dict], names: dict[str, str]) -> str:
 
 def _prefix(cat: list[dict]) -> str:
     lines = [f"{p['code']} {p['title']}" + (f" (also filed as {', '.join(m for m in p['members'] if m != p['title'])})"
-             if len(p["members"]) > 1 or p["members"][0] != p["title"] else "") + (": " + " | ".join(p["samples"]) if p["samples"] else "")
-             for p in cat]
-    return "Projects (code, name, sample note titles):\n" + "\n".join(lines) + "\n\n"
+             if len(p["members"]) > 1 or p["members"][0] != p["title"] else "")
+             + (f". is: {p['description']}" if p.get("description") else "")
+             + (". samples: " + " | ".join(p["samples"]) if p["samples"] else "") for p in cat]
+    return "Projects (code, name, what it is, sample note titles):\n" + "\n".join(lines) + "\n\n"
 
 
 def run(s: Store, model: str | None = None, log=lambda m: None, poll: float = 30) -> dict:
@@ -116,6 +120,9 @@ def run(s: Store, model: str | None = None, log=lambda m: None, poll: float = 30
         raise CommonsError("no model to check filing: set the librarian role or add a provider key on the Setup page")
     names = {pid: r["name"] for pid, r in _rows(s).items()}
     code = {p["code"]: p["id"] for p in cat}
+    if any(p.get("description") for p in cat):  # "doesn't belong here, and nowhere listed": a folder, not a project
+        code["NONE"] = s.project_id("unsorted")
+        s.x("UPDATE projects SET kind='folder' WHERE id=? AND kind IS NULL", (code["NONE"],))
     prefix = _prefix(cat)
     batches = [cands[i:i + BATCH] for i in range(0, len(cands), BATCH)]
     by_id = {n["id"]: n for n in cands}
@@ -147,7 +154,7 @@ def run(s: Store, model: str | None = None, log=lambda m: None, poll: float = 30
         except ValueError:
             continue
         for m in moves:
-            n, to = by_id.get(m.get("id")), code.get(m.get("to"))
+            n, to = by_id.get(m.get("id")), code.get("NONE" if str(m.get("to")).upper() == "NONE" else m.get("to"))
             if not n or not to or root_of.get(n["pid"]) == to:
                 continue
             s.x("INSERT OR IGNORE INTO refile_moves VALUES(?,?,?,?,?,?,?,?)",

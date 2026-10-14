@@ -2,6 +2,15 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.30.3: say what a project is, and the filing check listens
+- **Why.** soul-pool, the pool-playing agent, still showed Poise decisions: the filing check judged projects by sample
+  note titles, and soul-pool's samples were the polluted imports themselves.
+- **One line per project.** Each project page takes a short description (click under the title): "the pool-playing
+  agent". The filing check treats it as the owner's word on what belongs there, ahead of sample titles.
+- **A way out.** A note that clearly does not fit its project's description, and fits no other listed project, is
+  proposed for Unsorted (a folder, not a project) instead of staying put.
+- **For agents:** nothing changes.
+
 ## v0.30.2: infra("phrase") finds the guest
 - **Fix.** `infra("phrase")` answered with the cloudflared tunnel `phrase-lxc` instead of the guest "phrase (LXC 108)":
   a guest's name carries its id, so the bare name never matched. Guests now also answer to their plain name, and a loose
