@@ -252,7 +252,7 @@ def build_app(store: Store) -> Starlette:
         from .infra import ingest_snapshot
         b = await body(req)
         snaps = b.get("snapshots") if isinstance(b.get("snapshots"), list) else [b]
-        out = [await asyncio.to_thread(ingest_snapshot, store, x) for x in snaps if isinstance(x, dict) and x.get("entities")]
+        out = [await asyncio.to_thread(ingest_snapshot, store, x, aid) for x in snaps if isinstance(x, dict) and x.get("entities")]
         return JSONResponse({"ok": True, "merged": out})
 
     routes = [Route("/hooks/{token}", inhook, methods=["POST"]),

@@ -143,7 +143,7 @@ def upsert_edge(s: Store, src: str, rel: str, dst: str, *, source: str, evidence
 
 
 # ------------------------------------------------------------------------------------------------ discovery
-def ingest_snapshot(s: Store, snap: dict) -> dict:
+def ingest_snapshot(s: Store, snap: dict, by: str | None = None) -> dict:
     """Merge one collector snapshot ({collector, source, at, entities, relations}) and mark what that source no longer
     reports as stale (a guest that was deleted, a container that went away)."""
     ensure(s)
@@ -179,7 +179,7 @@ def ingest_snapshot(s: Store, snap: dict) -> dict:
     s.x("UPDATE infra_edges SET stale=1 WHERE sources=? AND last_seen<?", (json.dumps([src]), at))
     _reconcile(s)
     s.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (f"infra:last:{src}", json.dumps({"at": at, "nodes": len(ids), "kinds": len(set(kinds.values()))})))
-    s.audit(None, "infra.snapshot", src, {"nodes": len(ids), "edges": edges, "stale": stale})
+    s.audit(by, "infra.snapshot", src, {"nodes": len(ids), "edges": edges, "stale": stale})  # who sent it, for tracing
     return {"source": src, "nodes": len(ids), "edges": edges, "stale": stale}
 
 
