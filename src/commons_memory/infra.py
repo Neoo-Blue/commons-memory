@@ -36,6 +36,7 @@ LABEL = {"part_of": "part of", "runs_on": "runs on", "exposed_via": "exposed via
          "stores_in": "stores data in", "mounts": "mounts", "talks_to": "talks to", "deploys_from": "deploys from",
          "dev_at": "developed at", "uses_credential": "uses credential", "backs_up_to": "backs up to", "member_of": "member of"}
 IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+DOCKER_GW = re.compile(r"^172\.(1[6-9]|2\d|3[01])\.0\.1$")  # every docker host has one: never an identity
 VMID = re.compile(r"\b(?:lxc|ct|vm|container)\s*#?\s*(\d{2,5})\b", re.I)
 
 
@@ -60,7 +61,7 @@ def _keys(kind: str, name: str, attrs: dict, extra: list[str] = ()) -> list[str]
     if kind in ("machine", "guest"):
         if attrs.get("vmid") or (kind == "guest" and VMID.search(name or "")):
             ks.append(f"vmid:{attrs.get('vmid') or VMID.search(name).group(1)}")
-        ks += [f"ip:{a}" for a in dict.fromkeys(IP.findall(text)) if not a.startswith(("127.", "0."))]
+        ks += [f"ip:{a}" for a in dict.fromkeys(IP.findall(text)) if not a.startswith(("127.", "0.")) and not DOCKER_GW.match(a)]
     if kind == "endpoint":
         ks.append("url:" + (name or "").lower().rstrip("/"))
     if kind in ("storage", "directory"):
@@ -92,23 +93,26 @@ def _merge_list(old: str | None, new: list) -> str:
 
 
 def upsert_node(s: Store, kind: str, name: str, *, attrs: dict | None = None, note: str = "", source: str,
-                evidence: list[str] = (), keys: list[str] = (), at: float | None = None, host: str | None = None) -> str:
-    """Join the node that shares a key, or make one. Discovery names win over memory names; attrs merge (newer wins)."""
+                evidence: list[str] = (), keys: list[str] = (), at: float | None = None, host: str | None = None,
+                find: list[str] | None = None) -> str:
+    """Join the node that shares a key, or make one. Discovery names win over memory names; attrs merge (newer wins).
+    find: match only on these keys (a snapshot's guest matches by its own host's vmid, never another host's LXC 100);
+    every key is still registered for lookups by name, vmid or IP."""
     if kind not in KINDS:
         raise CommonsError(f"unknown kind {kind!r}")
     ensure(s)
     attrs, at = dict(attrs or {}), at or now()
     ks = _keys(kind, name, attrs, list(keys) + ([f"svc:{_norm(name)}@{host}"] if kind == "service" and host else []))
-    nid = _find(s, ks)
+    nid = _find(s, find if find is not None else ks)
     with s.tx():
         if nid:
             r = s.q("SELECT * FROM infra_nodes WHERE id=?", (nid,))[0]
             merged = json.loads(r["attrs"] or "{}") | attrs
             disc = source.startswith(("discovery", "vault"))
-            s.x("UPDATE infra_nodes SET name=?, note=?, attrs=?, sources=?, evidence=?, last_seen=?, stale=0 WHERE id=?",
+            s.x("UPDATE infra_nodes SET name=?, note=?, attrs=?, sources=?, evidence=?, last_seen=?, stale=? WHERE id=?",
                 (name if disc or not json.loads(r["sources"] or "[]") else r["name"], note or r["note"],
                  json.dumps(merged), _merge_list(r["sources"], [source]), _merge_list(r["evidence"], list(evidence)),
-                 max(at, r["last_seen"] or 0), nid))
+                 max(at, r["last_seen"] or 0), 0 if source.startswith("discovery") else r["stale"], nid))
         else:
             nid = new_id("inf")
             s.x("INSERT INTO infra_nodes(id,kind,name,note,attrs,sources,evidence,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -149,6 +153,13 @@ def ingest_snapshot(s: Store, snap: dict, by: str | None = None) -> dict:
     ensure(s)
     src = f"discovery:{snap.get('collector', '?')}:{snap.get('source', '?')}"
     at = float(snap.get("at") or now())
+    if by:  # the first agent to report a source owns it: another key can't overwrite or stale out someone's map
+        own = s.q("SELECT value FROM meta WHERE key=?", (f"infra:owner:{src}",))
+        if own and own[0]["value"] != by:
+            raise PermissionError(f"{src} is reported by another agent's collector")
+        s.x("INSERT OR IGNORE INTO meta VALUES(?, ?)", (f"infra:owner:{src}", by))
+    prev = s.q("SELECT value FROM meta WHERE key=?", (f"infra:last:{src}",))
+    newest = not prev or at >= json.loads(prev[0]["value"]).get("at", 0)
     ids: dict[str, str] = {}
     hosts: dict[str, str] = {r["src"]: r["dst"] for r in snap.get("relations", []) if r.get("rel") == "runs_on"}
     kinds = {e["key"]: e["kind"] for e in snap.get("entities", [])}
@@ -163,8 +174,12 @@ def ingest_snapshot(s: Store, snap: dict, by: str | None = None) -> dict:
         name = e.get("name") or e["key"]
         if kind == "guest" and attrs.get("vmid") and str(attrs["vmid"]) not in name:  # two guests can share a name
             name = f"{name} ({'VM' if attrs.get('type') in ('qemu', 'vm') else 'LXC'} {attrs['vmid']})"
-        ids[e["key"]] = upsert_node(s, kind, name, attrs=attrs, source=src, at=at, host=host,
-                                    keys=[f"dkey:{snap.get('source')}:{e['key']}"])
+        dkey = f"dkey:{snap.get('source')}:{e['key']}"
+        machine = ids.get(hosts.get(e["key"], "")) if kind == "guest" else None
+        scoped = [f"vmid@{machine}:{attrs['vmid']}"] if machine and attrs.get("vmid") else []
+        strong = [k for k in _keys(kind, name, attrs) if k.startswith(("ip:", "url:", "path:"))]
+        ids[e["key"]] = upsert_node(s, kind, name, attrs=attrs, source=src, at=at, host=host, keys=[dkey, *scoped],
+                                    find=[dkey, *scoped, *strong, *([f"svc:{_norm(name)}@{host}"] if host else [])])
     edges = 0
     for r in snap.get("relations", []):
         a, b = ids.get(r.get("src")), ids.get(r.get("dst"))
@@ -172,13 +187,15 @@ def ingest_snapshot(s: Store, snap: dict, by: str | None = None) -> dict:
             edges += 1
     seen = set(ids.values())
     stale = 0
-    for n in s.q("SELECT id, sources FROM infra_nodes WHERE sources LIKE ?", (f'%"{src}"%',)):
-        if n["id"] not in seen and json.loads(n["sources"]) == [src]:
-            s.x("UPDATE infra_nodes SET stale=1 WHERE id=?", (n["id"],))
-            stale += 1
-    s.x("UPDATE infra_edges SET stale=1 WHERE sources=? AND last_seen<?", (json.dumps([src]), at))
+    if newest:  # a replayed older snapshot must not stale out what a newer one found
+        for n in s.q("SELECT id FROM infra_nodes WHERE sources LIKE ? AND stale=0", (f'%"{src}"%',)):
+            if n["id"] not in seen:  # this collector reported it before and no longer does, whatever notes say
+                s.x("UPDATE infra_nodes SET stale=1 WHERE id=?", (n["id"],))
+                stale += 1
+        s.x("UPDATE infra_edges SET stale=1 WHERE sources LIKE ? AND last_seen<?", (f'%"{src}"%', at))
     _reconcile(s)
-    s.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (f"infra:last:{src}", json.dumps({"at": at, "nodes": len(ids), "kinds": len(set(kinds.values()))})))
+    if newest:
+        s.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (f"infra:last:{src}", json.dumps({"at": at, "nodes": len(ids), "kinds": len(set(kinds.values()))})))
     s.audit(by, "infra.snapshot", src, {"nodes": len(ids), "edges": edges, "stale": stale})  # who sent it, for tracing
     return {"source": src, "nodes": len(ids), "edges": edges, "stale": stale}
 
@@ -308,10 +325,23 @@ def merge_nodes(s: Store, keep: str, drop: str) -> dict:
     with s.tx():
         for e in s.q("SELECT * FROM infra_edges WHERE src=? OR dst=?", (drop, drop)):
             src, dst = (keep if e["src"] == drop else e["src"]), (keep if e["dst"] == drop else e["dst"])
-            if src != dst:
-                upsert_edge(s, src, e["rel"], dst, source=json.loads(e["sources"] or '["memory"]')[0],
-                            evidence=json.loads(e["evidence"] or "[]"), attrs=json.loads(e["attrs"] or "{}"), at=e["last_seen"])
-            s.x("DELETE FROM infra_edges WHERE id=?", (e["id"],))
+            ex = s.q("SELECT * FROM infra_edges WHERE src=? AND rel=? AND dst=? AND id<>?", (src, e["rel"], dst, e["id"]))
+            if src == dst:
+                s.x("DELETE FROM infra_edges WHERE id=?", (e["id"],))
+            elif ex:  # the kept node already has this link: fold the two, keeping every bind and a rejection
+                x, ea, xa = ex[0], json.loads(e["attrs"] or "{}"), json.loads(ex[0]["attrs"] or "{}")
+                binds = xa.get("binds", []) + [b for b in ea.get("binds", []) if b not in xa.get("binds", [])]
+                verdict = "no" if "no" in (x["verdict"], e["verdict"]) else (x["verdict"] or e["verdict"])
+                s.x("UPDATE infra_edges SET attrs=?, sources=?, evidence=?, verdict=?, last_seen=? WHERE id=?",
+                    (json.dumps(ea | xa | ({"binds": binds} if binds else {})), _merge_list(x["sources"], json.loads(e["sources"] or "[]")),
+                     _merge_list(x["evidence"], json.loads(e["evidence"] or "[]")), verdict, max(x["last_seen"] or 0, e["last_seen"] or 0), x["id"]))
+                s.x("DELETE FROM infra_edges WHERE id=?", (e["id"],))
+            else:
+                s.x("UPDATE infra_edges SET src=?, dst=? WHERE id=?", (src, dst, e["id"]))
+        for r in s.q("SELECT key FROM infra_keys WHERE key LIKE ?", (f"%@{drop}",)):  # services named by their host
+            s.x("INSERT OR IGNORE INTO infra_keys VALUES(?,?)", (r["key"][: -len(drop)] + keep,
+                s.q("SELECT node FROM infra_keys WHERE key=?", (r["key"],))[0]["node"]))
+            s.x("DELETE FROM infra_keys WHERE key=?", (r["key"],))
         s.x("UPDATE infra_keys SET node=? WHERE node=?", (keep, drop))
         s.x("UPDATE infra_nodes SET attrs=?, sources=?, evidence=?, note=? WHERE id=?",
             (json.dumps(json.loads(b["attrs"] or "{}") | json.loads(a["attrs"] or "{}")),
@@ -366,7 +396,7 @@ def extract(s: Store, model: str | None = None, since: float | None = None, limi
     if not model:
         raise CommonsError("no model for the map: set the librarian role or add a provider key on the Setup page")
     known = known_names(s)
-    cost, merged = 0.0, defaultdict(int)
+    cost, merged, failed = 0.0, defaultdict(int), []
     for i, b in enumerate(batches):
         text = "\n".join(f"[{n['id']}] {iso(n['created_at'])[:10]} ({n['project'] or 'no project'}): {n['c']}" for n in b)
         r = pl.chat(model, f"Notes:\n{text}", system=EXTRACT_SYS, max_tokens=32000, role="librarian", schema=EXTRACT_SCHEMA,
@@ -376,11 +406,13 @@ def extract(s: Store, model: str | None = None, since: float | None = None, limi
             got = ingest_extraction(s, json.loads(r["text"]), b)
         except (ValueError, KeyError, TypeError) as e:
             log(f"batch {i + 1}: unreadable answer ({e})")
+            failed += [n["created_at"] for n in b]
             continue
         for k, v in got.items():
             merged[k] += v
         log(f"batch {i + 1}/{len(batches)}: {got}, ${cost:.2f}")
-    s.x("INSERT OR REPLACE INTO meta VALUES('infra:watermark', ?)", (str(max(n["created_at"] for n in notes)),))
+    mark = min(failed) - 0.001 if failed else max(n["created_at"] for n in notes)  # failed notes are read again next run
+    s.x("INSERT OR REPLACE INTO meta VALUES('infra:watermark', ?)", (str(max(mark, since)),))
     link_vault(s)
     s.audit(None, "infra.extract", model, {"notes": len(notes), "cost": round(cost, 4)} | dict(merged))
     return {"notes": len(notes), "batches": len(batches), "cost": round(cost, 4)} | dict(merged)
@@ -396,15 +428,22 @@ def link_vault(s: Store) -> int:
         creds = listing(s)
     except Exception:  # noqa: BLE001 - no vault table yet
         return 0
+    from urllib.parse import urlsplit
+    def hp(u):
+        try:
+            x = urlsplit(u if "://" in u else "http://" + u)
+            return (x.hostname or "").lower(), x.port
+        except ValueError:
+            return "", None
     n = 0
-    eps = [(r["id"], r["name"].lower()) for r in s.q("SELECT id, name FROM infra_nodes WHERE kind='endpoint'")]
+    eps = [(r["id"], hp(r["name"])) for r in s.q("SELECT id, name FROM infra_nodes WHERE kind='endpoint'")]
     for c in creds:
         cid = upsert_node(s, "credential", c["credential"], attrs={"service": c.get("service"), "vault": True},
                           note=c.get("description") or "", source="vault")
-        hosts = {re.sub(r"^https?://", "", u).split("/")[0].lower() for u in c.get("base_urls") or []}
+        bases = [hp(u) for u in c.get("base_urls") or []]
         targets = set()
-        for eid, ename in eps:
-            if any(h and h in ename for h in hosts):
+        for eid, (eh, ep) in eps:  # same host and port; a base URL with no port means the default web ports
+            if any(h and h == eh and (p == ep or (p is None and ep in (None, 80, 443))) for h, p in bases):
                 targets |= {r["src"] for r in s.q("SELECT src FROM infra_edges WHERE dst=? AND rel='reachable_at'", (eid,))}
         nm = _norm(c["credential"])
         if len(nm) >= 4:
@@ -496,7 +535,7 @@ def resolve(s: Store, query: str) -> str | None:
     def key(k):
         r = s.q("SELECT node FROM infra_keys WHERE key=?", (k,))
         return r[0]["node"] if r else None
-    for k in [f"vmid:{m.group(1)}" for m in [VMID.search(q)] if m] + [f"ip:{a}" for a in IP.findall(q)] + ["url:" + q.lower().rstrip("/")]:
+    for k in ["url:" + q.lower().rstrip("/")] + [f"vmid:{m.group(1)}" for m in [VMID.search(q)] if m] + [f"ip:{a}" for a in IP.findall(q)]:
         if key(k):
             return key(k)
     if key(f"system:{n}"):  # "Plex" means the system (its parts and where they run), not the container called plex
@@ -630,9 +669,12 @@ def extract_async(s: Store, full: bool = False) -> dict:
     """Build from memory in the background (minutes, and it spends model credit): progress lands in meta infra:job."""
     import threading
     ensure(s)
-    job = s.q("SELECT value FROM meta WHERE key='infra:job'")
-    if job and json.loads(job[0]["value"]).get("status") == "running" and now() - json.loads(job[0]["value"])["at"] < 3600:
-        return json.loads(job[0]["value"])
+    with s.tx():  # claim first, so a second click while the notes are being counted finds it running
+        job = s.q("SELECT value FROM meta WHERE key='infra:job'")
+        cur = json.loads(job[0]["value"]) if job else {}
+        if cur.get("status") == "running" and now() - cur.get("at", 0) < 6 * 3600:
+            return cur
+        s.x("INSERT OR REPLACE INTO meta VALUES('infra:job', ?)", (json.dumps({"status": "running", "at": now(), "done": 0, "total": 0}),))
     est = extract(s, since=0.0 if full else None, dry_run=True)
     state = {"status": "running", "at": now(), "done": 0, "total": est["batches"], "notes": est["notes"],
              "estimate_usd": est["estimate_usd"], "cost": 0.0}

@@ -1,5 +1,6 @@
 """Infrastructure map: snapshots, memory extraction joining discovered nodes, vault links, staleness, the agent text."""
 import base64
+import json
 import os
 
 from commons_memory import infra as I
@@ -145,3 +146,69 @@ def test_dashboard_api_and_project_view(tmp_path):
     assert pv["systems"][0]["name"] == "Plex" and "radarr" in {x["name"].lower() for x in pv["services"]}
     assert any("/api/infra/extract".startswith(p) for p in OWNER_ONLY)                     # it spends model credit
     assert api.infra_estimate({})["notes"] == 1
+
+
+def test_review_fixes_identity_staleness_merge_vault_and_ownership(tmp_path, monkeypatch):
+    import copy
+    import pytest
+    from commons_memory import vault as V
+    monkeypatch.setenv("COMMONS_VAULT_KEY", base64.b64encode(os.urandom(32)).decode())
+    s = make_store(tmp_path, "i9.db")
+    t0 = now()
+    I.ingest_snapshot(s, _snap(at=t0), by="agent-a")
+    # a URL resolves to the endpoint, not the guest that owns its IP
+    assert I.node(s, I.resolve(s, "http://192.168.50.205:7878"))["kind"] == "endpoint"
+    # another agent can't report (or stale out) the same source
+    with pytest.raises(PermissionError):
+        I.ingest_snapshot(s, _snap(at=t0 + 1, with_radarr=False), by="agent-b")
+    # a second Proxmox host with its own LXC 106 stays a separate guest
+    other = copy.deepcopy(_snap(at=t0))
+    other["source"] = "pve2"
+    for e in other["entities"]:
+        e["attrs"] = {k: v for k, v in (e.get("attrs") or {}).items() if k not in ("ip",)}
+        if e["kind"] == "machine":
+            e["name"], e["attrs"]["ip"] = "pve2", "10.9.9.9"
+    I.ingest_snapshot(s, other, by="agent-c")
+    assert len([n for n in I.nodes(s, kind="guest") if n["attrs"].get("vmid") == 106]) == 2
+    # radarr disappears from pve: stale; an old note can't revive it; replaying an older snapshot changes nothing
+    I.ingest_snapshot(s, _snap(at=t0 + 60, with_radarr=False), by="agent-a")
+    rid = [n for n in I.nodes(s) if n["name"] == "radarr" and n["stale"]][0]["id"]
+    I.upsert_node(s, "service", "radarr", source="memory", keys=[f"svc:radarr@{I.node(s, rid)['chain'][0]['id']}"])
+    assert I.node(s, rid)["stale"]
+    I.ingest_snapshot(s, _snap(at=t0 - 600, with_radarr=False), by="agent-a")
+    assert not [n for n in I.nodes(s) if n["name"] == "plex" and n["stale"]]
+    # same-as keeps every bind and a rejection
+    lxc = I.resolve(s, "arrstack")
+    twin = I.upsert_node(s, "guest", "arr box", source="memory")
+    store_id = [n["id"] for n in I.nodes(s, kind="storage")][0]
+    I.upsert_edge(s, twin, "mounts", store_id, source="memory", attrs={"host_path": "/mnt/extra", "guest_path": "/extra"})
+    e = [x for x in I.node(s, lxc)["out"] if x["rel"] == "mounts"][0]
+    I.verdict(s, e["edge"], False)
+    I.merge_nodes(s, lxc, twin)
+    edges = s.q("SELECT attrs, verdict FROM infra_edges WHERE src=? AND rel='mounts'", (lxc,))
+    assert len(edges) == 1 and edges[0]["verdict"] == "no" and len(json.loads(edges[0]["attrs"])["binds"]) == 2
+    # vault: exact host and port, never a longer IP or another port on the host
+    V.add(s, "short-ip", "x-secret-1", "svc", ["http://192.168.50.20:7878"], {"bearer": True})
+    V.add(s, "plex-api", "x-secret-2", "plex", ["http://192.168.50.203:32400"], {"bearer": True})
+    I.link_vault(s)
+    creds = {x["name"] for x in I.node(s, I.resolve(s, "plex"))["out"] if x["rel"] == "uses_credential"}
+    assert creds == {"plex-api"}
+
+
+def test_extract_async_runs_once_and_failed_batches_are_read_again(tmp_path, monkeypatch):
+    s = make_store(tmp_path, "i10.db")
+    s.add_item("memory", "Poise runs on LXC 108 (192.168.50.213) behind the tunnel at phrase.cooli.ai, deployed by deploy.sh")
+    gate = __import__("threading").Event()
+    calls = []
+    def fake_extract(store, model=None, since=None, limit=None, dry_run=False, log=lambda m: None):
+        if dry_run:
+            return {"notes": 1, "batches": 1, "estimate_usd": 0.07}
+        calls.append(1)
+        gate.wait(2)
+        return {"notes": 1, "batches": 1, "cost": 0.0}
+    monkeypatch.setattr(I, "extract", fake_extract)
+    a = I.extract_async(s)
+    b = I.extract_async(s)                                   # a second click while the first runs
+    gate.set()
+    __import__("time").sleep(0.3)
+    assert b["status"] == "running" and len(calls) == 1      # the first call's dict is live state, done by now
