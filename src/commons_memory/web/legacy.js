@@ -334,7 +334,7 @@ async function show(id){if(typeof id!=="string"||!id)return;window.mopen=id;wind
 window.addEventListener("message",ev=>{const d=ev.data;if(!d||typeof d!=="object"||d.type!=="commons:open"||typeof d.id!=="string"||!d.id)return;show(d.id)});
 let _rseq=0;
 async function render(){tabs();const seq=++_rseq;if(window.medit&&$("#med"))window._draft={id:window.medit,content:$("#med").value,tags:($("#metags")&&$("#metags").value)||""};
-try{const o=await api("overview");if(seq!==_rseq)return;$("#ks").innerHTML=o.paused?`<span class="pill failed">PAUSED</span> <button class="pri" onclick="post('killswitch',{paused:false})">resume</button>`:`<button class="bad" title="Pause all orchestration" onclick="post('killswitch',{paused:true,reason:'dashboard kill switch'})" aria-label="Kill switch">⏻<span class="ksl"> Kill switch</span></button>`;
+try{const o=await api("overview");if(seq!==_rseq)return;shellStatus(o);
 if(tab==="Memory"&&!$("#mq"))$("#m").innerHTML='<div class="card"><div class="skel"></div><div class="skel w"></div><div class="skel"></div><div class="skel w"></div><div class="skel"></div></div>';
 const ae=document.activeElement,fid=ae&&ae.id&&$("#m").contains(ae)&&/INPUT|TEXTAREA/.test(ae.tagName)?ae.id:null,fc=fid?ae.selectionStart:0;
 const html=await V[tab]();if(seq!==_rseq)return;const m=$("#m");if(m.dataset.tab!=tab){m.style.animation="none";m.offsetHeight;m.style.animation=""}m.dataset.tab=tab;m.innerHTML=html;if(tab=="Org chart")ocInit();

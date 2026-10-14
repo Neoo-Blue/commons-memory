@@ -1,0 +1,69 @@
+/* App shell: workspace navigation, header, breadcrumbs, hub status, paused banner, mobile sub-tabs and bottom bar.
+   Loaded after theme.css and components.css; uses their tokens with legacy fallbacks. */
+.logo{display:flex;align-items:center;gap:10px;padding:6px 10px 18px;font-weight:600;font-size:15px;letter-spacing:-.01em;color:var(--fg-default,var(--fg))}
+.logo svg{width:22px;height:22px;fill:none;stroke:var(--acc);stroke-width:1.6}
+.logo svg circle{fill:var(--acc-subtle,var(--acc-soft))}
+
+/* workspaces */
+.nav .ws{margin:2px 0}
+.nav .ws-h{display:flex;align-items:center;gap:10px;width:100%;min-height:34px;padding:0 10px;border:0;border-radius:var(--radius-md,8px);background:none;
+  color:var(--fg-muted,var(--mut));font:500 13px/1 var(--font-sans,var(--font));letter-spacing:0;cursor:pointer;text-align:left;box-shadow:none}
+.nav .ws-h:hover{background:var(--bg-card-hover,var(--card2));color:var(--fg-default,var(--fg))}
+.nav .ws.cur>.ws-h{color:var(--fg-default,var(--fg))}
+.nav .ws-h>svg{width:17px;height:17px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.nav .ws-h span{flex:1}
+.nav .ws-h .chev{width:14px;height:14px;opacity:.5;transition:transform var(--duration-normal,.2s) var(--ease-out,ease)}
+.nav .ws-h[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.nav .ws-items{display:grid;gap:1px;padding:2px 0 8px 14px;margin-left:8px;border-left:1px solid var(--border-subtle,var(--line))}
+.nav .ws-items a{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:var(--radius-sm,6px);color:var(--fg-muted,var(--mut));
+  font-size:13px;text-decoration:none;transition:background var(--duration-fast,.12s),color var(--duration-fast,.12s)}
+.nav .ws-items a svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;opacity:.8}
+.nav .ws-items a:hover{background:var(--bg-card-hover,var(--card2));color:var(--fg-default,var(--fg))}
+.nav .ws-items a.on{background:var(--acc-subtle,var(--acc-soft));color:var(--fg-default,var(--fg));font-weight:500}
+.nav .ws-items a.on svg{stroke:var(--acc);opacity:1}
+.nav .nav-h{display:none}
+
+/* header */
+header{gap:8px}
+header .crumbs{display:flex;align-items:center;gap:6px;color:var(--fg-subtle,var(--mut));font-size:13px;white-space:nowrap}
+header .crumbs svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;opacity:.6}
+header h1#ttl{font-size:14px;font-weight:600;letter-spacing:-.01em;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header .hstat{display:flex;align-items:center;gap:6px;color:var(--fg-muted,var(--mut));font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:6px}
+header .hstat .sep{opacity:.4}
+header .hstat .status-dot{width:7px;height:7px;border-radius:50%;background:var(--fg-subtle,var(--mut))}
+header .hstat .status-dot.live{background:var(--ok);box-shadow:0 0 0 3px var(--ok-subtle,rgba(34,197,94,.15))}
+header .search{display:flex;align-items:center;gap:8px;min-width:240px;height:34px;padding:0 8px 0 10px;border:1px solid var(--border-default,var(--line));
+  border-radius:var(--radius-md,8px);background:var(--bg-input,var(--card));color:var(--fg-subtle,var(--mut));font-size:13px;cursor:pointer;box-shadow:none}
+header .search:hover{border-color:var(--border-strong,var(--line));color:var(--fg-muted,var(--fg))}
+header .search span{flex:1;text-align:left}
+header .search svg,header .icon-btn svg,header .menu-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round}
+header .icon-btn,header .menu-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;min-height:34px;padding:0;border:1px solid transparent;
+  border-radius:var(--radius-md,8px);background:none;color:var(--fg-muted,var(--mut));box-shadow:none}
+header .icon-btn:hover,header .menu-btn:hover{background:var(--bg-card-hover,var(--card2));color:var(--fg-default,var(--fg))}
+.paused-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 22px 0;padding:10px 14px;border:1px solid var(--warn-border,var(--warn));
+  border-radius:var(--radius-lg,12px);background:var(--warn-subtle,transparent);color:var(--fg-default,var(--fg));font-weight:500}
+
+/* phones: workspace sub-tabs under the header and a bottom bar instead of the hamburger drawer */
+.subtabs{display:none}
+.bnav{display:none}
+@media (max-width:900px){
+  header .hstat,header .search span,header .search kbd{display:none}
+  header .search{min-width:0;width:34px;padding:0;justify-content:center;border-color:transparent;background:none}
+  header .crumbs{display:none}
+  .subtabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding:8px 14px;border-bottom:1px solid var(--border-subtle,var(--line));
+    position:sticky;top:58px;z-index:4;background:var(--bg-app,var(--bg))}
+  .subtabs::-webkit-scrollbar{display:none}
+  .subtabs a{flex:none;display:inline-flex;align-items:center;min-height:36px;padding:0 12px;border-radius:999px;color:var(--fg-muted,var(--mut));
+    font-size:13px;text-decoration:none;white-space:nowrap}
+  .subtabs a.on{background:var(--acc-subtle,var(--acc-soft));color:var(--fg-default,var(--fg));font-weight:500}
+  .bnav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:20;padding:6px 6px calc(6px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--border-default,var(--line));background:color-mix(in srgb,var(--bg-sidebar,var(--bg2)) 88%,transparent);backdrop-filter:blur(16px)}
+  .bnav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:50px;border-radius:var(--radius-md,8px);
+    color:var(--fg-subtle,var(--mut));font-size:10.5px;font-weight:500;text-decoration:none}
+  .bnav a svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .bnav a.on{color:var(--acc)}
+  main#m{padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+  .menu-btn{display:none!important}
+  .paused-banner{margin:10px 14px 0}
+}
+@media (prefers-reduced-motion:reduce){.nav .ws-h .chev{transition:none}}
