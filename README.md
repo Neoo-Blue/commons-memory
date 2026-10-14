@@ -39,11 +39,12 @@ commons search "how do payments retry"
 # 4. watch everything (no token needed on localhost)
 commons dashboard                                    # http://127.0.0.1:8766
 ```
-Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the 31 core tools (6.3k tokens, against 39.7k for all 183); `tools(query)` finds the other 152 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
+Connect a second AI the same way and it can see the first one's memory immediately. Each client lists only the 32 core tools (6.1k tokens, against 40.4k for all 186); `tools(query)` finds the other 154 and `call(tool, args)` runs them. For other AIs (ChatGPT, Grok, Muse…), paste [the universal prompt](#connect-any-ai).
 
 ## Feature tour
 | Area | What you get | Learn more |
 |---|---|---|
+| **Infrastructure map** | One layered map of where everything runs and how it connects: machines, LXCs and VMs, containers, services, URLs and ports, tunnels, storage and bind mounts, repos, systems (e.g. Plex: its parts and the guest each runs on) and the vault credential each uses (name only). Built from a read-only collector (`commons infra collect --submit`, or `commons infra install` to run it on a schedule) and from your memories (a small model extracts stated facts, each citing its notes), merged by vmid, IP and URL. Zoomable map, inventory and drawers on the dashboard; agents ask `infra("plex")` | [docs/guide.md](docs/guide.md#infrastructure-map) |
 | **Memory & knowledge** | Hybrid search (BM25 + local fastembed vectors, entity/time/recency signals, optional rerank) with token budgets · `context=N` returns the turns around each short hit (a reply needs the turn it answers; a long turn stands alone) and relative dates resolve against each memory's own date ("yesterday (7 May 2023)") · free-text contradiction flags (TypeSafe) · auto-capture hooks for Claude Code/Codex/Gemini/Cursor that keep every message and reply verbatim plus typed observations, and a `turn` hook for chat apps without hooks ([docs/hooks.md](docs/hooks.md)) · one graph linking memory, code, sessions, agents · code index (Python, JS/TS, Go, Rust, Java, Ruby, C, C++, C#) plus live definitions, references and types from each language's own server (`code_lookup`, LSP) · Graphiti adapter (mirror memories into a temporal knowledge graph, bring its facts back) · conflict detection · auto-built, cited knowledge base per project · librarian that tidies and answers `find()` | [docs/tools.md](docs/tools.md) |
 | **Project board** | Every request you make, in your words, with the targets (metric, goal, current), expectations, actions and deliveries under it, layer by layer (`project / ui/dashboard`). Done needs evidence, dropped needs a reason, and asking twice is counted. It leads every agent's check-in, so nothing you asked for is lost to context compaction or an agent switch. Agents' questions for you wait under "Needs you" and your answer goes straight back to them | [docs/tools.md](docs/tools.md) |
 | **No duplicate work** | `start_work` checks every task against what other agents are doing now and what was finished, so two agents never build the same thing and nobody redoes finished work; hooks run the same check on every message. Each agent gets the Commons routine on its first check-in, so you never have to explain it | [PROMPT.md](PROMPT.md) |
@@ -76,6 +77,7 @@ effect is real but not yet measured. Rival columns come from each project's own 
 | Work splitting (model, live agent or rules plan it; `split_subtask`) | big jobs run in parallel across agents by strength and usage left; live run: 3 jobs, 4 agents (not benchmarked for speed) | · | · | ✓ task delegation (no planner) | · |
 | API seats (your own keys, by tier) | when every subscription agent is busy, offline or out of usage, steps that need no repo (specs, plans, reviews, research, summaries) still run on a cheap, mid or top model from your key, picked per step; stops at your 24-hour dollar cap (off by default) | · | · | · | · |
 | Six-stage workflow (`/spec` `/plan` `/build` `/test` `/review` `/ship`) | an idea goes through spec, plan, build, verify, cross-family review and ship with you approving the spec and the release; leads split work into task cards, each routed to a cheap, mid or top model by difficulty x criticality; build and verify need evidence; every acceptance criterion traced to its tests and verdicts; a failed check stops the checks after it; Workflow page draws it all (token savings measured per job, not benchmarked) | · | · | ◐ task delegation, no stages | · |
+| Infrastructure map | where a service runs, how it is reached, what it mounts and which credential it uses, scattered across hundreds of notes → one answer from `infra(name)`; on a live Proxmox host the collector found 18 guests, 49 services, 38 endpoints and 43 mounts in about a minute, read-only | · | · | · | ◐ code architecture only |
 | Project pages + grouped names | a live hub's 125 raw project names (folders, worktrees, one product under 6 names) in a filter dropdown, no project page → one page per product with its timeline, diffs, memory and people; one-offs kept as tasks | ◐ filter by app/user | ◐ project filter, no page | ◐ wings and rooms | ◐ repo diagrams |
 | Job workspace + recorded diffs | every part's result, diff and GitHub-checked commit in one place; reviewers get the diff | · | ◐ file paths only | ✓ patch submit | · |
 | Credential vault + decision agent + owner approvals | agents never see keys; reads allowed, writes need your ask, the rest is one approval link only you can approve (owner password), and approving runs it | · | · | · | · |
@@ -223,7 +225,7 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (v0.9.0; QA on v0.28, tool sizes on v0.23)
+## Benchmarks (v0.9.0; QA on v0.28, tool sizes on v0.30)
 Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
 results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
@@ -234,7 +236,7 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 | LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.7%** with `context=2` (short hits, v0.28) and date resolution (78.5% when every hit gets neighbours, 69.5% for hits alone); no LLM at write time |
 | LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **65%** on v0.28 (67% on v0.20.1, run-to-run noise of a few points; v0.9: 62%). Since v0.28 neighbouring turns go only to short hits, so they no longer cost points on its long sessions (65% with or without them; 54.0% when every hit gets them) |
 | Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
-| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer) | **6,291** for the 31 core tools in v0.23; listing all 183 would cost 39,710 |
+| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer, minus a one-tool baseline) | **6,072** for the 32 core tools in v0.30; listing all 186 would cost 40,382 |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
 **Head-to-head, rivals run here on the same LoCoMo data** (details in [benchmarks/README.md](benchmarks/README.md)):

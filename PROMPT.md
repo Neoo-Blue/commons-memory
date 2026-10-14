@@ -24,7 +24,8 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
    (schedule_report), your usage windows (quota_report) and your current work (start_work). Keep it current with
    hooks (commons hooks install) or turn() every turn. Commons should never be missing what you know.
 2) Before answering from scratch or saying you don't know: search(query) (one-line hits; expand(id) for detail),
-   why(topic) for past decisions, resume() for handoffs. Don't redo finished work.
+   why(topic) for past decisions, resume() for handoffs, infra(name) for where something runs and how it
+   connects (host, LXC, container, URL, storage, vault credential name). Don't redo finished work.
 3) Before starting ANY task, including one the user gives you directly: start_work(what, project, paths).
    busy = another agent has it: don't start; msg_send them or tell the user who has it.
    done = it was done before: build on it or tell the user; never redo it. finish_work(claim_id, result) when done

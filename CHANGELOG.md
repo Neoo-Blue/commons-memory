@@ -2,6 +2,35 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.30.0: an infrastructure map, for you and for every agent
+- **Why.** The owner: the knowledge base should know the structure of the code and the infrastructure, where everything
+  resides and how it interacts, the project it belongs to and the credential it uses, "not only memorizing everything
+  but categorizing and structuring it, clear for human observation and for AI", down to every LXC on the Proxmox host.
+  The facts were in memory, spread over hundreds of notes (about 750 mention Plex alone), with nothing that answered
+  "where does Radarr run and what does it mount" in one place.
+- **One layered map.** Places and machines, then guests (LXC, VM), then containers and services, then endpoints (URLs,
+  ports, domains, tunnels), with storage and bind mounts, repos, systems (a product and its parts) and credentials. Each
+  fact keeps its sources (discovered live, from memory, from the vault) and when it was last seen; what a collector stops
+  reporting turns stale instead of lingering.
+- **Discovered live, read-only.** `commons infra collect` reads a Proxmox host (every LXC and VM with its IP, resources,
+  mount points and status, the Docker containers inside each with images, published ports and bind mounts, the host's
+  own services), plain Docker hosts, Tailscale and cloudflared, through one command allowlist that refuses anything that
+  writes before a process starts. `--submit` sends it to the hub; `commons infra install` runs it every 6 hours.
+- **From memory, cited.** A small model (the librarian role, else the preset Haiku) reads the notes that mention hosts,
+  ports, paths and domains and extracts stated facts, each citing its notes and anchored to the names discovery already
+  found; a note's "LXC 106 (192.168.50.205)" joins the discovered `arrstack` by vmid and IP. The owner starts it from
+  the dashboard, after an estimate (a batch of notes costs about $0.07); later runs read only new notes.
+- **Vault links.** Each vault credential attaches to the services its base URLs or name point at; the map shows the name,
+  never the value.
+- **For people.** Knowledge > Infrastructure: a zoomable map (machine, then its guests, then their containers), an
+  inventory with filters, an Ask view showing exactly what an agent gets, and a drawer per thing with its chain, details,
+  links (confirm or reject each one), evidence notes, Hide and "Same as". Each project page gains a System tab.
+- **For agents:** `infra()` (now a core tool) gives the whole tree; `infra("plex")`, `infra("LXC 106")` or
+  `infra("192.168.50.205")` gives one thing: what it runs on, its details, mounts, endpoints, links, credential names and
+  sources. Ask it before guessing where something lives.
+- **Identity, carefully.** Two LXCs can both be named `docker` and every Docker host has 172.17.0.1, so nodes match on
+  strong keys (vmid, primary IP, URL, collector key) and fall back to a bare name only when nothing stronger exists.
+
 ## v0.29.0: projects, with everything about each one in one place
 - **Why.** The owner wanted "the whole thing about the Commons project in one place: memory, how it was worked, diffs,
   timeline, who did what", the same for every product, and a one-off job treated as a task, not a project. The hub had

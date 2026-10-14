@@ -163,6 +163,15 @@ def add_parsers(sub) -> None:
     c.add_argument("--cloudflared", action="store_true", help="local cloudflared tunnels")
     c.add_argument("--out", help="write JSON to this file (default stdout)")
     c.add_argument("--submit", action="store_true", help="send it to the hub ($COMMONS_URL + agent key) for the map")
+    for c_ in (c, inf_sub.add_parser("install", help="collect and submit on a schedule from this machine (launchd/systemd)")):
+        c_.add_argument("--url", default=os.environ.get("COMMONS_URL"), help="the hub (default $COMMONS_URL)")
+        c_.add_argument("--api-key-file", help="agent key file (default $COMMONS_API_KEY or ~/.commons/agents/$COMMONS_AGENT.key)")
+    ins = inf_sub.choices["install"]
+    ins.add_argument("--every", type=float, default=6, help="hours between runs (default 6)")
+    ins.add_argument("--proxmox", nargs="?", const="pve", default=None)
+    ins.add_argument("--docker", action="append", default=None, metavar="ALIAS")
+    ins.add_argument("--tailscale", action="store_true")
+    ins.add_argument("--cloudflared", action="store_true")
     x = inf_sub.add_parser("show", help="the infrastructure map as an agent sees it (this database)")
     x.add_argument("query", nargs="?", default="")
     x = inf_sub.add_parser("extract", help="build the map from memories with a small model (spends credit)")
@@ -391,10 +400,24 @@ def handle_nostore(args) -> int:
             fwd.append("--tailscale")
         if args.cloudflared:
             fwd.append("--cloudflared")
-        if args.out:
+        if getattr(args, "out", None):
             fwd += ["--out", args.out]
-        if args.submit:
+        if getattr(args, "submit", False):
             fwd.append("--submit")
+        if args.action == "install":
+            if not args.url:
+                print("infra install needs --url (the hub) or COMMONS_URL", file=sys.stderr)
+                return 2
+            keyfile = _install_keyfile(args)
+            if not keyfile:
+                return 2
+            fwd = [f for f in fwd if f != "--out"] + ["--submit", "--url", args.url, "--api-key-file", keyfile]
+            return _schedule("infra", "CommonsInfraCollect", "infrastructure discovery (read-only)", ["infra", *fwd],
+                             max(30, int(args.every * 60)))
+        if getattr(args, "url", None):
+            fwd += ["--url", args.url]
+        if getattr(args, "api_key_file", None):
+            fwd += ["--api-key-file", args.api_key_file]
         return infra_main(fwd)
     if c == "bench":
         from . import bench
@@ -583,32 +606,69 @@ def _install_keyfile(args) -> str | None:
 
 def _quota_install(args) -> int:
     """Install a job that runs quota sync every 10 minutes, and run it once now."""
-    import html
-    import shlex
-    from .cli_v7 import _install_unit
     keyfile = _install_keyfile(args)
     if not keyfile:
         return 2
-    argv = [*_commons_argv(), "quota", "sync", "--url", args.url, "--api-key-file", keyfile]
-    log = str(Path.home() / ".commons" / "logs" / "sync.log")
+    return _schedule("sync", "CommonsQuotaSync", "quota sync (models, tool version, usage windows)",
+                     ["quota", "sync", "--url", args.url, "--api-key-file", keyfile], 10)
+
+
+def _schedule(name: str, win_task: str, what: str, cmd: list[str], minutes: int) -> int:
+    """A user job that runs `commons <cmd>` now and then every `minutes`: launchd, a systemd timer, or schtasks."""
+    import html
+    import shlex
+    from .cli_v7 import _install_unit
+    argv = [*_commons_argv(), *cmd]
+    log = str(Path.home() / ".commons" / "logs" / f"{name}.log")
     Path(log).parent.mkdir(parents=True, exist_ok=True)
+    every = f"every {minutes // 60} hours" if minutes >= 120 and minutes % 60 == 0 else f"every {minutes} minutes"
     if sys.platform == "darwin":
-        # RunAtLoad is the run-once-now; StartInterval 600 is the ten minutes after that
+        # RunAtLoad is the run-once-now; StartInterval is the period after that
         args_xml = "".join(f"<string>{html.escape(a)}</string>" for a in argv)
         unit = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>dev.commons.sync</string>
+  <key>Label</key><string>dev.commons.{name}</string>
   <key>ProgramArguments</key><array>{args_xml}</array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>600</integer>
+  <key>StartInterval</key><integer>{minutes * 60}</integer>
   <key>StandardOutPath</key><string>{html.escape(log)}</string>
   <key>StandardErrorPath</key><string>{html.escape(log)}</string>
 </dict></plist>
 """
-        return _install_unit("launchd", "sync", unit,
-                             done=f"installed ~/Library/LaunchAgents/dev.commons.sync.plist; "
-                                  f"quota sync runs every 10 minutes (log {log})")
+        return _install_unit("launchd", name, unit,
+                             done=f"installed ~/Library/LaunchAgents/dev.commons.{name}.plist; {what} runs {every} (log {log})")
+    if sys.platform.startswith("win"):
+        inner = " ".join(f'\\"{a}\\"' if any(c in a for c in ' "') else a for a in argv)
+        return _install_unit("windows", name, f'schtasks /Create /SC MINUTE /MO {minutes} /TN {win_task} /TR "{inner}" /F')
+    cmdline = " ".join(shlex.quote(a) for a in argv)
+    service = f"""[Unit]
+Description=Commons {what}
+
+[Service]
+Type=oneshot
+ExecStart={cmdline}
+StandardOutput=append:{log}
+StandardError=append:{log}
+"""
+    timer = f"""[Unit]
+Description=Commons {what} {every}
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={minutes}min
+
+[Install]
+WantedBy=timers.target
+"""
+    folder = Path.home() / ".config" / "systemd" / "user"
+    files = [(str(folder / f"commons-{name}.service"), service), (str(folder / f"commons-{name}.timer"), timer)]
+    # enable --now starts the timer; start the service too so the first run does not wait for OnBootSec
+    cmds = [["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "--now", f"commons-{name}.timer"],
+            ["systemctl", "--user", "start", f"commons-{name}.service"]]
+    return _install_unit("systemd", f"commons-{name}", service, files=files, cmds=cmds,
+                         done=f"installed {files[0][0]} and commons-{name}.timer; {what} runs {every} (log {log})")
     if sys.platform.startswith("win"):
         inner = " ".join(f'\\"{a}\\"' if any(c in a for c in ' "') else a for a in argv)
         return _install_unit("windows", "sync",

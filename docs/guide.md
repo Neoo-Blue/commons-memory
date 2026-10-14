@@ -147,6 +147,24 @@ Use `--url http://hub:8765/mcp --api-key …` to work against a remote hub. See 
 
 `commons quota install --url <hub>/mcp --api-key-file <keyfile>` runs `commons quota sync` every 10 minutes on this machine (also a `commons setup` step) so models and the tool version stay current, with or without an aiusage database.
 
+## Infrastructure map
+
+One layered map of where everything runs and how it connects, for you (Knowledge > Infrastructure, and a System tab on
+every project) and for agents (`infra()`).
+
+```sh
+commons infra collect --submit            # read-only: Proxmox "pve", tailscale, cloudflared; sends it to $COMMONS_URL
+commons infra collect --proxmox pve2 --docker nas --submit
+commons infra install --url http://hub:8770 --api-key-file ~/.commons/agents/me.key   # every 6 hours (--every N)
+commons infra extract --dry-run           # how many notes, what it would cost; then run it (or use the dashboard)
+commons infra show "LXC 106"              # what an agent gets from infra("LXC 106")
+```
+
+The collector only runs commands on a fixed read-only allowlist (`pvesh get`, `pct list/config`, `pct exec <id> -- docker
+ps/inspect`, `ss`, `findmnt`, ...) and never collects container environment variables. Snapshots merge by vmid, primary IP,
+URL and collector key; whatever a later snapshot no longer reports turns stale. Extraction from memory cites its notes and
+reuses the names discovery found; confirm or reject any link in its drawer, merge duplicates with "Same as", hide noise.
+
 ## Dashboard
 
 `commons dashboard` (or `commons serve --dashboard`) → http://127.0.0.1:8766. It binds to localhost only; set `--token`
@@ -161,7 +179,7 @@ Six workspaces, each a group of pages (on a phone: the bottom bar, with the grou
 | Projects | Projects (one page per product: active work, timeline, work, changes, memory, people; group a product's several names in one tap), Tasks (one-off work and jobs under no project) |
 | Work | Workflow (every job; a job opens in a drawer with its stage spine, steps, routing, and retry / move / cancel), Orchestration, Task breakdown, Mission control, Changes (diffs), Sessions, Drive, Routing |
 | Agents | Agents (the fleet; an agent opens in a drawer with presence, quota, models, recent steps and Update now), Presence, Capacity, Usage, Models (API seats, provider key tests), Connect, Skills, Discover, MCP hub |
-| Knowledge | Memory (search, filter chips, drawers, bulk actions), Knowledge, Context, Graph, Preferences, Org chart, Librarian, Import, Retro learning |
+| Knowledge | Memory (search, filter chips, drawers, bulk actions), Knowledge, Infrastructure (the layered map of where everything runs), Context, Graph, Preferences, Org chart, Librarian, Import, Retro learning |
 | System | Setup, Secrets, Recurring, System (background jobs and the Pause all work control) |
 
 Keys: `⌘K` (or `/`) opens the command palette (pages, actions, memory search); `g o` Overview, `g p` Projects, `g w` Workflow, `g a`
