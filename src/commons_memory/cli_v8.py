@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key"}
+NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export",
         "audit-chain", "graphiti", "approvals"} | NOSTORE
 
@@ -152,6 +152,16 @@ def add_parsers(sub) -> None:
     x.add_argument("--group", default="commons")
     x.add_argument("--last-n", type=int, default=50, help="pull: facts from this many latest episodes")
     x.add_argument("--project", help="pull: file the facts under this project")
+    inf = sub.add_parser("infra", help="read-only infrastructure discovery (no database)")
+    inf_sub = inf.add_subparsers(dest="action", required=True)
+    c = inf_sub.add_parser("collect", help="snapshot machines, guests, containers, endpoints, storage and mounts")
+    c.add_argument("--proxmox", nargs="?", const="pve", default=None,
+                   help="ssh alias of a Proxmox node (default with no source flags: pve, plus tailscale and cloudflared)")
+    c.add_argument("--docker", action="append", default=None, metavar="ALIAS",
+                   help="ssh alias of a plain docker host (repeatable; sudo -n only, never a password)")
+    c.add_argument("--tailscale", action="store_true", help="local tailscale peers")
+    c.add_argument("--cloudflared", action="store_true", help="local cloudflared tunnels")
+    c.add_argument("--out", help="write JSON to this file (default stdout)")
 
 
 def _import(args) -> int:
@@ -351,6 +361,24 @@ def handle_nostore(args) -> int:
             print("Hooks post to $COMMONS_URL with $COMMONS_API_KEY (or ~/.commons/agents/$COMMONS_AGENT.key); "
                   "without COMMONS_URL they write to the local DB. Wrap text in <private>...</private> to exclude it.")
         return 0
+    if c == "infra":
+        from .infra_collect import main as infra_main
+        if getattr(args, "action", None) != "collect":
+            print("infra: only 'collect' is implemented", file=sys.stderr)
+            return 2
+        # Rebuild flags so an explicit source does not also pick up the no-flag default.
+        fwd = ["collect"]
+        if args.proxmox:
+            fwd += ["--proxmox", args.proxmox]
+        for alias in args.docker or []:
+            fwd += ["--docker", alias]
+        if args.tailscale:
+            fwd.append("--tailscale")
+        if args.cloudflared:
+            fwd.append("--cloudflared")
+        if args.out:
+            fwd += ["--out", args.out]
+        return infra_main(fwd)
     if c == "bench":
         from . import bench
         if args.suite.startswith("qa-"):
