@@ -56,7 +56,57 @@ def seed(path: str) -> None:
     from commons_memory.messaging import heartbeat
     for name in ("claude-code", "gemini", "grok"):
         heartbeat(s, ids[name], status="online", client="demo")
-    print(f"seeded {path}: {len(ids)} agents, job {jid}")
+
+    # Projects workspace demo seed: atlas, lumen, home, fix-typo
+    now_t = time.time()
+    for i, mem in enumerate([
+        "Atlas API gateway v2 routing tables generated",
+        "Postgres read replicas configured for Atlas API",
+        "Rate limiter algorithm changed to token bucket",
+        "Websocket connection pool tuned for dashboard events",
+        "Atlas documentation generator updated to OpenAPI 3.1",
+    ]):
+        s.add_item("memory", mem, agent_id=ids["claude-code"], project="atlas-api", created_at=now_t - (5 - i) * 86400)
+    s.add_item("memory", "Atlas web responsive navigation tests passing", agent_id=ids["gemini"], project="atlas-web", created_at=now_t - 2 * 86400)
+    s.add_item("memory", "Atlas developer guides published to staging", agent_id=ids["codex"], project="atlas-docs", created_at=now_t - 86400)
+
+    s.record_decision("Adopt OpenAPI 3.1 specification for Atlas API endpoints", "enables contract testing and automated SDK generation", agent_id=ids["claude-code"], project="atlas-api")
+    s.record_decision("Use token bucket rate limiting across public Atlas routes", "smooths traffic bursts without dropping requests", agent_id=ids["grok"], project="atlas-api")
+    s.add_item("handoff", "HANDOFF telemetry middleware completed, ready for load testing", agent_id=ids["claude-code"], project="atlas-api")
+
+    s.session_for(ids["claude-code"], "atlas-api", "integrate telemetry exporter")
+    s.session_for(ids["claude-code"], "atlas-web", "redesign query builder interface")
+    s.session_for(ids["codex"], "atlas-docs", "generate reference API documentation")
+    B.add(s, "ask", "Migrate Atlas authentication tokens to asymmetric keys", project="atlas-api", source="user")
+
+    atlas_job = o.submit("Add telemetry middleware to Atlas API", pattern="parallel", project="atlas-api", title="Add telemetry middleware to Atlas API",
+                         dag=[{"key": "telemetry", "type": "code", "title": "Implement OTLP tracer exporter", "body": "", "deps": []}])["job_id"]
+    s.x("UPDATE subtasks SET status='done', claimed_by=?, result='TESTS: 18 passed', updated_at=? WHERE job_id=?",
+        (ids["claude-code"], now_t, atlas_job))
+
+    from commons_memory.workspace import record_changes
+    subtask = dict(s.q("SELECT * FROM subtasks WHERE job_id=?", (atlas_job,))[0])
+    diff_text = """diff --git a/atlas/telemetry.py b/atlas/telemetry.py
+--- a/atlas/telemetry.py
++++ b/atlas/telemetry.py
+@@ -10,4 +10,8 @@ def init_tracer():
+-    return None
++    tracer = Tracer(service="atlas-api")
++    tracer.add_exporter(OTLPExporter())
++    return tracer
+"""
+    record_changes(s, ids["claude-code"], subtask=subtask, repo="github.com/atlas/api", branch="feat/telemetry",
+                   commit="a1b2c3d4e5f6", diff=diff_text, stat="atlas/telemetry.py | 6 ++--")
+
+    s.add_item("memory", "Lumen state persistence migrated to SQLite", agent_id=ids["cursor"], project="lumen-app")
+    s.add_item("memory", "Desktop tray menu updated for macOS Ventura", agent_id=ids["codex"], project="lumen-desktop")
+
+    for i in range(3):
+        s.add_item("memory", f"Shell history and dotfile backup {i}", agent_id=ids["claude-code"], project="home")
+
+    s.add_item("memory", "Fixed spelling of configuration in onboarding instructions", agent_id=ids["cursor"], project="fix-typo")
+
+    print(f"seeded {path}: {len(ids)} agents, job {jid}, atlas job {atlas_job}")
 
 
 if __name__ == "__main__":

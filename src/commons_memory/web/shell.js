@@ -3,6 +3,7 @@
 // and kit.js; it replaces legacy tabs() and owns #tabs, #crumbs, #hstat, #subtabs and #bnav.
 function wsList(){return [
   ["Home",'<path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M5.5 10v9.5h13V10"/>',["Overview","Board"]],
+  ["Projects",'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>',["Projects","Tasks"]],
   ["Work",'<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M8 5V3.5h8V5M3.5 11h17"/>',["Workflow","Orchestration","Task breakdown","Mission control","Changes","Sessions","Drive","Routing"]],
   ["Agents",'<circle cx="9" cy="8.5" r="3.2"/><path d="M3 19.5c.7-3.3 3.1-5 6-5s5.3 1.7 6 5"/><path d="M16 5.6a3.2 3.2 0 0 1 0 5.8M18.6 14.7c1.4.8 2.2 2.4 2.5 4.8"/>',["Agents","Presence","Capacity","Usage","Models","Connect","Skills","Discover","MCP hub"]],
   ["Knowledge",'<path d="M5 4.5h10.5L19 8v11.5H5z"/><path d="M15 4.5V8h4M8.5 12h7M8.5 15.5h5"/>',["Memory","Knowledge","Context","Graph","Preferences","Org chart","Librarian","Import","Retro learning"]],
