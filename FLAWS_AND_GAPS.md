@@ -124,7 +124,7 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 | Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
 | Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |
 | Instant wake for chat-only AIs | A browser chat can't run while idle. Commons wakes daemon-backed agents instantly; chat agents see work on their next `msg_recv`. |
-| Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). |
+| Vector cache | SQLite only (Postgres uses pgvector). The matrix lives in each process's memory (60k x 384 floats = 92 MB). `COMMONS_SQLITE_VEC=1` (v0.28, `[vec]` extra) searches inside SQLite with sqlite-vec instead: peak memory at 50k memories 926 MB -> 237 MB, but the vector scan is about 20x slower (90-110 ms vs 5 ms), so it stays opt-in for small machines. Agents never hold the matrix: they talk to the hub over MCP. |
 | Curated import | Costs model tokens (about $1 per 1,000 claude-mem items with Haiku 5.5) and cannot know which facts were fixed later; review the queue. |
 | Unlisted tools | Some clients only call listed tools; they reach the others through `call`. |
 
@@ -132,7 +132,7 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 
 | Risk / gap | Status in v0.5 | Why it is still open |
 |---|---|---|
-| **Prompt injection between agents** | Fencing of upstream outputs, redaction, untrusted wrappers, trust weighting, and secrets that never reach models | No known general fix exists. A model can always be persuaded by data. Run workers sandboxed. |
+| **Prompt injection between agents** | Fencing of upstream outputs, redaction, untrusted wrappers, trust weighting, and secrets that never reach models. Since v0.28 also GitHub text (issue and PR bodies and titles, branch names, commit messages) and webhook bodies: fenced, never in a job title, and strangers' issues and PRs make no job unless `github_outside` is on | No known general fix exists. A model can always be persuaded by data. Run workers sandboxed. |
 | **Worker presets verified by running** | `claude` and `grok` ran end-to-end on 2026-10-13 (claimed a pinned subtask, completed it); the rest are checked against the vendors' docs (`docs/workers.md`) | Codex, Cursor and Gemini CLI aren't installed on the build machine, so those three were not run. CLI flags change often. Use `--cmd` to override. |
 | **Live Vault / Infisical / OAuth IdP / provider token-count APIs** | Implemented against the documented HTTP APIs and tested against faithful mock servers | Testing them live needs real accounts and credentials (Vault server, Infisical project, IdP, Anthropic/Google keys) that the build environment does not have. |
 | **OAuth authorization server** | Commons is an OAuth 2.1 resource server (introspection + protected-resource metadata) | Commons does not issue tokens or run an interactive login. That needs an external IdP (Auth0, Keycloak, Entra…). Local JWT/JWKS verification is not built in. Introspection is used instead. |

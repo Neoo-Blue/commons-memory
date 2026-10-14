@@ -16,6 +16,7 @@ COMMONS_CF_ACCESS_AS_AUTH	Treat a valid Cloudflare Access identity as an agent p
 COMMONS_CF_ACCESS_AUD	Cloudflare Access application audience tag to verify
 COMMONS_CF_ACCESS_CERTS	Cloudflare Access certs URL override
 COMMONS_CF_ACCESS_TEAM	Cloudflare Access team name (`<team>.cloudflareaccess.com`)
+COMMONS_CONTEXT_PRUNE	Set to 0 to give every search hit its neighbouring turns with `search(context=N)` (and `bench qa-* --neighbors`), as before v0.28. Default: only hits up to 320 characters get them, since a short reply needs the turn it answers while a long turn stands alone and extra turns bury it
 COMMONS_DAILY_COST_CAP	USD/day cap across all orchestrated work; jobs pause when hit
 COMMONS_DASHBOARD_TOKEN	Admin token for the web dashboard (required for non-loopback binds)
 COMMONS_DB	Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`)
@@ -112,6 +113,7 @@ COMMONS_RANK_FUSION	How keyword and vector candidates are fused: `score` (defaul
 COMMONS_DASHBOARD_HOSTS	Extra hostnames a tokenless dashboard answers to (comma list). IPs, localhost, this machine's name, *.ts.net and the COMMONS_PUBLIC_URL host are always accepted; other names are refused to block DNS rebinding
 COMMONS_KB_MAX_STALE	Seconds a dirty knowledge-base bucket may stay stale while writes keep arriving (default 600); otherwise it rebuilds after COMMONS_KB_DEBOUNCE seconds of quiet
 COMMONS_SQLITE_READERS	Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host
+COMMONS_SQLITE_VEC	Set to 1 (with the `[vec]` extra, included in the Docker image) to run vector search inside SQLite with sqlite-vec instead of a numpy matrix held in memory: about 74% less memory at 50k memories, but the vector scan is roughly 20x slower (90-110 ms vs 5 ms at 50k). For small machines; off by default
 TYPESAFE_API_KEY	TypeSafe key (https://typesafe.ai). When set, the librarian checks each new note against its 3 nearest notes for free-text contradictions and opens conflicts
 COMMONS_TYPESAFE_URL	TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone)
 COMMONS_TYPESAFE_MODEL	TypeSafe model (default jev-latest)

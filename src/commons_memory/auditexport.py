@@ -4,6 +4,10 @@ Every row carries the hash of the row before it, so removing, reordering or edit
 line signs the chain's final hash with the hub's Ed25519 key (created once at COMMONS_HOME/audit_signing.key, 0600, or
 COMMONS_AUDIT_KEY_FILE). The export embeds the public key; `commons audit-verify FILE --key FINGERPRINT` pins the key
 you expect, so a re-signed forgery fails too.
+
+The live audit table is a hash chain too: each row stores prev and hash when it is inserted, and `commons audit-chain`
+rechecks it. Someone with write access to the database can rewrite the whole chain or cut the newest rows; a signed
+export pins the head at that moment, so compare against your last export.
 """
 from __future__ import annotations
 
@@ -19,6 +23,12 @@ from .store import CommonsError, Store, _parse_time
 
 def _canon(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def chain_hash(prev, ts, agent_id, action, target, detail) -> str:
+    """sha256 of one live audit row. detail is the text stored in the table, not a second encoding."""
+    body = {"prev": prev, "ts": ts, "agent_id": agent_id, "action": action, "target": target, "detail": detail}
+    return hashlib.sha256(_canon(body)).hexdigest()
 
 
 def _key_path() -> Path:
@@ -110,3 +120,30 @@ def verify(text: str, pin: str | None = None) -> dict:
         return {"ok": False, "error": "signature invalid"}
     return {"ok": True, "rows": len(rows), "fingerprint": fingerprint(raw), "pinned": bool(pin),
             "from": rows[0]["ts"] if rows else None, "to": rows[-1]["ts"] if rows else None}
+
+
+def verify_live(store: Store) -> dict:
+    """Recompute the live chain in id order. Rows are read in batches so a long log is not one giant query."""
+    anc = store.q("SELECT value FROM meta WHERE key='audit_anchor'")
+    prev = (anc[0]["value"] or "") if anc else ""
+    head = ""
+    n = 0
+    last_id = 0
+    while True:
+        rows = store.q("SELECT id, ts, agent_id, action, target, detail, prev, hash FROM audit "
+                       "WHERE id>? ORDER BY id LIMIT 2000", (last_id,))
+        if not rows:
+            break
+        for r in rows:
+            n += 1
+            last_id = r["id"]
+            head = r["hash"] or ""
+            if r["prev"] != prev:
+                return {"ok": False, "rows": n, "head": head, "bad_id": r["id"],
+                        "reason": "prev does not match the previous hash"}
+            expect = chain_hash(prev, r["ts"], r["agent_id"], r["action"], r["target"], r["detail"])
+            if r["hash"] != expect:
+                return {"ok": False, "rows": n, "head": head, "bad_id": r["id"],
+                        "reason": "hash does not match row contents"}
+            prev = r["hash"]
+    return {"ok": True, "rows": n, "head": head, "bad_id": None, "reason": ""}

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "commons-memory"
-version = "0.27.0"
+version = "0.28.0"
 description = "Unified cross-AI memory: one MCP hub for shared memory, code graph, handoffs, reasoning logs and safe secret references."
 dynamic = ["readme"]
 license = "MIT"
@@ -37,7 +37,8 @@ sftp = ["paramiko>=3"]
 smb = ["smbprotocol>=1.13"]
 ws = ["websockets>=12"]
 vault = ["cryptography>=42"]
-all = ["commons-memory[embed,postgres,encryption,code,tokens,otel,http]"]
+vec = ["sqlite-vec>=0.1.6"]
+all = ["commons-memory[embed,postgres,encryption,code,tokens,otel,http,vec]"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout>=2"]
 
 [project.scripts]

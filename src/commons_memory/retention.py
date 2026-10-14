@@ -28,6 +28,22 @@ def _env_days(k: str) -> float:
     return float(os.environ.get(f"COMMONS_RETAIN_{k.upper()}", DEFAULTS[k]))
 
 
+def _trim_audit(s: Store, cutoff: float) -> int:
+    """Delete only the oldest unbroken run of aged audit rows and keep the last deleted hash as the chain's anchor, so
+    the rows that stay are never rewritten (a row with a skewed clock just waits for a later prune)."""
+    with s.tx():
+        s._lock_audit_chain()
+        lo = s.q("SELECT MIN(id) m FROM audit WHERE ts IS NULL OR ts>=?", (cutoff,))[0]["m"]
+        cut, args = ("id<?", (lo,)) if lo is not None else ("1=1", ())
+        last = s.q(f"SELECT hash FROM audit WHERE {cut} ORDER BY id DESC LIMIT 1", args)
+        if not last:
+            return 0
+        n = s.q(f"SELECT COUNT(*) n FROM audit WHERE {cut}", args)[0]["n"]
+        s.x("INSERT OR REPLACE INTO meta VALUES('audit_anchor', ?)", (last[0]["hash"] or "",))
+        s.x(f"DELETE FROM audit WHERE {cut}", args)
+        return n
+
+
 def prune(s: Store, usage_days: float | None = None, context_days: float | None = None,
           audit_days: float | None = None, dry_run: bool = False) -> dict:
     out: dict = {}
@@ -97,7 +113,10 @@ def prune(s: Store, usage_days: float | None = None, context_days: float | None 
             continue
         out[f"{table}_trimmed"] = n
         if n and not dry_run:
-            s.x(f"DELETE FROM {table} WHERE {col}<?", (t - days * 86400,))
+            if table == "audit":
+                out["audit_trimmed"] = _trim_audit(s, t - days * 86400)
+            else:
+                s.x(f"DELETE FROM {table} WHERE {col}<?", (t - days * 86400,))
     if not dry_run:
         s.x("INSERT OR REPLACE INTO meta VALUES('last_prune', ?)", (json.dumps(out | {"ts": t}),))
         s.audit(None, "retention.prune", "", out)

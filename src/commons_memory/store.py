@@ -70,11 +70,14 @@ CREATE TABLE IF NOT EXISTS leases(
   id TEXT PRIMARY KEY, ref TEXT, agent_id TEXT, scope TEXT, purpose TEXT, expires_at REAL,
   revoked INTEGER DEFAULT 0, created_at REAL);
 CREATE TABLE IF NOT EXISTS audit(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, agent_id TEXT, action TEXT, target TEXT, detail TEXT);
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, agent_id TEXT, action TEXT, target TEXT, detail TEXT,
+  prev TEXT, hash TEXT);
 """
 
 
 PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}")
+# One fixed bigint: pg_advisory_xact_lock(integer) does not exist, and every hub process must share this key.
+_AUDIT_CHAIN_LOCK = "SELECT pg_advisory_xact_lock(748213651::bigint)"
 
 
 class CommonsError(Exception):
@@ -94,6 +97,8 @@ def _hash_key(key: str) -> str:
 
 
 class Store:
+    _sqlite_vec: bool = False
+
     def __init__(self, path: str | None = None, embedder: Embedder | None | str = "auto"):
         from .pgcompat import PgDB, is_pg
         self.path = path or default_db_path()
@@ -104,6 +109,7 @@ class Store:
             if self.path != ":memory:":
                 Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self.db = _sqlite_connect(self.path)
+        self._sqlite_vec = bool(self.dialect == "sqlite" and _has_sqlite_vec(self.db))
         self.lock = threading.RLock()
         self._tl = threading.local()  # per-thread flags: one agent's bulk import must not change another's writes
         key = self.path if is_pg(self.path) or self.path == ":memory:" else os.path.realpath(self.path)
@@ -113,6 +119,9 @@ class Store:
         self.db.executescript(SCHEMA)
         from .schema_v2 import migrate
         migrate(self.db)
+        from .facts import add_columns
+        add_columns(self.db, [("audit", "prev", "TEXT"), ("audit", "hash", "TEXT")])
+        self._backfill_audit_chain()
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
         self._pgvec = False
@@ -180,9 +189,46 @@ class Store:
                 raise
             self.db.execute("COMMIT")
 
+    def _lock_audit_chain(self) -> None:
+        """Serialize chain writers until the surrounding transaction ends. SQLite already does this with BEGIN IMMEDIATE."""
+        if self.dialect == "postgres":
+            self.q(_AUDIT_CHAIN_LOCK)
+
+    def _audit_prev(self) -> str:
+        """The hash the next row must point at: the latest row, or the prune anchor when the table is empty."""
+        rows = self.q("SELECT hash FROM audit ORDER BY id DESC LIMIT 1")
+        if rows:
+            return rows[0]["hash"] or ""
+        anc = self.q("SELECT value FROM meta WHERE key='audit_anchor'")
+        return (anc[0]["value"] or "") if anc else ""
+
+    def _backfill_audit_chain(self) -> None:
+        """A hub upgraded from before the chain links its existing rows once, in id order. Only a log with no chained
+        row at all qualifies: re-signing a hash blanked later would launder an edit."""
+        if not self.q("SELECT 1 FROM audit LIMIT 1") or self.q("SELECT 1 FROM audit WHERE hash IS NOT NULL LIMIT 1"):
+            return
+        from .auditexport import chain_hash
+        with self.tx():
+            self._lock_audit_chain()
+            prev, last_id = "", 0
+            while rows := self.q("SELECT id, ts, agent_id, action, target, detail FROM audit WHERE id>? ORDER BY id "
+                                 "LIMIT 2000", (last_id,)):
+                for r in rows:
+                    last_id, digest = r["id"], chain_hash(prev, r["ts"], r["agent_id"], r["action"], r["target"], r["detail"])
+                    self.x("UPDATE audit SET prev=?, hash=? WHERE id=?", (prev, digest, r["id"]))
+                    prev = digest
+
     def audit(self, agent_id: str | None, action: str, target: str = "", detail: Any = None) -> None:
-        self.x("INSERT INTO audit(ts,agent_id,action,target,detail) VALUES(?,?,?,?,?)",
-               (now(), agent_id, action, target, _j(detail) if detail is not None else None))
+        """Append one row linked to the previous hash. One tip read, in the same write transaction as the insert."""
+        from .auditexport import chain_hash
+        detail_s = _j(detail) if detail is not None else None
+        ts = now()
+        with self.tx():
+            self._lock_audit_chain()
+            prev = self._audit_prev()
+            digest = chain_hash(prev, ts, agent_id, action, target, detail_s)
+            self.x("INSERT INTO audit(ts,agent_id,action,target,detail,prev,hash) VALUES(?,?,?,?,?,?,?)",
+                   (ts, agent_id, action, target, detail_s, prev, digest))
 
     # ------------------------------------------------------------------ agents
     def register_agent(self, name: str, vendor: str = "", model: str = "", description: str = "",
@@ -490,14 +536,16 @@ class Store:
         return out
 
     def _with_context(self, out: dict, n: int, budget: int) -> None:
-        """Attach the n notes before and after each hit from the same session: a hit like "yes, last week" is only
-        useful with the turn it answers (LoCoMo QA +5 points over hits alone, no model at write time)."""
+        """Attach the n notes before and after each short hit from the same session: a hit like "yes, last week" is only
+        useful with the turn it answers (LoCoMo QA +9 points over hits alone, no model at write time), while a long
+        hit stands alone and extra turns would bury it (ranking.needs_context)."""
+        from .ranking import needs_context
         from .temporal import annotate
         seen = {r["id"] for r in out["results"]}
         extra, used = [], 0
         for r in out["results"]:
-            me = self.q("SELECT session_id, created_at FROM items WHERE id=?", (r["id"],))
-            if not me or not me[0]["session_id"]:
+            me = self.q("SELECT session_id, created_at, content FROM items WHERE id=?", (r["id"],))
+            if not me or not me[0]["session_id"] or not needs_context(me[0]["content"]):
                 continue
             sid, ts, iid = me[0]["session_id"], me[0]["created_at"], r["id"]
             # ids start with a millisecond timestamp, so (created_at, id) is insertion order on SQLite and Postgres alike
@@ -692,6 +740,18 @@ class Store:
         cheap filters (superseded, ACL) in SQL. None when numpy is missing (callers fall back to the python scan)."""
         if self.dialect != "sqlite":
             return None
+        if self._sqlite_vec:  # COMMONS_SQLITE_VEC=1: no resident matrix (-74% RSS at 50k), ~20x slower vector scan
+            import sqlite_vec
+            qb = sqlite_vec.serialize_float32(qv)
+            w = f" AND ({wsql})" if wsql else ""
+            if restrictive:  # few allowed rows: filter first, then score only those
+                sql = (f"SELECT e.item_id, vec_distance_cosine(e.vec, ?) d FROM embeddings e JOIN items i ON i.id = e.item_id "
+                       f"WHERE e.model = ?{w} AND d IS NOT NULL ORDER BY d LIMIT ?")
+            else:  # score every vector once, then apply the cheap filters to the best 2000 (as the numpy path does)
+                sql = (f"SELECT c.item_id, c.d FROM (SELECT item_id, vec_distance_cosine(vec, ?) d FROM embeddings "
+                       f"WHERE model = ? ORDER BY d LIMIT 2000) c JOIN items i ON i.id = c.item_id "
+                       f"WHERE c.d IS NOT NULL{w} ORDER BY c.d LIMIT ?")
+            return [(1.0 - r["d"], r["item_id"]) for r in self.q(sql, [qb, self.embedder.name] + list(args) + [k])]
         try:
             import numpy as np
         except ImportError:
@@ -1287,6 +1347,28 @@ def _vecstr(v) -> str:
 _REINDEX_LOCKS: dict[str, threading.Lock] = {}
 
 
+def _load_sqlite_vec(db) -> None:
+    """COMMONS_SQLITE_VEC=1 and the [vec] extra: vector search runs inside SQLite instead of a numpy matrix held in
+    memory. Opt-in, because it trades speed for memory. Any failure (no extension support, SQLCipher) keeps numpy."""
+    if os.environ.get("COMMONS_SQLITE_VEC") != "1" or not hasattr(db, "enable_load_extension"):
+        return
+    try:
+        import sqlite_vec
+        db.enable_load_extension(True)
+        sqlite_vec.load(db)
+        db.enable_load_extension(False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _has_sqlite_vec(db) -> bool:
+    try:
+        db.execute("SELECT vec_version()")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _sqlite_connect(path: str):
     """SQLite connection; uses SQLCipher (encrypted at rest) when COMMONS_DB_KEY is set and sqlcipher3 is installed."""
     key = os.environ.get("COMMONS_DB_KEY")
@@ -1302,9 +1384,11 @@ def _sqlite_connect(path: str):
         except Exception as e:  # noqa: BLE001
             raise CommonsError("cannot open encrypted database: wrong COMMONS_DB_KEY?") from e
         db.row_factory = sq.Row
+        _load_sqlite_vec(db)
         return db
     db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
     db.row_factory = sqlite3.Row
+    _load_sqlite_vec(db)
     return db
 
 

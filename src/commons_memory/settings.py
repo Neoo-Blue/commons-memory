@@ -40,6 +40,9 @@ DEFAULTS = {
     "schedule_takeover": (True, "Another agent covers a scheduled run its owner missed"),
     "github_watch": ([], "GitHub repos (owner/name) to watch: a failed CI run, a new issue or a new PR becomes a job for "
                          "the best live agent (uses the vault's GitHub key; works behind NAT)"),
+    "github_outside": (False, "Also turn issues, PRs and CI runs from people outside a watched repo (not its owner, a "
+                              "member or a collaborator) into jobs. Their text always reaches agents fenced as untrusted "
+                              "data, but an agent with tools can still be talked into things"),
     "phone_ntfy": ("", "Phone approvals: your ntfy topic URL (e.g. https://ntfy.sh/<long-random-topic>); every Needs-you "
                        "question arrives with Yes / No buttons"),
     "graphiti_url": ("", "A Graphiti server (e.g. http://graphiti:8000) to mirror memories into every few minutes, "
@@ -105,7 +108,7 @@ def put(s: Store, key: str, value) -> dict:
 
 
 CHOICES = {"agent_updates": ("auto", "notify", "off")}
-RISKY = {"auto_approve_all"}
+RISKY = {"auto_approve_all", "github_outside"}
 PAID = {"api_seats"}  # off by default: spends money on your own API key  # off by default and shown as "your risk", never as recommended
 
 

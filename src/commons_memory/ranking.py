@@ -38,6 +38,16 @@ def terms(q: str, limit: int = 32) -> list[str]:
     return (keep or toks)[:limit]
 
 
+STANDALONE = 320  # chars: a longer turn usually stands on its own, a shorter one is often a reply
+
+
+def needs_context(text: str) -> bool:
+    """Neighbouring turns help a short reply ("yes, last week" means nothing without the question it answers) and bury
+    a long, self-contained turn: given to every hit, they added 9 QA points on LoCoMo (turns ~140 chars) and cost 10 on
+    LongMemEval (~550). Only hits up to STANDALONE chars get them (COMMONS_CONTEXT_PRUNE=0: every hit, as before)."""
+    return os.environ.get("COMMONS_CONTEXT_PRUNE") == "0" or len(text or "") <= STANDALONE
+
+
 def fts_query(q: str) -> str:
     return " OR ".join(f'"{t}"' for t in terms(q))
 

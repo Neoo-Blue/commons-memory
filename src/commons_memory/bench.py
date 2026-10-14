@@ -399,13 +399,15 @@ def _qa_prompt(s, question, as_of, k, ts_label, neighbors: int = 0) -> str:
     from .temporal import annotate
     ids, _, _ = s.rank(question, limit=k, as_of=as_of)
     ctx = []
-    if neighbors:  # each hit with the turns around it from the same session, in time order, grouped by date
+    if neighbors:  # each short hit with the turns around it from the same session (search's rule), grouped by date
+        from .ranking import needs_context
         rows = {}
         for i in ids or []:
-            r = s.q("SELECT rowid AS rid, created_at FROM items WHERE id=?", (i,))
+            r = s.q("SELECT rowid AS rid, created_at, content FROM items WHERE id=?", (i,))
             if r:
+                n = neighbors if needs_context(r[0]["content"]) else 0
                 for x in s.q("SELECT rowid AS rid, content, created_at FROM items WHERE created_at=? AND rowid BETWEEN ? AND ?",
-                             (r[0]["created_at"], r[0]["rid"] - neighbors, r[0]["rid"] + neighbors)):
+                             (r[0]["created_at"], r[0]["rid"] - n, r[0]["rid"] + n)):
                     rows[x["rid"]] = x
         for x in sorted(rows.values(), key=lambda x: (x["created_at"], x["rid"])):
             ctx.append(f"[{_day(x['created_at'])}] {annotate(x['content'][:700], x['created_at'])}")
@@ -433,7 +435,8 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
     rows, cost = [], 0.0
     tag = f"qa-{suite}-{model.replace('/', '_')}-k{k}" + (f"-n{neighbors}" if neighbors else "") + \
         ("-iso" if os.environ.get("COMMONS_QA_DATES") == "iso" else "") + \
-        ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "")
+        ("-noresolve" if os.environ.get("COMMONS_RESOLVE_DATES") == "0" else "") + \
+        ("-noprune" if neighbors and os.environ.get("COMMONS_CONTEXT_PRUNE") == "0" else "")
     os.makedirs(out, exist_ok=True)
     queued: list[dict] = []
     if suite == "locomo":

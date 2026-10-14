@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key"}
-CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export", "graphiti", "approvals"} | NOSTORE
+CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export",
+        "audit-chain", "graphiti", "approvals"} | NOSTORE
 
 
 def add_parsers(sub) -> None:
@@ -138,6 +139,7 @@ def add_parsers(sub) -> None:
     x.add_argument("--out", default="-", help="file to write (default stdout)")
     x.add_argument("--since", help="ISO time or 7d / 12h")
     x.add_argument("--until")
+    sub.add_parser("audit-chain", help="check the live audit log's hash chain (edits, deletions, reordering)")
     x = sub.add_parser("audit-verify", help="check a signed audit export: chain, signature, and optionally the key")
     x.add_argument("file")
     x.add_argument("--key", help="the fingerprint you expect (from `commons audit-key` on the hub)")
@@ -481,6 +483,11 @@ def handle(args, store) -> int:
         else:
             Path(args.out).write_text(out)
             print(f"wrote {args.out} ({out.count(chr(10)) - 2} rows)", file=sys.stderr)
+    elif c == "audit-chain":
+        from .auditexport import verify_live
+        r = verify_live(store)
+        print(json.dumps(r, indent=2))
+        return 0 if r["ok"] else 1
 
     return 0
 

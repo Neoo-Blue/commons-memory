@@ -27,6 +27,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_CF_ACCESS_CERTS` | — | Cloudflare Access certs URL override | expose.py |
 | `COMMONS_CF_ACCESS_TEAM` | — | Cloudflare Access team name (`<team>.cloudflareaccess.com`) | expose.py |
 | `COMMONS_CLAIM_MINUTES` | `30` | Minutes after Commons starts (or after `commons approvals reset`) during which the first visitor can choose the owner password from the dashboard with no code (default 30). 0 = only with the setup code printed in the hub log | approvals.py |
+| `COMMONS_CONTEXT_PRUNE` | — | Set to 0 to give every search hit its neighbouring turns with `search(context=N)` (and `bench qa-* --neighbors`), as before v0.28. Default: only hits up to 320 characters get them, since a short reply needs the turn it answers while a long turn stands alone and extra turns bury it | bench.py, ranking.py |
 | `COMMONS_CONTRADICTION_MAX` | `50` | New notes checked for contradictions per librarian pass (default 50) | librarian.py |
 | `COMMONS_CONTRADICTION_THRESHOLD` | `0.85` | TypeSafe probability at which two notes count as contradicting (default 0.85; precision first) | librarian.py |
 | `COMMONS_DAILY_COST_CAP` | — | USD/day cap across all orchestrated work; jobs pause when hit | usage.py |
@@ -125,6 +126,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_SKILL_AUTO_APPROVE` | — | Activate clean skill versions without a second agent (single-user setups only) | server_v4.py, skillpool.py |
 | `COMMONS_SKILL_DISCOVERY` | `1` | Background skill discovery from public catalogs (`0` off) | background.py |
 | `COMMONS_SQLITE_READERS` | `0` | Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host | store.py |
+| `COMMONS_SQLITE_VEC` | — | Set to 1 (with the `[vec]` extra, included in the Docker image) to run vector search inside SQLite with sqlite-vec instead of a numpy matrix held in memory: about 74% less memory at 50k memories, but the vector scan is roughly 20x slower (90-110 ms vs 5 ms at 50k). For small machines; off by default | store.py |
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |

@@ -251,3 +251,17 @@ def test_search_context_returns_same_session_neighbours(store):
     assert "context (same session" in out["text"]
     two = s.search("kayaks Tahoe", project="chat", limit=1, context=2)
     assert [c["id"] for c in two["results"][0]["context"]] == [ids[1], ids[2], ids[4]]
+
+
+def test_search_context_skips_long_self_contained_hits(store, monkeypatch):
+    s = store
+    aid = s.ensure_agent("talker")
+    sid = s.session_for(aid, "chat", "a long conversation")
+    long_turn = "user: I finally visited the Museum of Modern Art on Saturday and spent the whole afternoon " + "there " * 60
+    ids = [s.add_item("memory", t, project="chat", agent_id=aid, session_id=sid)["id"]
+           for t in ("user: what should I cook tonight?", long_turn, "user: any tips for sourdough?")]
+    out = s.search("Museum of Modern Art visit", project="chat", limit=1, context=1)
+    assert out["results"][0]["id"] == ids[1] and "context" not in out["results"][0]   # it stands alone
+    monkeypatch.setenv("COMMONS_CONTEXT_PRUNE", "0")
+    out = s.search("Museum of Modern Art visit", project="chat", limit=1, context=1)
+    assert [c["id"] for c in out["results"][0]["context"]] == [ids[0], ids[2]]

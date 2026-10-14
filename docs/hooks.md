@@ -10,7 +10,7 @@ Agents shouldn't have to remember to call memory tools. With hooks installed, Co
 | **Stop / session end / pre-compact** | stores each new agent reply word for word, then turns the session's raw observations and the transcript tail into **typed observations** on top |
 
 Every message is kept, not only what a model judged worth keeping: the prompt and reply rows carry the tag
-`conversation`, share the session id, and `search(context=N)` returns the turns around any hit. Each message is
+`conversation`, share the session id, and `search(context=N)` returns the turns around any short hit (up to 320 characters; longer turns stand alone). Each message is
 stored once per session even though every Stop resends the transcript tail. `--prompts off` turns verbatim capture off.
 
 Typed observations are `decision`, `bugfix`, `discovery`, `security_alert`, `todo`, `change` and `summary`. They are
