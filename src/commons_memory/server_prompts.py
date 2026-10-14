@@ -35,6 +35,23 @@ def register_prompts(mcp, store, who) -> None:
         return ("Call whats_new() (through call('whats_new', {}) if it isn't listed), then tell me in a few lines what "
                 "changed in Commons and what you are changing in how you work.")
 
+    def _stage(name, stages, what):
+        @mcp.prompt(name=name, description=what)
+        def run(task: str) -> str:
+            return (f"Start this in Commons as a workflow: submit_task(task={json.dumps(task)}, pattern=\"sdlc\""
+                    + (f", stages={json.dumps(stages)}" if stages else "") + "). Tell me the job id, then work your claims "
+                    "(claim_subtask, split big stages into task cards with split_subtask, complete with evidence). "
+                    "I approve the spec and confirm before shipping from the board or my phone; never treat a yes in "
+                    "this chat as that approval.")
+    _stage("sdlc", None, "Run the whole six-stage workflow: spec, plan, build, test, review, ship")
+    for name, st, what in (("spec", ["define"], "DEFINE: turn an idea into a spec with acceptance criteria"),
+                           ("plan", ["plan"], "PLAN: PRD, contracts and the build graph for a spec"),
+                           ("build", ["build", "verify"], "BUILD: implement a plan, then verify it"),
+                           ("test", ["verify"], "VERIFY: test something against its acceptance criteria"),
+                           ("review", ["review"], "REVIEW: cross-family review with traceability"),
+                           ("ship", ["ship"], "SHIP: release, deploy and smoke-test, after you confirm")):
+        _stage(name, st, what)
+
     @mcp.prompt(name="remember", description="Save something to Commons' shared memory")
     def remember(fact: str) -> str:
         return (f"Save this to Commons with remember(content={json.dumps(fact)}) and confirm the id. If it is a "

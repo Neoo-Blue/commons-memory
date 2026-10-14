@@ -39,6 +39,8 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
    Both list what's connected to the work (memories, docs, decisions): update whatever your change made outdated.
    Big task with parts others could do at the same time (from the user or anyone)? submit_task(task): Commons
    splits it across the agents by what each is good at and how much usage each has left; claim your parts.
+   A whole feature or product (spec to release)? submit_task(task, pattern="sdlc"): six gated stages, the user
+   approves the spec and the release; build/verify steps need evidence (commit or diff, or a TESTS: line).
 4) Assigned work: claim_subtask -> heartbeat -> complete_subtask with the full result (+ repo, branch, commit or
    diff if you changed code; it lands in the job's workspace, /jobs/<job>/, with every part's files). Too big for one sitting?
    split_subtask(subtask_id, parts) hands parts to others and you merge their results. Reviews end with
@@ -124,13 +126,14 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def remember(content: str = "", title: str = "", project: str = "", tags: list[str] | None = None,
                  entities: list[str] | None = None, kind: str = "memory", related_ids: list[str] | None = None,
                  subject: str = "", predicate: str = "", value: str = "", session_id: str = "",
-                 text: str = "", visible_to: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
-        """Store a memory (note, observation, fact). `content` is the text (`text` is accepted as an alias).
+                 text: str = "", visible_to: list[str] | None = None, fact: str = "", agent: str = "",
+                 api_key: str = "") -> str:
+        """Store a memory (note, observation, fact). `content` is the text (`text` and `fact` are accepted as aliases).
         For facts give subject/predicate/value to enable conflict detection. entities: names or ids to link in the
         graph. visible_to: only these agents (and you) may see it. Secrets are auto-redacted; store refs like env://X."""
-        content = content or text
+        content = content or text or fact
         if not content.strip():
-            raise CommonsError("remember needs `content` (the memory text; `text` also works)")
+            raise CommonsError("remember needs `content` (the memory text; `text` and `fact` also work)")
         aid, auth = who(agent, api_key)
         out = store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
                              entities=entities, related_ids=related_ids, subject=subject or None,

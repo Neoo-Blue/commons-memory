@@ -24,7 +24,8 @@ from .redact import redact
 from .store import CommonsError, Store
 
 TASK_TYPES = ["research", "plan", "code", "review", "debate", "judge", "red_team", "test", "summarize", "vote",
-              "tally", "general"]
+              "tally", "general", "spec", "ship", "owner"]
+MAX_SPLIT_DEPTH = 3  # a stage lead -> workstream leads -> workers; deeper trees cost more coordination than they save
 GATE_TYPES = {"review", "red_team", "test", "verify"}
 DEFAULT_LEASE = int(os.environ.get("COMMONS_LEASE_SECONDS", "900"))
 
@@ -206,6 +207,11 @@ def plan(task: str, pattern: str = "auto", n: int = 3) -> list[dict]:
              "deps": ["execute"]}]
 
 
+def _untag(text: str) -> str:
+    """Agent text quoted in a question for the owner can't carry an approval tag of its own."""
+    return re.sub(r"\[(vault|mcp|gate|rework) ", r"(\1 ", text or "")
+
+
 def parse_verdict(text: str) -> str:
     m = re.search(r"(?im)^\s*VERDICT:\s*(approve|approved|pass|reject|rejected|fail)", text or "")
     if m:
@@ -227,9 +233,14 @@ class Orchestrator:
     def submit(self, task: str, *, pattern: str = "auto", project: str | None = None, agent_id: str | None = None,
                n: int = 3, budget: dict | None = None, dag: list[dict] | None = None, title: str = "",
                recurring_id: str | None = None, leftovers: list[dict] | None = None,
-               context_pack: str | None = None, dedupe: bool = False, prefer: str | None = None) -> dict:
-        """prefer: an agent id the router favours for this job's parts (the agent a big hand-off was addressed to)."""
+               context_pack: str | None = None, dedupe: bool = False, prefer: str | None = None,
+               stages: list[str] | None = None) -> dict:
+        """prefer: an agent id the router favours for this job's parts (the agent a big hand-off was addressed to).
+        pattern="sdlc": the six-stage workflow (sdlc.py); stages runs a contiguous part of it (/spec ... /ship)."""
         task, _ = redact(task)
+        if not dag and pattern == "sdlc":
+            from .sdlc import dag as sdlc_dag
+            dag = sdlc_dag(task, stages)
         if not dag and pattern in ("auto", "llm"):
             dag, how = self._plan(task, prefer)
             pattern = how or pattern
@@ -308,6 +319,8 @@ class Orchestrator:
                       ids[gate_of[d["key"]]] if d["key"] in gate_of else None, "pending", d.get("priority", 0),
                       _j(d.get("budget", per)), d.get("max_attempts", 3), now(), now()))
             self.s.relate(ids[d["key"]], jid, "part_of")
+            if d.get("card"):  # stage, level, criticality, acceptance...: routing and the Workflow page read it
+                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"card:{ids[d['key']]}", _j({"depth": 0} | d["card"])))
             if d["key"] in chosen:  # set before allocate() runs, so the first wake goes to this agent
                 who, pinned = chosen[d["key"]]
                 self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (who, ids[d["key"]]))
@@ -389,14 +402,32 @@ class Orchestrator:
             raise CommonsError("split only a subtask you have claimed")
         if not 2 <= len(parts or []) <= 12:
             raise CommonsError("split into 2 to 12 parts")
+        from .sdlc import card
+        pc = card(self.s, subtask_id)
+        depth = pc.get("depth", 0) if pc else len(self.s.q("SELECT 1 FROM relations WHERE src=? AND type='split_from'",
+                                                          (subtask_id,)))
+        if depth + 1 > MAX_SPLIT_DEPTH:
+            raise CommonsError(f"this is already {depth} levels deep (the limit is {MAX_SPLIT_DEPTH}): do it yourself")
         dag = []
         for i, p in enumerate(parts):
             p = {"title": p[:120], "body": p} if isinstance(p, str) else dict(p)
             if not (p.get("title") or p.get("body")):
                 raise CommonsError(f"part {i + 1} needs a title or body")
+            body = p.get("body") or p["title"]
+            if p.get("acceptance"):
+                body += f"\n\nAcceptance: {p['acceptance']}"
+            if p.get("inputs"):
+                body += f"\nInputs (load what you need): {', '.join(map(str, p['inputs']))}"
+            if p.get("output"):
+                body += f"\nOutput: {p['output']} (return a summary of at most 300 tokens plus that pointer)"
+            crit = p.get("criticality") if p.get("criticality") in ("low", "high") else "low"
             dag.append({"key": str(p.get("key") or i + 1), "type": p.get("type") or st["type"],
-                        "title": (p.get("title") or p["body"])[:120], "body": p.get("body") or p["title"],
-                        "deps": [str(k) for k in p.get("deps") or []], **({"agent": p["agent"]} if p.get("agent") else {})})
+                        "title": (p.get("title") or p["body"])[:120], "body": body,
+                        "deps": [str(k) for k in p.get("deps") or []], **({"agent": p["agent"]} if p.get("agent") else {}),
+                        "card": {"stage": pc.get("stage"), "level": "worker", "criticality": crit, "depth": depth + 1,
+                                 "covers": [str(c).upper() for c in p.get("covers") or []],
+                                 "evidence": bool(pc.get("evidence"))} if pc else
+                                {"level": "worker", "criticality": crit, "depth": depth + 1}})
         chosen = self._check(dag)
         merge = (f"\n\n--- MERGE ---\nYou split this into {len(dag)} parts and other agents did them. Their results "
                  "are in dependency_results: combine them into the final result for this subtask.")
@@ -437,6 +468,15 @@ class Orchestrator:
         self.s.x("UPDATE jobs SET status='cancelled', result=?, updated_at=? WHERE id=?", (reason, now(), job_id))
         self.s.x("UPDATE subtasks SET status='cancelled', updated_at=? WHERE job_id=? AND status NOT IN ('done','failed')",
                  (now(), job_id))
+        from . import board as B
+        for r in self.s.q("SELECT m.key, m.value FROM meta m JOIN subtasks t ON m.key IN ('ownerq:'||t.id, 'reworkq:'||t.id) "
+                          "WHERE t.job_id=?", (job_id,)):  # the owner isn't left with questions about a stopped job
+            self.s.x("DELETE FROM meta WHERE key=?", (r["key"],))
+            if r["key"].startswith("ownerq:") and B.get(self.s, r["value"]).get("status") != "done":
+                B.update(self.s, r["value"], status="done", evidence=f"job cancelled: {reason[:200]}")
+        for q in self.s.q("SELECT id FROM board WHERE kind='question' AND status<>'done' AND text LIKE '[rework sub_%' "
+                          "AND substr(text, 9, 26) IN (SELECT id FROM subtasks WHERE job_id=?)", (job_id,)):
+            B.update(self.s, q["id"], status="done", evidence=f"job cancelled: {reason[:200]}")
         self.s.audit(agent_id, "job.cancel", job_id, reason)
         return self.status(job_id, brief=True)
 
@@ -447,7 +487,9 @@ class Orchestrator:
     # ---------------------------------------------------------------- allocation
     def _deps_ok(self, st: dict) -> bool:
         for dep in json.loads(st["deps"] or "[]"):
-            r = self.s.q("SELECT status, gate_of FROM subtasks WHERE id=?", (dep,))[0]
+            r = self.s.q("SELECT status, gate_of, type, verdict FROM subtasks WHERE id=?", (dep,))[0]
+            if r["status"] == "done" and r["verdict"] == "reject" and (r["gate_of"] or r["type"] == "owner"):
+                return False  # a rejected check holds back the checks after it (verify before review)
             if r["status"] == "done":
                 continue
             if r["status"] == "awaiting_gate" and st["gate_of"] == dep:
@@ -464,7 +506,8 @@ class Orchestrator:
 
     def allocate(self, job_id: str) -> None:
         rows = [dict(r) for r in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND "
-                                          "assigned_agent IS NULL AND type<>'tally' ORDER BY created_at", (job_id,))]
+                                          "assigned_agent IS NULL AND type NOT IN ('tally','owner') ORDER BY created_at",
+                                          (job_id,))]
         used: dict[str, int] = {}
         for st in rows:
             exclude = json.loads(st["excluded_agents"] or "[]") + self._author_of_chain(st)
@@ -526,6 +569,7 @@ class Orchestrator:
         `commons agent daemon` long-polls the mailbox and fires within a second; chat agents see it on their next
         msg_recv. Waking at assignment time instead started agents on reviews of work that didn't exist yet."""
         from .messaging import Messaging
+        self._ask_owner(job_id)
         for st in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND assigned_agent IS NOT NULL "
                            "AND type<>'tally'", (job_id,)):
             st = dict(st)
@@ -535,16 +579,77 @@ class Orchestrator:
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, st["assigned_agent"]))
             kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
             ev = "debate_turn" if st["type"] == "debate" else None
+            from .routing import Router
+            tgt = Router(self.s).current(st["id"]) or {}  # the daemon starts the CLI on the routed model and effort
             Messaging(self.s).send(None, st["assigned_agent"], f"{'debate turn' if ev else kind} ready: {st['title']} "
                                    f"(job {job_id}). Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
-                                   subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"]}, event=ev)
+                                   subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"],
+                                                                    "model": tgt.get("model"),
+                                                                    "effort": (tgt.get("effort") or {}).get("level")},
+                                   event=ev)
+
+    def _ask_owner(self, job_id: str) -> None:
+        """An owner step whose work is ready becomes a board question (and a phone Yes / No when set up); only the
+        owner can answer it (approval page or signed phone link), never an agent."""
+        from . import board as B
+        for st in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND type='owner'", (job_id,)):
+            st = dict(st)
+            if not self._deps_ok(st) or self.s.q("SELECT 1 FROM meta WHERE key=?", (f"ownerq:{st['id']}",)):
+                continue
+            job = dict(self.s.q("SELECT title, project_id FROM jobs WHERE id=?", (job_id,))[0])
+            work = st["gate_of"] or (json.loads(st["deps"] or "[]") or [None])[-1]
+            res = (self.s.q("SELECT result FROM subtasks WHERE id=?", (work,)) or [{"result": ""}])[0]["result"] if work else ""
+            q = B.add(self.s, "question", f"[gate {st['id']}] {st['title']} ({job['title'][:80]}): {st['body']} "
+                                          f"Summary: {_untag((res or '')[:600])} Answer yes, or no with what to change.",
+                      project=self.s.project_name(job["project_id"]), path="workflow")
+            self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"ownerq:{st['id']}", q["id"]))
+
+    def owner_answered(self, question_text: str, answer: str, question_id: str | None = None) -> None:
+        """The owner answered a workflow question: an owner step (approve or send back with feedback), or a stage
+        that hit its rework cap (yes = another round, no = stop)."""
+        m = re.match(r"\s*\[(gate|rework) (sub_[0-9a-f]+)\]", question_text or "")
+        if not m:
+            return
+        cur = self.s.q("SELECT value FROM meta WHERE key=?", (f"ownerq:{m.group(2)}",))
+        if m.group(1) == "gate" and question_id and not (cur and cur[0]["value"] == question_id):
+            return  # a question about an earlier revision: the owner is asked again about the current one
+        yes = bool(re.match(r"\s*(y|yes|ok|okay|approve|approved|lgtm|ship it|go)\b", answer or "", re.I))
+        st = dict((self.s.q("SELECT * FROM subtasks WHERE id=?", (m.group(2),)) or [{}])[0])
+        if not st or self.s.q("SELECT status FROM jobs WHERE id=?", (st["job_id"],))[0]["status"] != "running":
+            return  # a cancelled or finished job is never brought back by a late answer
+        if m.group(1) == "rework":
+            with self.s.lock:  # two answers at once: only the first one acts
+                fb = (self.s.q("SELECT value FROM meta WHERE key=?", (f"reworkq:{st['id']}",)) or [{"value": None}])[0]["value"]
+                if fb is None or self.s.db.execute("DELETE FROM meta WHERE key=?", (f"reworkq:{st['id']}",)).rowcount != 1:
+                    return
+            if not yes:
+                return self._fail(st["id"], f"the owner stopped it after {st['attempts']} rounds: {answer[:200]}")
+            self.s.x("UPDATE subtasks SET max_attempts=max_attempts+2 WHERE id=?", (st["id"],))
+            st["max_attempts"] += 2
+            gates = [dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (x,))[0]) for x in json.loads(st["gates"] or "[]")]
+            self._rework(st, gates, fb)
+            return
+        won = self.s.db.execute("UPDATE subtasks SET status='done', verdict=?, result=?, updated_at=? WHERE id=? AND "
+                                "status='pending' AND type='owner'", ("approve" if yes else "reject",
+                                                                     f"the owner answered: {answer.strip()}", now(),
+                                                                     st["id"])).rowcount
+        if won != 1:
+            return
+        if st["gate_of"]:
+            self._evaluate_gates(st["gate_of"])
+        elif not yes:
+            self.cancel(st["job_id"], f"the owner said no at '{st['title']}': {answer[:200]}")
+            return
+        self._auto(st["job_id"])
+        self.allocate(st["job_id"])
 
     # ---------------------------------------------------------------- claims
     def claimable(self, agent_id: str, limit: int = 10) -> list[dict]:
         self.reap()
         rows = [dict(r) for r in self.s.q(
             "SELECT s.* FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.status='pending' AND j.status='running' "
-            "AND s.type<>'tally' AND (s.assigned_agent=? OR s.assigned_agent IS NULL) AND COALESCE(s.not_before,0)<=? "
+            "AND s.type NOT IN ('tally','owner') AND (s.assigned_agent=? OR s.assigned_agent IS NULL) "
+            "AND COALESCE(s.not_before,0)<=? "
             "ORDER BY s.priority DESC, s.created_at", (agent_id, now()))]
         from .scheduler import Scheduler
         rows = Scheduler(self.s).order(rows)  # priorities, fair share, project limits/budgets, job deps, pauses
@@ -634,6 +739,17 @@ class Orchestrator:
             pack = {"pack_id": ld["pack_id"], "layer": ld["layer"], "tokens": ld["tokens"], "prefix": ld["prefix"] or ld["text"],
                     "hint": f"context_load('{ld['pack_id']}', layer='L2'|'L3') for more"}
         checkpoint = st.get("checkpoint")
+        from . import sdlc
+        cd = sdlc.card(self.s, st["id"])
+        extra = {"card": cd} if cd else {}
+        if job["pattern"] == "sdlc" and cd.get("stage") in ("verify", "review"):
+            extra["traceability"] = sdlc.trace(self.s, job["id"])
+        out = self._packet_out(st, job, pack, model, checkpoint, target, skills, dep_results, prefs, project, ctx) | extra
+        if job["pattern"] == "sdlc":
+            sdlc.record_packet(self.s, st, out)
+        return out
+
+    def _packet_out(self, st, job, pack, model, checkpoint, target, skills, dep_results, prefs, project, ctx) -> dict:
         return {"context": pack, "model": model,
                 **({"resume_from_checkpoint": checkpoint,
                     "resume_hint": "an earlier attempt paused at its session limit; continue from this checkpoint instead "
@@ -750,6 +866,12 @@ class Orchestrator:
         """Finish a claimed subtask. Runs under the store lock so the reaper, a late heartbeat or a parallel
         completion of a sibling (job budget read-modify-write) can't interleave with it. changes: what the agent
         changed in code ({repo, branch, commit, diff}); it lands in the job's workspace with the result."""
+        if kw.get("success", True) and not (changes and (changes.get("commit") or changes.get("diff"))) and \
+                not re.search(r"(?im)^\W*(TESTS|EVIDENCE)\s*:\s*\S", result or ""):
+            from .sdlc import card
+            if card(self.s, subtask_id).get("evidence"):
+                raise CommonsError("this step needs evidence: pass repo + commit or diff, or add a line 'TESTS: <command> "
+                                   "-> <result>' (or 'EVIDENCE: <path or link>'); nothing was recorded, try again")
         with self.s.lock:
             prev, self.s.defer_embed = self.s.defer_embed, True  # embed after the lock: ONNX stalls every agent
             try:
@@ -787,7 +909,8 @@ class Orchestrator:
         # Decide the race first: the conditional UPDATE is the only check another process (a second worker on its own
         # connection, or a shared Postgres) can't slip past, so usage, budget and leftovers are written by the winner only.
         gates = json.loads(st["gates"] or "[]")
-        is_gate = st["gate_of"] is not None or st["type"] in ("vote",)
+        from .sdlc import card
+        is_gate = st["gate_of"] is not None or st["type"] in ("vote",) or card(self.s, subtask_id).get("level") == "gate"
         v = (verdict or parse_verdict(result)) if is_gate and success else None
         if success:
             won = self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND "
@@ -862,9 +985,10 @@ class Orchestrator:
     def _evaluate_gates(self, gated_id: str) -> None:
         g = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (gated_id,))[0])
         gates = [dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (x,))[0]) for x in json.loads(g["gates"])]
-        if any(x["status"] != "done" for x in gates):
-            return  # wait until every gate has decided
         rejected = [x for x in gates if x["status"] == "done" and x["verdict"] == "reject"]
+        waiting = [x for x in gates if x["status"] != "done"]
+        if waiting and not (rejected and all(x["status"] == "pending" for x in waiting)):
+            return  # wait for every gate, except that one rejection skips the checks nobody has started yet
         if rejected:
             author = g["claimed_by"]
             self.profiles.record_outcome(author, g["type"], False, subtask_id=gated_id, note="gate rejected")
@@ -874,18 +998,37 @@ class Orchestrator:
                     self.s.q("SELECT project_id FROM jobs WHERE id=?", (g["job_id"],))[0]["project_id"]),
                     task_type=g["type"], source="review-feedback")
             if g["attempts"] >= g["max_attempts"]:
-                self._fail(gated_id, "quality gate rejected too many times")
+                job = self.s.q("SELECT pattern FROM jobs WHERE id=?", (g["job_id"],))[0]
+                if job["pattern"] != "sdlc" or self.s.q("SELECT 1 FROM meta WHERE key=?", (f"reworkq:{gated_id}",)):
+                    self._fail(gated_id, "quality gate rejected too many times")
+                    return
+                from . import board as B  # a workflow stage asks the owner instead of dying
+                self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"reworkq:{gated_id}", feedback[:20000]))
+                B.add(self.s, "question", f"[rework {gated_id}] '{g['title']}' was sent back {g['attempts']} times. "
+                      f"Latest feedback: {_untag(feedback[:500])} Answer yes for two more rounds, or no to stop the workflow.",
+                      path="workflow")
                 return
-            self.s.x("UPDATE subtasks SET status='pending', body=?, assigned_agent=?, claimed_by=NULL, updated_at=? "
-                     "WHERE id=?", (g["body"] + "\n\n--- REWORK REQUIRED ---\n" + feedback, author, now(), gated_id))
-            for x in gates:  # all gates re-run on the new revision
-                self.s.x("UPDATE subtasks SET status='pending', verdict=NULL, claimed_by=NULL, updated_at=? WHERE id=?",
-                         (now(), x["id"]))
-            self.allocate(g["job_id"])  # route the rework (and wake the author) instead of waiting for a poll
+            self._rework(g, gates, feedback)
             return
         if all(x["status"] == "done" and x["verdict"] == "approve" for x in gates):
             self.s.x("UPDATE subtasks SET status='done', updated_at=? WHERE id=?", (now(), gated_id))
             self.profiles.record_outcome(g["claimed_by"], g["type"], True, subtask_id=gated_id, note="gates passed")
+
+    def _rework(self, g: dict, gates: list[dict], feedback: str) -> None:
+        """Send gated work back to its author with the feedback; every gate re-runs on the new revision."""
+        from . import board as B
+        self.s.x("UPDATE subtasks SET status='pending', body=?, assigned_agent=?, claimed_by=NULL, updated_at=? "
+                 "WHERE id=?", (g["body"] + "\n\n--- REWORK REQUIRED ---\n" + feedback, g["claimed_by"], now(), g["id"]))
+        for x in gates:
+            self.s.x("UPDATE subtasks SET status='pending', verdict=NULL, claimed_by=NULL, updated_at=? WHERE id=?",
+                     (now(), x["id"]))
+            self.s.x("DELETE FROM meta WHERE key LIKE ?", (f"woke:{x['id']}:%",))  # a skipped check is woken again
+            q = self.s.q("SELECT value FROM meta WHERE key=?", (f"ownerq:{x['id']}",))
+            if q:  # the owner is asked again about the new revision, not the old one
+                self.s.x("DELETE FROM meta WHERE key=?", (f"ownerq:{x['id']}",))
+                if B.get(self.s, q[0]["value"]).get("status") != "done":
+                    B.update(self.s, q[0]["value"], status="done", evidence="superseded: the work went back for rework")
+        self.allocate(g["job_id"])  # route the rework (and wake the author) instead of waiting for a poll
 
     def _fail(self, subtask_id: str, why: str) -> None:
         st = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0])

@@ -318,6 +318,14 @@ class API:
         return st | {"queue": rl.queue(q.get("status") or "pending", q.get("kind") or None, q.get("source") or None,
                                        int(q.get("limit", 300)))}
 
+    def workflows(self, q):
+        from .sdlc import workflows
+        return workflows(self.s)
+
+    def workflow(self, q):
+        from .sdlc import view
+        return view(self.s, q.get("job") or "")
+
     def owner(self, q):
         from .approvals import info
         return info(self.s)
@@ -614,7 +622,8 @@ def make_handler(api: API, token: str | None):
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != "HEAD":  # health checks ask with HEAD: same status and headers, no body
+                self.wfile.write(data)
 
         def _locked(self) -> bool:
             """The owner chose to put the whole dashboard behind their password, and this browser isn't signed in."""
@@ -629,6 +638,9 @@ def make_handler(api: API, token: str | None):
                 if k == "commons_approver" and session_ok(api.s, v):
                     return True
             return False
+
+        def do_HEAD(self):
+            self.do_GET()
 
         def do_GET(self):
             u = urlparse(self.path)
@@ -680,11 +692,14 @@ def make_handler(api: API, token: str | None):
                 return self._send(400, {"error": str(e)})
 
         def do_POST(self):
+            # read the body before any early answer: unread bytes make the socket close with a reset, and the
+            # browser sees a network error instead of the 401/403 explaining what to do
+            raw = self.rfile.read(min(int(self.headers.get("Content-Length", 0) or 0), 64 << 20))
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             if u.path == "/api/board/quick" and self.headers.get("X-Commons") == "1":  # phone button: the signature is the auth
                 try:
-                    b = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                    b = json.loads(raw or b"{}")
                     from .phone import quick_answer
                     return self._send(200, quick_answer(api.s, b.get("id", ""), b.get("answer", ""), b.get("sig", "")))
                 except (CommonsError, ValueError) as e:
@@ -693,7 +708,7 @@ def make_handler(api: API, token: str | None):
                     and _host_allowed(self.headers.get("Host", ""), api.s):
                 from . import approvals as AP
                 try:
-                    b = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                    b = json.loads(raw or b"{}")
                     # ponytail: behind a tunnel every remote browser shares the proxy's address, so they share one
                     # lockout; the owner on the LAN still has their own
                     client = str(self.client_address[0])
@@ -709,7 +724,7 @@ def make_handler(api: API, token: str | None):
                         cookie = next((v for k, _, v in (p.strip().partition("=") for p in
                                        self.headers.get("Cookie", "").split(";")) if k == "commons_approver"), "")
                         out = AP.answer(api.s, u.path.split("/")[2], b.get("choice", ""), str(b.get("pin") or ""),
-                                        cookie, client)
+                                        cookie, client, str(b.get("note") or ""))
                     secure = "; Secure" if getattr(self.server, "tls", False) or \
                         self.headers.get("X-Forwarded-Proto") == "https" else ""
                     return self._send(200, out, extra={"Set-Cookie": f"commons_approver={AP.session_token(api.s)}; HttpOnly; "
@@ -725,7 +740,7 @@ def make_handler(api: API, token: str | None):
             if self.role != "admin":
                 return self._send(403, {"error": "read-only dashboard user"})
             try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or b"{}")
+                body = json.loads(raw or b"{}")
                 self._ctx()
                 from . import approvals as AP
                 if u.path.startswith(OWNER_ONLY) and AP.has_pin(api.s) and not self._approver():
@@ -1039,9 +1054,9 @@ header{padding:10px 12px;gap:8px}header h1{font-size:16px;flex:1}
 <div id="pal" role="dialog" aria-modal="true" aria-label="Command palette" onclick="if(event.target.id=='pal')palClose()"><div class="box"><input id="palq" placeholder="Jump to a page, find a place, search memory…" autocomplete="off"><div class="res" id="palr"></div></div></div>
 <div id="toasts" aria-live="assertive"></div>
 <script>
-const T=["Overview","Board","Capacity","Setup","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring","Retro learning","System","Mission control","Task breakdown","Changes","Routing","Presence","Drive","Connect"];
+const T=["Overview","Board","Capacity","Setup","Agents","Orchestration","Sessions","Usage","Memory","Knowledge","Preferences","Graph","Org chart","Skills","Discover","Import","Models","MCP hub","Context","Librarian","Secrets","Recurring","Retro learning","System","Mission control","Task breakdown","Changes","Routing","Presence","Drive","Connect","Workflow"];
 const ICON={Setup:'<path d="M5 13l4 4L19 7"/><rect x="3" y="3" width="18" height="18" rx="4"/>',Overview:'<path d="M3 12l9-8 9 8M5 10v10h14V10"/>',Capacity:'<path d="M4 20a8 8 0 1116 0"/><path d="M12 20l4.5-6"/><circle cx="12" cy="20" r="1.2"/>',Board:'<rect x="3" y="3.5" width="18" height="17" rx="2.5"/><path d="M7.5 9l1.5 1.5 3-3M14 9h3.5M7.5 15.5l1.5 1.5 3-3M14 15.5h3.5"/>',Agents:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/>',Orchestration:'<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7.5l4 8.5M17 7.5l-4 8.5M7.5 6h9"/>',Sessions:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M8 14h5"/>',Usage:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',Memory:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',Knowledge:'<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6"/>',Preferences:'<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',Graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8.3 7l7.4.6M7 8.3l1.5 7.3M16.4 10l-5.6 6.4"/>',"Org chart":'<rect x="9" y="2.5" width="6" height="5" rx="1.2"/><rect x="2.5" y="16.5" width="6" height="5" rx="1.2"/><rect x="15.5" y="16.5" width="6" height="5" rx="1.2"/><path d="M12 7.5V12M5.5 16.5V12h13v4.5"/>',Skills:'<path d="M14.7 6.3a4 4 0 015 5L12 19l-5-5 7.7-7.7zM7 14l-4 4 3 3 4-4"/>',Models:'<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1.5v3.5M15 1.5v3.5M9 19v3.5M15 19v3.5M1.5 9H5M1.5 15H5M19 9h3.5M19 15h3.5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',"MCP hub":'<circle cx="12" cy="12" r="3"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7M5 5l4.5 4.5M14.5 14.5L19 19M19 5l-4.5 4.5M9.5 14.5L5 19"/>',Context:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17.5l9 5 9-5" opacity=".5"/>',Discover:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',Import:'<path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3"/>',Librarian:'<path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8-1 3.2 15.5-3.8 1z"/>',Secrets:'<rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 018 0v3.5"/>',Recurring:'<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',"Retro learning":'<path d="M3 12a9 9 0 103-6.7L3 8M3 3v5h5M12 7v5l3 3"/>',System:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
-const GROUPS=[["Live",["Overview","Board","Capacity","Mission control","Agents","Presence","Orchestration","Task breakdown","Sessions","Usage"]],["Work",["Changes","Routing","Drive"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Connect","Skills","Discover","Import","Models","MCP hub"]],["Admin",["Setup","Retro learning","Secrets","Recurring","System"]]];
+const GROUPS=[["Live",["Overview","Board","Capacity","Mission control","Agents","Presence","Orchestration","Task breakdown","Sessions","Usage"]],["Work",["Workflow","Changes","Routing","Drive"]],["Knowledge",["Memory","Knowledge","Context","Preferences","Graph","Org chart","Librarian"]],["Capabilities",["Connect","Skills","Discover","Import","Models","MCP hub"]],["Admin",["Setup","Retro learning","Secrets","Recurring","System"]]];
 let [tab,hq]=(decodeURI(location.hash.slice(1))||"Overview").split("?");if(!T.includes(tab))tab="Overview";
 if(hq){const u=new URLSearchParams(hq);if(u.get("scope"))window.gs={scope:u.get("scope"),id:u.get("id")||""};if(u.get("bucket"))window.kb=u.get("bucket");if(u.get("path"))window.oc_jump=u.get("path");if(u.get("mode"))window.oc_mode=u.get("mode");if(u.get("cite"))setTimeout(()=>cite(u.get("cite")),800)}
 const $=s=>document.querySelector(s),E=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -1189,7 +1204,7 @@ const mark={open:"○",doing:"◐",blocked:"⊘",done:"●",dropped:"–"};
 const row=(x,dep)=>`<div class="brow ${x.status}" style="--dep:${dep}"><span class="bmk" title="${x.status}">${mark[x.status]||"○"}</span><span class="pill ${x.kind=="ask"?"new":x.status}">${x.kind}</span><div class="btx"><div>${x.kind=="target"&&(x.metric||x.goal)?`<b>${E(x.metric||"")}</b> goal <b>${E(x.goal||"?")}</b> · now <b>${E(x.current||"?")}</b> · `:""}${E(x.text)}${x.repeats?` <span class="pill failed">asked ${x.repeats+1}×</span>`:""}</div>${x.evidence?`<div class="mut sm">${x.status=="dropped"?"why":"evidence"}: ${E(x.evidence)}</div>`:""}<div class="mut sm">${[x.id,x.source,(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div>${x.kind=="question"&&OPEN.includes(x.status)?`<div class="bact"><a class="pill blocked" href="#Board" onclick="setTimeout(()=>$('#an_${x.id}').focus(),50)">answer in Needs you</a></div>`:OPEN.includes(x.status)?`<div class="bact"><input id="ev_${x.id}" placeholder="evidence / reason" aria-label="evidence or reason for ${E(x.id)}">${x.kind=="target"?`<input id="cu_${x.id}" placeholder="now…" size=8 aria-label="current value">`:""}<button onclick="bUp('${x.id}','doing')">Start</button><button class="pri" onclick="bUp('${x.id}','done')">Done</button><button class="bad" onclick="bUp('${x.id}','dropped')">Drop</button></div>`:`<div class="bact"><button onclick="bUp('${x.id}','open')">Reopen</button></div>`}</div>`;
 const walk=(p,dep)=>(kids[p]||[]).filter(live).map(x=>row(x,dep)+walk(x.id,dep+1)).join("");
 const qs=d.items.filter(x=>x.kind=="question"&&OPEN.includes(x.status)&&(!pj||x.project==pj));
-const needs=qs.length?`<div class="card needs"><h3>Needs you <span class="pill blocked">${qs.length}</span> <span class="mut sm">agents are waiting on these answers; your reply goes straight to the asking agent.</span></h3>${qs.map(x=>`<div class="nq"><div><b>${E(x.text)}</b><div class="mut sm">${[x.source,x.project,x.parent&&by[x.parent]?"holds up: "+by[x.parent].text.slice(0,120):"",(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div>${/\[(vault|mcp) /.test(x.text)?`<div class="bact"><a class="pill blocked" style="min-height:44px;display:inline-flex;align-items:center;padding:0 16px" href="/approve/${E(x.id)}">Review &amp; approve</a></div>`:`<div class="bact"><textarea id="an_${x.id}" rows="2" placeholder="your answer" aria-label="answer to ${E(x.text.slice(0,60))}"></textarea><button class="pri" onclick="bAns('${x.id}')">Answer</button></div>`}</div>`).join("")}</div>`:"";
+const needs=qs.length?`<div class="card needs"><h3>Needs you <span class="pill blocked">${qs.length}</span> <span class="mut sm">agents are waiting on these answers; your reply goes straight to the asking agent.</span></h3>${qs.map(x=>`<div class="nq"><div><b>${E(x.text)}</b><div class="mut sm">${[x.source,x.project,x.parent&&by[x.parent]?"holds up: "+by[x.parent].text.slice(0,120):"",(x.created_at||"").slice(0,16).replace("T"," ")].filter(Boolean).map(E).join(" · ")}</div></div>${/\[(vault|mcp|gate|rework) /.test(x.text)?`<div class="bact"><a class="pill blocked" style="min-height:44px;display:inline-flex;align-items:center;padding:0 16px" href="/approve/${E(x.id)}">Review &amp; approve</a></div>`:`<div class="bact"><textarea id="an_${x.id}" rows="2" placeholder="your answer" aria-label="answer to ${E(x.text.slice(0,60))}"></textarea><button class="pri" onclick="bAns('${x.id}')">Answer</button></div>`}</div>`).join("")}</div>`:"";
 let last="",tree="";(kids[""]||[]).filter(live).forEach(x=>{const h=(x.project||"no project")+(x.path?" / "+x.path:"");if(h!=last){tree+=`<h4 class="bhead">${E(h)}</h4>`;last=h}tree+=row(x,0)+walk(x.id,1)});
 return `<div class="grid4"><div class="card stat hero"><div class="mut">Open asks</div><div class="big">${openAsks.length}</div></div><div class="card stat"><div class="mut">Asked twice or more</div><div class="big ${rep?"failed":""}">${rep}</div></div><div class="card stat"><div class="mut">Targets met</div><div class="big">${tg.filter(x=>x.status=="done").length}/${tg.length}</div></div><div class="card stat"><div class="mut">Delivered</div><div class="big">${d.items.filter(x=>x.status=="done").length}</div></div></div>
 ${needs}<div class="card"><h3>Board <span class="mut sm">everything asked, measured and delivered, per project and layer. Agents read it in every pickup.</span></h3>
@@ -1403,6 +1418,8 @@ def _install_v7():
     from . import dashboard_v81 as v81
     v81.install(API)
     js += "\nICON.Connect=" + json.dumps(v81.ICON) + ";\n" + v81.JS
+    from . import dashboard_v25 as v25  # the Workflow page: six-stage jobs as a spine, agent tree and traceability
+    js += "\nICON.Workflow=" + json.dumps(v25.ICON) + ";\n" + v25.JS
     PAGE = PAGE.replace("async function render(){", js + "\nasync function render(){", 1)
 
 

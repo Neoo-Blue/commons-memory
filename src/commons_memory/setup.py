@@ -1,7 +1,7 @@
 """`commons setup`: one command that connects an AI to Commons completely. Every step is recommended and on by default;
 --no-<step> leaves one out. Steps: save the key (0600, asked once, never on the command line), register the MCP server
 in the AI, install the master instructions (and skill), install auto-capture hooks, install the instant-wake service,
-hand over existing memories, then verify the connection.
+keep models and the tool version current, hand over existing memories, then verify the connection.
 """
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-STEPS = ["mcp", "instructions", "hooks", "wake", "import", "verify"]
+STEPS = ["mcp", "instructions", "hooks", "wake", "sync", "import", "verify"]
 LABELS = {"mcp": "connect it to Commons (MCP)", "instructions": "teach it the Commons routine (always-loaded instructions + skill)",
           "hooks": "auto-capture every message and tool call", "wake": "instant wake when work arrives",
+          "sync": "keep this AI's models and tool version current",
           "import": "hand over its existing memories", "verify": "verify the connection"}
 # client -> instant-wake preset (None: the client has no headless mode to wake)
 CLIENTS = {"claude-code": "claude", "codex": "codex", "gemini": "gemini", "cursor": "cursor", "opencode": "opencode",
@@ -152,6 +153,12 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
                             "--api-key-file", str(keyfile), "--install"], capture_output=True, text=True)
         return (r.stdout.strip().splitlines() or ["installed"])[-1][:200] if r.returncode == 0 else f"failed: {r.stderr[-200:]}"
     step("wake", wake)
+
+    def sync():
+        r = subprocess.run([commons, "quota", "install", "--url", mcp_url, "--api-key-file", str(keyfile)],
+                           capture_output=True, text=True)
+        return (r.stdout.strip().splitlines() or ["installed"])[-1][:200] if r.returncode == 0 else f"failed: {r.stderr[-200:]}"
+    step("sync", sync)
 
     def imp():
         r = subprocess.run([commons, "import", "all", "--url", mcp_url, "--api-key-file", str(keyfile)],

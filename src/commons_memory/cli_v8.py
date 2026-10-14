@@ -18,7 +18,8 @@ def add_parsers(sub) -> None:
     dr.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
     dr.add_argument("--repair", action="store_true")
     st = sub.add_parser("setup", help="connect an AI to Commons completely in one go (MCP, instructions, hooks, "
-                                      "instant wake, memory hand-over, verify); every step on unless --no-<step>")
+                                      "instant wake, model and version sync, memory hand-over, verify); "
+                                      "every step on unless --no-<step>")
     st.add_argument("--client", required=True, help="claude-code, codex, gemini, cursor, opencode, copilot, cline, kilo, amp, factory, qwen, crush, goose, windsurf, zed, roo, warp")
     st.add_argument("--agent", required=True, help="this AI's Commons agent name")
     st.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
@@ -41,9 +42,10 @@ def add_parsers(sub) -> None:
     v.add_argument("--risk", default="normal", choices=["low", "normal", "high"],
                    help="high = every write goes to the user; low = reads need no judgment")
     v.add_argument("--description", default="")
-    q = sub.add_parser("quota", help="agent usage windows: sync them into a hub from aiusage, or print them")
-    q.add_argument("action", choices=["sync", "status"])
-    q.add_argument("--url", help="Commons MCP url (http://host:8770/mcp); key from $COMMONS_API_KEY")
+    q = sub.add_parser("quota", help="agent usage windows: sync them into a hub, install the 10-minute job, or print them")
+    q.add_argument("action", choices=["sync", "status", "install"])
+    q.add_argument("--url", help="Commons MCP url (http://host:8770/mcp)")
+    q.add_argument("--api-key-file", help="read the hub key from this file (default $COMMONS_API_KEY)")
     q.add_argument("--aiusage-db", help="aiusage database (default ~/.aiusage/usage.db)")
     q.add_argument("--map", help="JSON file mapping aiusage provider/window to Commons agents (default "
                                  "~/.commons/quota-map.json or the built-in map)")
@@ -244,48 +246,80 @@ def handle_nostore(args) -> int:
         return 0
     if c == "quota":
         from . import quota as Q
-        from .worker import McpClient
+        from .store import CommonsError
         if not args.url:
             print("quota needs --url (the hub to sync into / read from)", file=sys.stderr)
             return 2
-        cli = McpClient(args.url, os.environ.get("COMMONS_API_KEY", ""))
+        if args.action == "install":
+            return _quota_install(args)
+        key = _quota_key(args)
+        if key is None:
+            return 2
+        from .worker import McpClient
+        cli = McpClient(args.url, key)
         if args.action == "status":
             print(json.dumps(json.loads(cli._call("call", {"tool": "quota_status", "args": {}})), indent=2))
             return 0
         mapping = json.load(open(args.map)) if args.map else None
         mp = Path.home() / ".commons" / "quota-map.json"
         eff = mapping or (json.loads(mp.read_text()) if mp.exists() else Q.DEFAULT_MAP)
-        wins_by, models_by = Q.from_aiusage(args.aiusage_db, mapping), Q.local_models(eff.get("_models"))
-        clis = Q.local_clis(eff, eff.get("_cli"))
+        try:
+            wins_by = Q.from_aiusage(args.aiusage_db, mapping)
+        except CommonsError:  # no aiusage database on this machine: still send models and the CLI
+            wins_by = {}
+        models_by, clis = Q.local_models(eff.get("_models")), Q.local_clis(eff, eff.get("_cli"))
 
-        def report(a):
+        def old_hub(exc):
+            text = str(exc).lower()
+            return any(s in text for s in ("unexpected keyword", "unexpected argument", "validation error",
+                                           "additional propert", "extra fields not permitted",
+                                           "extra inputs are not permitted"))
+
+        def report(payload):
+            """(reply, full). An old hub that rejects models/cli is retried with windows only."""
             try:
-                return json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}")
-            except Exception:  # noqa: BLE001 - a hub older than v0.24.2 knows neither models nor cli: send the windows
-                a = {k: v for k, v in a.items() if k not in ("models", "cli")}
-                return json.loads(cli._call("call", {"tool": "quota_report", "args": a}) or "{}") if a["windows"] else {}
+                return json.loads(cli._call("call", {"tool": "quota_report", "args": payload}) or "{}"), True
+            except Exception as first:  # noqa: BLE001
+                slim = {k: v for k, v in payload.items() if k not in ("models", "cli")}
+                if not (("models" in payload or "cli" in payload) and slim.get("windows") and old_hub(first)):
+                    raise first
+                return json.loads(cli._call("call", {"tool": "quota_report", "args": slim}) or "{}"), False
         sent = {}
         for agent in sorted(set(wins_by) | set(models_by) | set(clis)):
-            # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
-            a = {"windows": wins_by.get(agent, []), "for_agent": agent}
-            if agent in models_by:
-                a["models"] = models_by[agent]
-            c = clis.get(agent)
-            if c:
-                a["cli"] = {k: v for k, v in c.items() if k != "update"}
-            r = report(a)
-            line = [w["window"] for w in a["windows"]] + ([f"{len(a['models'])} models"] if "models" in a else []) \
-                + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])] + ([f"v{c['version']}"] if c else [])
-            if c and (r.get("cli") or {}).get("update"):  # the hub says update now: run the agent's own updater here
-                ok, out = Q.run_update(c["update"])
-                after = Q.local_clis(eff, eff.get("_cli")).get(agent) or c
-                b = {"windows": [], "for_agent": agent, "cli": {"version": after["version"], "result": out, "ok": ok}}
+            try:
+                # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
+                a = {"windows": wins_by.get(agent, []), "for_agent": agent}
                 if agent in models_by:
-                    b["models"] = Q.local_models(eff.get("_models")).get(agent) or models_by[agent]
-                r2 = report(b)
-                line += [f"updated to v{after['version']}" if ok else "update failed"] + \
-                    [f"NEW: {n}" for n in (r2.get("models") or {}).get("new", [])]
-            sent[agent] = line
+                    a["models"] = models_by[agent]
+                info = clis.get(agent)
+                if info:
+                    a["cli"] = {k: v for k, v in info.items() if k != "update"}
+                r, full = report(a)
+                line = [w["window"] for w in a["windows"]]
+                if full:
+                    line += ([f"{len(a['models'])} models"] if "models" in a else []) \
+                        + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])] \
+                        + ([f"v{info['version']}"] if info else [])
+                else:  # the hub stored windows and rejected models and cli
+                    line.append("windows only")
+                if full and info and (r.get("cli") or {}).get("update"):  # the hub says update now: run the updater here
+                    ok, out = Q.run_update(info["update"])
+                    after = Q.local_clis(eff, eff.get("_cli")).get(agent) or info
+                    b = {"windows": [], "for_agent": agent, "cli": {"version": after["version"], "result": out, "ok": ok}}
+                    if agent in models_by:
+                        b["models"] = Q.local_models(eff.get("_models")).get(agent) or models_by[agent]
+                    try:
+                        r2, _full2 = report(b)
+                        line += [f"updated to v{after['version']}" if ok else "update failed"] + \
+                            [f"NEW: {n}" for n in (r2.get("models") or {}).get("new", [])]
+                    except Exception:  # noqa: BLE001 - the update already ran; keep the windows we stored
+                        line += [f"updated to v{after['version']}" if ok else "update failed", "update result not stored"]
+                sent[agent] = line
+            except Exception as e:  # noqa: BLE001 - one refused agent must not stop the others
+                msg = " ".join(str(e).split()) or e.__class__.__name__
+                if key:
+                    msg = msg.replace(key, "[key]")
+                sent[agent] = [f"error: {msg[:180]}"]
         print(json.dumps({"synced": sent}))
         return 0
     if c == "import":
@@ -449,3 +483,110 @@ def handle(args, store) -> int:
             print(f"wrote {args.out} ({out.count(chr(10)) - 2} rows)", file=sys.stderr)
 
     return 0
+
+
+def _commons_argv() -> list[str]:
+    """Argv that re-invokes this same commons, so the installed job calls the one that installed it."""
+    import shutil
+    name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else ""
+    if name in ("commons", "commons.exe", "commons-memory", "commons-memory.exe"):
+        return [str(Path(sys.argv[0]).resolve())]
+    if name in ("__main__.py", "cli.py"):
+        return [sys.executable, "-m", "commons_memory"]
+    found = shutil.which("commons")
+    return [found] if found else [sys.executable, "-m", "commons_memory"]
+
+
+def _quota_key(args) -> str | None:
+    """Hub key from --api-key-file, else $COMMONS_API_KEY. None means the file was missing."""
+    path = getattr(args, "api_key_file", None)
+    if not path:
+        return os.environ.get("COMMONS_API_KEY", "")
+    p = Path(path).expanduser()
+    if not p.is_file():
+        print(f"no api key file at {p}", file=sys.stderr)
+        return None
+    return p.read_text().strip()
+
+
+def _install_keyfile(args) -> str | None:
+    """Absolute key file for the scheduled job. A launchd or systemd job does not see this shell's environment."""
+    if args.api_key_file:
+        keyfile = Path(args.api_key_file).expanduser()
+        if not keyfile.is_file():
+            print(f"no api key file at {keyfile}", file=sys.stderr)
+            return None
+        return str(keyfile.resolve())
+    key = os.environ.get("COMMONS_API_KEY", "").strip()
+    if not key:
+        print("quota install needs --api-key-file or COMMONS_API_KEY "
+              "(the scheduled job does not see this shell's environment)", file=sys.stderr)
+        return None
+    path = Path(os.environ.get("COMMONS_HOME") or Path.home() / ".commons") / "sync.key"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(key + "\n")
+    path.chmod(0o600)
+    return str(path.resolve())
+
+
+def _quota_install(args) -> int:
+    """Install a job that runs quota sync every 10 minutes, and run it once now."""
+    import html
+    import shlex
+    from .cli_v7 import _install_unit
+    keyfile = _install_keyfile(args)
+    if not keyfile:
+        return 2
+    argv = [*_commons_argv(), "quota", "sync", "--url", args.url, "--api-key-file", keyfile]
+    log = str(Path.home() / ".commons" / "logs" / "sync.log")
+    Path(log).parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        # RunAtLoad is the run-once-now; StartInterval 600 is the ten minutes after that
+        args_xml = "".join(f"<string>{html.escape(a)}</string>" for a in argv)
+        unit = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.commons.sync</string>
+  <key>ProgramArguments</key><array>{args_xml}</array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>600</integer>
+  <key>StandardOutPath</key><string>{html.escape(log)}</string>
+  <key>StandardErrorPath</key><string>{html.escape(log)}</string>
+</dict></plist>
+"""
+        return _install_unit("launchd", "sync", unit,
+                             done=f"installed ~/Library/LaunchAgents/dev.commons.sync.plist; "
+                                  f"quota sync runs every 10 minutes (log {log})")
+    if sys.platform.startswith("win"):
+        inner = " ".join(f'\\"{a}\\"' if any(c in a for c in ' "') else a for a in argv)
+        return _install_unit("windows", "sync",
+                             f'schtasks /Create /SC MINUTE /MO 10 /TN CommonsQuotaSync /TR "{inner}" /F')
+    cmd = " ".join(shlex.quote(a) for a in argv)
+    service = f"""[Unit]
+Description=Commons quota sync (models, tool version, usage windows)
+
+[Service]
+Type=oneshot
+ExecStart={cmd}
+StandardOutput=append:{log}
+StandardError=append:{log}
+"""
+    timer = """[Unit]
+Description=Commons quota sync every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+"""
+    folder = Path.home() / ".config" / "systemd" / "user"
+    files = [(str(folder / "commons-sync.service"), service), (str(folder / "commons-sync.timer"), timer)]
+    # enable --now starts the timer; start the service too so the first sync does not wait for OnBootSec
+    cmds = [["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "enable", "--now", "commons-sync.timer"],
+            ["systemctl", "--user", "start", "commons-sync.service"]]
+    return _install_unit("systemd", "commons-sync", service, files=files, cmds=cmds,
+                         done=f"installed {files[0][0]} and commons-sync.timer; "
+                              f"quota sync runs every 10 minutes (log {log})")

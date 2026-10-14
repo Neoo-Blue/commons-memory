@@ -27,7 +27,7 @@ SESSION_S = 14 * 24 * 3600
 # how long a fresh (or reset) hub can be claimed without a code; 0 = only with the setup code from the hub's log
 CLAIM_S = int(os.environ.get("COMMONS_CLAIM_MINUTES", "30")) * 60
 LOCK_AFTER, LOCK_S = 5, 900
-QUESTION = re.compile(r"\[(vault|mcp) ([A-Za-z0-9_]+)\]")
+QUESTION = re.compile(r"\[(vault|mcp|gate|rework) ([A-Za-z0-9_]+)\]")
 
 
 def _get(s: Store, key: str):
@@ -178,7 +178,7 @@ def url(s: Store, question_id: str, host: str = "") -> str:
 def details(s: Store, question_id: str) -> dict:
     from . import board as B
     item = B.get(s, question_id)
-    m = QUESTION.search(item["text"])
+    m = QUESTION.match(item["text"].lstrip())
     out = {"id": question_id, "status": item["status"], "question": item["text"], "kind": m.group(1) if m else "question",
            "answer": item.get("evidence"), "approve_url": url(s, question_id)}
     if m and m.group(1) == "vault":
@@ -194,7 +194,8 @@ def details(s: Store, question_id: str) -> dict:
     return out
 
 
-def answer(s: Store, question_id: str, choice: str, pin: str = "", session: str = "", client: str = "") -> dict:
+def answer(s: Store, question_id: str, choice: str, pin: str = "", session: str = "", client: str = "",
+           note: str = "") -> dict:
     """choice yes | all (this and similar writes to the same service for an hour) | always (this key, from now on) | no."""
     if choice not in ("yes", "all", "always", "no"):
         raise CommonsError("choose yes, all, always or no")
@@ -211,8 +212,8 @@ def answer(s: Store, question_id: str, choice: str, pin: str = "", session: str 
         if d.get("credential"):
             s.x("UPDATE vault_creds SET risk='always' WHERE name=?", (d["credential"],))
             s.audit(None, "vault.always_allow", d["credential"], {"question": question_id})
-    B.answer(s, question_id, {"yes": "yes", "all": "yes all", "always": "yes", "no": "no"}[choice],
-             by="owner (approval page)")
+    B.answer(s, question_id, {"yes": "yes", "all": "yes all", "always": "yes", "no": "no"}[choice]
+             + (f": {note.strip()[:2000]}" if (note or "").strip() else ""), by="owner (approval page)")
     return details(s, question_id)
 
 
@@ -230,8 +231,8 @@ background:var(--card);color:var(--ink);font-weight:600;cursor:pointer}button.ok
 button.bad{color:var(--bad)}input{min-height:44px;font-size:16px;padding:0 12px;border-radius:10px;border:1px solid var(--line);
 background:var(--bg);color:var(--ink);flex:1 1 220px;min-width:0}.done{color:var(--ok);font-weight:600}.err{color:var(--bad)}
 </style></head><body><main>%(body)s</main><script>
-async function act(choice){const pin=(document.getElementById('pin')||{}).value||'';const r=await fetch(location.pathname,{method:'POST',
-headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({choice,pin})});const d=await r.json();
+async function act(choice){const pin=(document.getElementById('pin')||{}).value||'';const note=(document.getElementById('note')||{}).value||'';const r=await fetch(location.pathname,{method:'POST',
+headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({choice,pin,note})});const d=await r.json();
 if(d.error){document.getElementById('msg').textContent=d.error;document.getElementById('msg').className='err';return}location.reload()}
 async function setpin(){const pin=document.getElementById('newpin').value;const r=await fetch(location.pathname,{method:'POST',
 headers:{'Content-Type':'application/json','X-Commons':'1'},body:JSON.stringify({set_pin:pin,code:(document.getElementById('code')||{}).value||''})});const d=await r.json();
@@ -276,6 +277,15 @@ def render(s: Store, question_id: str, trusted: bool) -> str:
     else:
         pin = "" if trusted else ('<input id="pin" type="password" autocomplete="current-password" '
                                   'placeholder="owner password" aria-label="owner password">')
+        if d["kind"] in ("gate", "rework"):  # a workflow step: approve, or send it back with what to change
+            body += ('<div class="card"><textarea id="note" rows="3" placeholder="what to change (if you send it back)" '
+                     'aria-label="what to change" style="width:100%;box-sizing:border-box;min-height:88px;border-radius:10px;'
+                     'border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:10px;font:inherit">'
+                     f'</textarea><div class="row">{pin}<button class="ok" onclick="act(\'yes\')">'
+                     f'{"Another round" if d["kind"] == "rework" else "Approve"}</button><button class="bad" '
+                     f'onclick="act(\'no\')">{"Stop the workflow" if d["kind"] == "rework" else "Send back"}</button></div>'
+                     '<p id="msg" class="mut"></p></div>')
+            return PAGE % {"body": body}
         body += (f'<div class="card"><div class="row">{pin}<button class="ok" onclick="act(\'yes\')">Approve</button>'
                  f'<button onclick="act(\'all\')">Approve similar for 1 h</button>'
                  f'<button onclick="act(\'always\')" title="your risk: change it back on Setup">Always allow this key</button>'

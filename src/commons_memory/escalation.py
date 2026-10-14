@@ -78,7 +78,7 @@ class Escalator:
     def stuck(self) -> list[dict]:
         rows = [dict(r) for r in self.s.q(
             "SELECT s.* FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.status='pending' AND j.status='running' "
-            "AND s.type<>'tally'")]
+            "AND s.type NOT IN ('tally','owner')")]  # owner steps wait on the user's board question
         out = []
         for st in rows:
             if not self.o._deps_ok(st):

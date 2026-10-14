@@ -38,7 +38,11 @@ DEFAULT_POLICY = {
     "summarize": {"effort": "low", "tier": "cheap"}, "format": {"effort": "minimal", "tier": "cheap"},
     "librarian": {"effort": "low", "tier": "cheap"}, "tally": {"effort": "minimal", "tier": "cheap"},
     "general": {"effort": "medium", "tier": "mid"},
+    "spec": {"effort": "medium", "tier": "mid"}, "ship": {"effort": "medium", "tier": "mid"},
 }
+# a task card's criticality (how much a mistake costs) x estimated difficulty -> (tier, effort)
+CRITICALITY = {("easy", "low"): ("cheap", "low"), ("medium", "low"): ("mid", "medium"), ("hard", "low"): ("mid", "high"),
+               ("easy", "high"): ("mid", "medium"), ("medium", "high"): ("top", "high"), ("hard", "high"): ("top", "high")}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS routing_decisions(id TEXT PRIMARY KEY, subtask_id TEXT, job_id TEXT, task_type TEXT,
   difficulty TEXT, agent_id TEXT, model TEXT, level TEXT, effort TEXT, mode TEXT, rationale TEXT, alternatives TEXT,
@@ -290,6 +294,12 @@ class Router:
         level = LEVELS[max(0, min(len(LEVELS) - 1, i))]
         if diff != "medium":
             why.append(f"difficulty {diff} ({how}) -> {level}")
+        from .sdlc import card
+        crit = card(self.s, st["id"]).get("criticality") if st.get("id") else None
+        if crit in ("low", "high"):  # boilerplate to the cheap tier, merges and architecture to the top tier
+            tier, level = CRITICALITY[(diff, crit)]
+            p = dict(p, tier=tier)
+            why = [f"card: {crit} criticality x {diff} difficulty ({how}) -> {tier} tier, {level} effort"]
         level, note = self.learned_level(tt, diff, level)
         if note:
             why.append(note)

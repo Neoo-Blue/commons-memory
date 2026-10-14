@@ -231,12 +231,18 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                    "with the full result" if subs else "claim_subtask() for assigned work") +
                   "; answer questions with msg_send; finish with handoff() and report_usage(). Be concise.")
         ok, out = True, ""
+        tgt = next((m["meta"] for m in msgs if (m.get("meta") or {}).get("model") or (m.get("meta") or {}).get("effort")), {})
+        model = tgt.get("model") or ""
+        env = os.environ | {"COMMONS_MODEL_FULL": model, "COMMONS_EFFORT": tgt.get("effort") or "",
+                            # an agent's own catalog is listed as <agent>/<model>: its CLI wants just <model>
+                            "COMMONS_MODEL": model.split("/", 1)[1] if "/" in model else model}
         if args.agent_cmd:
-            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}")
+            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}"
+                + (f" (model {env['COMMONS_MODEL']}, effort {env['COMMONS_EFFORT']})" if model or env["COMMONS_EFFORT"] else ""))
             for attempt, pause in enumerate((30, 120, 0)):  # provider blips (a 503) shouldn't park work for the lease
                 try:
                     r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True,
-                                       timeout=args.timeout)
+                                       timeout=args.timeout, env=env)
                     ok = r.returncode == 0
                     out = (r.stdout or "") + (r.stderr or "")
                     log(out[-2000:])
@@ -537,22 +543,33 @@ def _ago(ts) -> str:
     return "just now"
 
 
-def _install_unit(kind: str, name: str, unit: str) -> int:
-    """Write a login service for the agent daemon and start it now."""
+def _install_unit(kind: str, name: str, unit: str, *,
+                  files: list[tuple[str, str]] | None = None,
+                  cmds: list[list[str]] | None = None,
+                  done: str | None = None) -> int:
+    """Write a user service and start it. The agent daemon passes kind, name and unit only.
+
+    Other jobs pass `files` when one unit is not enough (a systemd timer next to its service)
+    and `cmds` when the load commands differ. `done` replaces the daemon's success line.
+    """
     if kind == "launchd":
         path = os.path.expanduser(f"~/Library/LaunchAgents/dev.commons.{name}.plist")
-        cmds = [["launchctl", "unload", path], ["launchctl", "load", "-w", path]]
+        files = files or [(path, unit)]
+        cmds = cmds or [["launchctl", "unload", path], ["launchctl", "load", "-w", path]]
     elif kind == "systemd":
         path = os.path.expanduser(f"~/.config/systemd/user/{name}.service")
-        cmds = [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", name]]
+        files = files or [(path, unit)]
+        cmds = cmds or [["systemctl", "--user", "daemon-reload"],
+                        ["systemctl", "--user", "enable", "--now", name]]
     else:
         print(unit)
         print("(Windows: run the commands above)", file=sys.stderr)
         return 0
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(unit)
+    for path, text in files:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
     for c in cmds:
         subprocess.run(c, capture_output=True)
-    print(f"installed {path}; the agent now wakes instantly when Commons sends it work (logs next to the database)")
+    print(done or f"installed {files[0][0]}; the agent now wakes instantly when Commons sends it work (logs next to the database)")
     return 0

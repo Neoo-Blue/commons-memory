@@ -693,7 +693,7 @@ def _err(e: BaseException) -> str:
 def answered(s: Store, question_text: str, answer: str) -> None:
     """The user answered an MCP approval question on the board (or the phone)."""
     import re as _re
-    m = _re.search(r"\[mcp (apr_[0-9a-f]+)\]", question_text or "")
+    m = _re.match(r"\s*\[mcp (apr_[0-9a-f]+)\]", question_text or "")
     if m:
         yes = bool(_re.match(r"\s*(y|yes|ok|okay|approve|allow|sure|go)\b", answer or "", _re.I))
         Hub(s).decide(m.group(1), yes)

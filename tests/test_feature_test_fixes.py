@@ -78,3 +78,23 @@ def test_revoking_project_access_is_audited(store):
     acl.grant("p", "a", "write")
     acl.revoke("p", "a")
     assert store.q("SELECT 1 FROM audit WHERE action='acl.revoke'")
+
+
+def test_remember_takes_fact_and_the_dashboard_answers_head(store):
+    import asyncio
+    import threading
+    import urllib.request
+
+    from commons_memory.dashboard import make_server
+    from commons_memory.server import build_server
+    key = store.register_agent("grok")["api_key"]
+    asyncio.run(build_server(store).call_tool("remember", {"fact": "Plex runs on LXC 100", "api_key": key}))
+    assert store.q("SELECT 1 FROM items WHERE content='Plex runs on LXC 100'")
+    srv = make_server(store, port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/", method="HEAD")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            assert r.status == 200 and r.read() == b""
+    finally:
+        srv.shutdown()

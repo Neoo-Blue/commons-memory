@@ -56,15 +56,17 @@ def register_v2(mcp, store, who):
     # ------------------------------------------------------------ orchestration
     @mcp.tool()
     def submit_task(task: str, pattern: str = "auto", project: str = "", n: int = 3, budget: dict | None = None,
-                    dag: list[dict] | None = None, context_pack: str = "", dedupe: bool = True, agent: str = "",
-                    api_key: str = "") -> str:
+                    dag: list[dict] | None = None, context_pack: str = "", dedupe: bool = True,
+                    stages: list[str] | None = None, agent: str = "", api_key: str = "") -> str:
         """Split a task across the agents. pattern=auto: the plan chain (a model, else a live agent, else rules) splits it
         to fit who is live, what each is good at and their usage left; or plan_execute_verify|cross_review|debate|
-        consensus|parallel. Or a dag: [{key,type,title,body,deps,gates,agent}] (agent pins a step). budget:
-        {tokens,cost,seconds}. context_pack: a context_save id the parts get as a prefix."""
+        consensus|parallel; or sdlc: the six-stage workflow (define, plan, build, verify, review, ship; the user approves
+        the spec and confirms before shipping), stages = a contiguous part of it. Or a dag: [{key,type,title,body,deps,
+        gates,agent}] (agent pins a step). budget: {tokens,cost,seconds}. context_pack: a context_save id the parts get
+        as a prefix."""
         return _js(orch.submit(task, pattern=pattern, project=project or None, agent_id=me(agent, api_key), n=n,
                                budget=budget, dag=dag, context_pack=context_pack or None,
-                               dedupe=dedupe))
+                               dedupe=dedupe, stages=stages or None))
 
     @mcp.tool()
     def job_status(job_id: str = "", status: str = "", format: str = "text") -> str:

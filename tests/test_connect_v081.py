@@ -23,7 +23,7 @@ def test_bundle_every_platform(plat):
         assert ids == ["setup", "prompt"]
         setup = b["blocks"][0]
         assert f"commons setup --client {plat} --agent grok --url http://192.168.50.111:8770" in setup["text"]
-        assert [x["id"] for x in setup["steps"]] == ["mcp", "instructions", "hooks", "wake", "import", "verify"]
+        assert [x["id"] for x in setup["steps"]] == ["mcp", "instructions", "hooks", "wake", "sync", "import", "verify"]
         assert "cmk_SECRET" not in setup["text"]               # asked once at a hidden prompt, never in shell history
     else:
         assert ids == ["config", "prompt", "verify"]

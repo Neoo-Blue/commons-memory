@@ -525,7 +525,7 @@ def _waiting(s: Store, did: str, qid: str, reason: str) -> dict:
 
 def answered(s: Store, question_text: str, answer: str) -> None:
     """The user answered a vault question on the board: yes -> a grant for exactly that request."""
-    m = re.search(r"\[vault (vdc_[0-9a-f]+)\]", question_text or "")
+    m = re.match(r"\s*\[vault (vdc_[0-9a-f]+)\]", question_text or "")
     if not m:
         return
     d = s.q("SELECT * FROM vault_decisions WHERE id=?", (m.group(1),))

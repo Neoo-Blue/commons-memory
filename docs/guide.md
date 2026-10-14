@@ -92,6 +92,35 @@ loop: **check in** (`pickup`, `resume`) → **pull context** (`search`/`expand`/
 | A split subtask never merges | It waits for every part, then goes back to the agent that split it | Check that the parts finished and that the splitting agent is still running; the merge step escalates if it sits |
 | The job stays `running` | Some step isn't done: an open review, a failed part, a cancelled or over-budget job | Open the job in Task breakdown; a failed part fails the job |
 
+## Six-stage workflow: /spec, /plan, /build, /test, /review, /ship
+
+`submit_task(task, pattern="sdlc")` (or the `/sdlc` slash command) runs one job through a fixed spine:
+
+| Stage | Who | Done when |
+|---|---|---|
+| define (`/spec`) | a lead writes `define/spec.md` with numbered criteria (`AC1: ...`) | you approve it (board question or phone) |
+| plan (`/plan`) | a lead writes the PRD, contracts and the build workstreams | a reviewer from another model family approves |
+| build (`/build`) | a lead hands workstreams out as task cards and merges the diffs | verify, two reviews and you all approve |
+| verify (`/test`) | runs and writes tests, one `AC1: PASS/FAIL` line per criterion | every criterion passes |
+| review (`/review`) | two reviewers, cross-family, with the traceability table | both approve |
+| ship (`/ship`) | version, changelog, release, deploy, smoke test | evidence of the release |
+
+- **Your steps.** Approving the spec and confirming the release are board questions that only you can answer: the
+  approval page (answer with what to change to send the work back) or a signed phone link. A yes in an agent's chat
+  doesn't count.
+- **Rework.** A failed check sends the work back with its feedback, and the checks nobody started yet are skipped
+  (no review of a build that fails its tests). A stage sent back too many times asks you: another round, or stop.
+- **Task cards.** `split_subtask(subtask_id, parts)` parts can carry `acceptance`, `covers` (AC ids), `inputs`
+  (workspace paths or memory ids instead of pasted text), `output` and `criticality: low|high`. Splits go at most 3
+  levels deep, 2 to 12 parts each.
+- **Tiers.** Each card's difficulty x criticality picks the tier and effort: easy and low goes to a cheap model at low
+  effort, hard and high to a top model at high effort. Agent daemons start their CLI on that model and effort
+  (`COMMONS_MODEL`, `COMMONS_EFFORT` in the runner script).
+- **Evidence.** Build, verify and ship steps only finish with a commit or diff, or a `TESTS:` / `EVIDENCE:` line.
+- **One stage.** `stages=["verify"]` (or `/test`) runs just that part, with the task as its input.
+- **See it.** The dashboard's Workflow page: the stage spine with your approvals, the agent tree with tiers, the
+  traceability matrix (gaps in red) and tokens handed to agents against handing each one every upstream result.
+
 ## Continuity, leftovers and recurring work
 
 - `handoff` next_steps/open_questions and `LEFTOVER:` lines from workers become **leftovers** (de-duplicated).
@@ -115,6 +144,8 @@ prompt (brief, upstream results fenced as untrusted, preferences, protocol) → 
 (also `{prompt_file}`, `$COMMONS_SUBTASK_ID`, `$COMMONS_TASK_TYPE`) → heartbeat while running → parse
 `VERDICT:` / `LEFTOVER:` / `PREFERENCE:` / `TOKENS:` → complete (a non-zero exit means the attempt failed and is retried).
 Use `--url http://hub:8765/mcp --api-key …` to work against a remote hub. See [docs/workers.md](docs/workers.md).
+
+`commons quota install --url <hub>/mcp --api-key-file <keyfile>` runs `commons quota sync` every 10 minutes on this machine (also a `commons setup` step) so models and the tool version stay current, with or without an aiusage database.
 
 ## Dashboard
 

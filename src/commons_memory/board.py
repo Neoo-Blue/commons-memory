@@ -128,6 +128,8 @@ def answer(s: Store, item_id: str, text: str, by: str = "user") -> dict:
     if not (text or "").strip():
         raise CommonsError("write the answer")
     r = dict(r[0])
+    if r["status"] == "done":  # answered already, or replaced by a newer question: an old answer must not count
+        raise CommonsError(f"{item_id} is already closed")
     s.x("UPDATE board SET status='done', evidence=?, updated_at=?, closed_at=? WHERE id=?",
         (f"answer from {by}: {text.strip()}"[:4000], now(), now(), item_id))
     if r["agent_id"]:
@@ -138,6 +140,9 @@ def answer(s: Store, item_id: str, text: str, by: str = "user") -> dict:
     answered(s, r["text"], text)  # a credential request the decision agent passed to the user
     from .mcphub import answered as mcp_answered
     mcp_answered(s, r["text"], text)  # an upstream MCP tool call waiting for approval
+    if re.match(r"\s*\[(gate|rework) sub_", r["text"]):  # a workflow step only the owner can pass
+        from .orchestrator import Orchestrator
+        Orchestrator(s).owner_answered(r["text"], text, item_id)
     s.audit(None, "board.answer", item_id, {"by": by})
     return get(s, item_id)
 

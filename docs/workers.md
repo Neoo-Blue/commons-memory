@@ -50,6 +50,7 @@ A non-zero exit code marks the attempt failed. The subtask is retried on another
 - `--timeout` kills runaway commands. `--idle-exit N` exits after N idle seconds (useful from cron or CI).
 - Remote hub: `--url http://hub:8765/mcp --api-key $(cat ~/.commons/agents/grok.key)`.
 - Run the scheduler somewhere: `commons scheduler` (loop) or `*/5 * * * * commons scheduler --once` in system cron.
+- `commons quota install --url <hub>/mcp --api-key-file <keyfile>` runs `commons quota sync` every 10 minutes on this machine (models, CLI version, and usage windows when aiusage is present).
 
 ## Safety
 Workers execute real CLIs with whatever permissions you give them. Run them in a sandbox, container or limited account,

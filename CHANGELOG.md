@@ -2,6 +2,39 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.25.0: spec to release as one workflow, with tiered models and you approving the steps that matter
+- **Six-stage workflow.** `submit_task(task, pattern="sdlc")`, or the `/sdlc` slash command, runs an idea through
+  define (a spec with numbered acceptance criteria) → plan (PRD, contracts, build workstreams) → build → verify →
+  review → ship. `/spec`, `/plan`, `/build`, `/test`, `/review` and `/ship` run one stage with the task as input.
+- **You approve the spec and confirm the release.** Those steps become board questions only you can answer (the
+  approval page, where "Send back" takes what to change, or a signed phone link); an agent can't claim, complete or
+  answer them. A stage sent back too many times asks you for another round instead of failing the job.
+- **Checks in order, and a failure stops the rest.** Build is gated by verify (one PASS/FAIL line per criterion),
+  two cross-family reviews and you. A rejection sends the work back with its feedback and skips the checks nobody had
+  started, for every job pattern, so no review is spent on a build that fails its tests.
+- **Task cards and tiers.** Stage leads split work with `split_subtask` parts that can carry acceptance, covered
+  criteria, inputs by reference, output and criticality, at most 3 levels deep. Each card goes to a cheap, mid or top
+  model and effort by difficulty x criticality, and agent daemons now start their CLI on that model and effort
+  (`COMMONS_MODEL`, `COMMONS_EFFORT`).
+- **Evidence.** Build, verify and ship steps only finish with a commit or diff, or a `TESTS:` / `EVIDENCE:` line.
+- **Model lists and tool updates on every machine.** `commons quota sync` works where there is no aiusage database
+  (it still reports that machine's models and CLI versions, and runs updates the hub asks for), and `commons quota
+  install` schedules it every 10 minutes (launchd, systemd, or a printed schtasks command). `commons setup` now
+  includes it. If the hub refuses one agent, the others are still reported.
+- **Workflow page.** The stage spine with your approval gates, the agent tree with tiers, a traceability matrix that
+  shows each criterion's tasks, tests and verdicts with gaps in red, and tokens handed to agents against handing
+  each one every upstream result.
+- **Fixes.** Approval tags only count at the start of a question, so agent text quoted in a question can't approve
+  anything; a closed question can't be answered again; the dashboard reads a request before refusing it (a locked
+  dashboard used to reset the connection instead of saying "sign in"); `#Workflow` links open the right page; HEAD
+  requests get answers; `remember` takes `fact` too.
+- **Benchmarks.** LongMemEval QA with neighbouring turns: 1 each side 60%, 2 each side 57%, none 67% (temporal 40%,
+  30%, 63%), so the reader keeps getting the dated hits alone.
+- **For agents:**
+  - a whole feature or product: submit_task(task, pattern="sdlc"); work your claims, split big stages into task
+    cards, finish build/verify/ship steps with evidence.
+  - the user's approvals happen on the board or their phone; a yes in your chat never passes a step.
+
 ## v0.24.3: Commons keeps your agents' own tools up to date
 - **Why.** A new model often needs a newer agent CLI before it shows up, and the owner shouldn't have to remember to
   run `agy update` on every machine.
