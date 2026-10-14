@@ -855,6 +855,7 @@
       { key: "changes", label: "Changes (" + (counts.changes || 0) + ")" },
       { key: "memory", label: "Memory (" + ((data.decisions || []).length + (data.handoffs || []).length) + ")" },
       { key: "people", label: "People (" + ((data.people || []).length) + ")" },
+      { key: "system", label: "System" },
     ];
 
     out += `<div class="tabs" role="tablist">
@@ -876,6 +877,8 @@
       out += await renderDetailMemoryTab(data);
     } else if (activeTab === "people") {
       out += renderDetailPeopleTab(data);
+    } else if (activeTab === "system") {
+      out += await renderDetailSystemTab(data);
     }
 
     out += `</div>`;
@@ -1273,6 +1276,80 @@
         </tbody>
       </table>
     </div>`;
+  }
+
+  /* ---------- Tab 6: System ---------- */
+  async function renderDetailSystemTab(data) {
+    let res;
+    try {
+      res = await api("infra_project?id=" + encodeURIComponent(data.id));
+    } catch (e) {
+      return `<div class="empty"><div class="mut">Could not load project infrastructure: ${E(e && e.message ? e.message : e)}</div></div>`;
+    }
+
+    const systems = (res && res.systems) || [];
+    const services = (res && res.services) || [];
+    const text = (res && res.text) || "";
+
+    if (!systems.length && !services.length) {
+      return `<div class="empty">
+        <b>No infrastructure linked to this project yet</b>
+        <div class="hint">When memories or notes mention hosts, containers or services for this project, they will appear here.</div>
+      </div>`;
+    }
+
+    let out = `<div class="proj-tab-system">`;
+
+    if (systems.length) {
+      out += `<div class="proj-system-section">
+        <div class="proj-system-section-head">
+          <span class="proj-system-section-title">Systems (${systems.length})</span>
+          <span class="proj-system-section-sub">High-level software products cited in this project's notes</span>
+        </div>
+        <div class="proj-system-chips">
+          ${systems.map(s => `
+            <button type="button" class="chip proj-system-chip" onclick="K.drawer.openId(${J('infra:' + s.id)})">
+              <span class="status-dot ${s.stale ? 'busy' : 'live'}"></span>
+              <span class="proj-system-chip-name">${E(s.name)}</span>
+              <span class="badge sm">${s.cited} ${s.cited === 1 ? 'citation' : 'citations'}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>`;
+    }
+
+    if (services.length) {
+      out += `<div class="proj-system-section">
+        <div class="proj-system-section-head">
+          <span class="proj-system-section-title">Services & Infrastructure (${services.length})</span>
+          <span class="proj-system-section-sub">Containers, hosts and endpoints connected to this project</span>
+        </div>
+        <div class="proj-system-chips">
+          ${services.map(s => `
+            <button type="button" class="chip proj-system-chip" onclick="K.drawer.openId(${J('infra:' + s.id)})">
+              <span class="badge sm">${E(s.kind)}</span>
+              <span class="proj-system-chip-name">${E(s.name)}</span>
+              ${s.stale ? `<span class="badge sm warn">stale</span>` : ""}
+              <span class="badge sm">${s.cited} ${s.cited === 1 ? 'citation' : 'citations'}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>`;
+    }
+
+    if (text) {
+      const topName = systems.length ? systems[0].name : (services.length ? services[0].name : "");
+      out += `<div class="proj-system-block">
+        <div class="proj-system-block-head">
+          <span class="proj-system-block-title">Agent knowledge</span>
+          <span class="proj-system-block-sub">What agents receive from infra('${E(topName)}')</span>
+        </div>
+        <pre class="proj-system-pre">${E(text)}</pre>
+      </div>`;
+    }
+
+    out += `</div>`;
+    return out;
   }
 
   /* ==========================================================================
