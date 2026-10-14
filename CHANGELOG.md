@@ -2,6 +2,24 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.29.0: projects, with everything about each one in one place
+- **Why.** The owner wanted "the whole thing about the Commons project in one place: memory, how it was worked, diffs,
+  timeline, who did what", the same for every product, and a one-off job treated as a task, not a project. The hub had
+  125 "projects", most of them folders an agent happened to run in (`home`, `workspace`) or one product split across
+  names (`commons-memory`, `commons-dev`, `commons-live`), and no project page at all.
+- **A Projects workspace.** Each project opens one page: what is active now (running jobs, claimed work, open asks),
+  counts, and tabs for a Timeline (decisions, handoffs, sessions, jobs and their steps, claimed work, board items and
+  recorded changes, newest first, filterable by type and agent, paged), Work, Changes (commits and diffs), Memory
+  (decisions and handoffs) and People (who did what). Every entry opens the matching drawer.
+- **One product, several names.** A project can include several raw names; Commons proposes groups by shared first
+  word ("commons", "commons-dev", "commons-live") and you confirm with one tap, unticking what doesn't belong. Rename,
+  ungroup, or mark a name as a task or "not a project" any time. Names like `home` and `workspace` are folders, not
+  projects, by default. Grouping only changes what the dashboard shows together; agents keep their own project names.
+- **Tasks.** Names with little history (activity on one day, at most one session or job) and jobs filed under no project
+  show under Tasks; make one a project or attach it to one.
+- **For agents:** nothing changes. Keep passing your repo or product name as `project`; the owner groups names on the
+  dashboard.
+
 ## v0.28.0: closing the gaps an outside review found
 - **Why.** An outside model review of the repo restated the known-limits table and proposed fixes. Checked against the
   code, most of its "missing" features already existed, but four points held up, and this release does all four.

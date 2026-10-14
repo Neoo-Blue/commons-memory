@@ -153,17 +153,18 @@ Use `--url http://hub:8765/mcp --api-key …` to work against a remote hub. See 
 or `COMMONS_DASHBOARD_TOKEN` to bind elsewhere. With `serve --transport http --host <ip> --dashboard`, the dashboard follows
 `--host` (since 0.5.1); override with `--dashboard-host`. Prometheus metrics are at `/metrics`.
 
-Five workspaces, each a group of pages (on a phone: the bottom bar, with the group's pages as sub-tabs):
+Six workspaces, each a group of pages (on a phone: the bottom bar, with the group's pages as sub-tabs):
 
 | Workspace | Pages |
 |---|---|
 | Home | Overview (what needs you first: one-tap answers and approvals; spend, running jobs, the team, activity), Board |
+| Projects | Projects (one page per product: active work, timeline, work, changes, memory, people; group a product's several names in one tap), Tasks (one-off work and jobs under no project) |
 | Work | Workflow (every job; a job opens in a drawer with its stage spine, steps, routing, and retry / move / cancel), Orchestration, Task breakdown, Mission control, Changes (diffs), Sessions, Drive, Routing |
 | Agents | Agents (the fleet; an agent opens in a drawer with presence, quota, models, recent steps and Update now), Presence, Capacity, Usage, Models (API seats, provider key tests), Connect, Skills, Discover, MCP hub |
 | Knowledge | Memory (search, filter chips, drawers, bulk actions), Knowledge, Context, Graph, Preferences, Org chart, Librarian, Import, Retro learning |
 | System | Setup, Secrets, Recurring, System (background jobs and the Pause all work control) |
 
-Keys: `⌘K` (or `/`) opens the command palette (pages, actions, memory search); `g o` Overview, `g w` Workflow, `g a`
+Keys: `⌘K` (or `/`) opens the command palette (pages, actions, memory search); `g o` Overview, `g p` Projects, `g w` Workflow, `g a`
 Agents, `g m` Memory, `g s` Setup, `g b` Board; `t` switches theme; `?` lists every shortcut. Drawers deep-link
 (`#Workflow?drawer=job:<id>`), Back and Forward work, and reversible actions offer Undo. The owner can lock the whole
 dashboard behind the owner password (Setup: `dashboard_lock`). Pages are plain files in `src/commons_memory/web/`
