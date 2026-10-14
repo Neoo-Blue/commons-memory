@@ -332,14 +332,6 @@ a.hm-act{display:inline-flex;align-items:center;text-decoration:none;border:1px 
 .hm .kv-k,.hm-d .kv-k{padding:0 6px;background:var(--border-subtle);color:var(--fg-subtle)}
 .hm .kv-v,.hm-d .kv-v{padding:0 6px;color:var(--fg-default);overflow-wrap:anywhere}
 .hm .kv-more,.hm-d .kv-more{height:auto;min-height:0;padding:0 6px;border:0;border-radius:0;background:none;font:inherit;color:var(--fg-default);cursor:pointer;white-space:normal;text-align:left}
-.toast .toast-msg{flex:1;min-width:0}
-.toast .toast-ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75}
-.toast.ok .toast-ico{color:var(--ok)}
-.toast.err .toast-ico{color:var(--bad)}
-.toast .toast-act{height:28px;min-height:28px;padding:0 10px;font-size:var(--text-xs);font-weight:600}
-.toast .toast-x{width:28px;height:28px;min-height:28px;padding:0;background:transparent;border-color:transparent;color:var(--fg-subtle);font-size:16px}
-.toast>.progress{position:absolute;left:0;right:0;bottom:0;width:auto;height:2px;border-radius:0;background:var(--fg-subtle);opacity:.5}
-.drawer.open~.menu{z-index:70}  /* a menu opened from inside a drawer (Move to agent) sits above it */
 
 /* tablets and phones */
 @media (max-width:1100px){

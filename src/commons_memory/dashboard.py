@@ -302,13 +302,15 @@ class API:
                         "FROM usage WHERE ts>=? GROUP BY d, agent_id", (start, start))
         agents = sorted({r["agent_id"] for r in rows if r["agent_id"]}, key=str)
         series = {self.s.label(a)[1]: [0.0] * days for a in agents}
+        token_series = {self.s.label(a)[1]: [0] * days for a in agents}
         tokens = [0] * days
         for r in rows:
             if 0 <= r["d"] < days:
                 if r["agent_id"]:
                     series[self.s.label(r["agent_id"])[1]][r["d"]] += r["c"] or 0
+                    token_series[self.s.label(r["agent_id"])[1]][r["d"]] += r["t"] or 0
                 tokens[r["d"]] += r["t"] or 0
-        return {"days": days, "series": series, "tokens": tokens}
+        return {"days": days, "series": series, "tokens": tokens, "token_series": token_series}
 
     def mcp(self, q):
         from .mcphub import Hub, load_catalog

@@ -264,3 +264,13 @@ def test_agent_detail_has_presence_usage_and_recent_steps(store, hub):
     assert d["unread"] >= 1
     code, body = hub("/api/agent_detail?name=nobody")
     assert code == 400 and "unknown agent" in body["error"]
+
+
+def test_usage_series_splits_daily_tokens_by_agent(store):
+    from commons_memory.dashboard import API
+    from commons_memory.usage import Usage
+    a, b = store.ensure_agent("alpha"), store.ensure_agent("beta")
+    Usage(store).report(a, tokens_in=100, tokens_out=50, cost=0.1)
+    Usage(store).report(b, tokens_in=10, tokens_out=5, cost=0.01)
+    d = API(store).usage_series({"days": "3"})
+    assert sum(d["token_series"]["alpha"]) == 150 and sum(d["token_series"]["beta"]) == 15 and sum(d["tokens"]) == 165
