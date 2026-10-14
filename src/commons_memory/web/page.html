@@ -1,0 +1,13 @@
+<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><title>Commons dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e8835f'/%3E%3C/svg%3E">
+<style>/*@CSS*/</style></head><body>
+<div class="app"><aside id="side"><div class="logo"><i>⛬</i>Commons</div><nav class="nav" id="tabs" aria-label="Pages"></nav></aside>
+<div><header><button class="menu-btn" aria-label="Menu" onclick="$('#side').classList.toggle('open')">☰</button><h1 id="ttl">Overview</h1><div class="spacer"></div>
+<div class="search" role="button" tabindex="0" onclick="pal()" onkeydown="if(event.key=='Enter')pal()">⌕ <span>Search or jump to…</span> <kbd>⌘K</kbd></div>
+<button onclick="theme()" aria-label="Toggle theme" title="Toggle theme (t)">◐</button><span id="ks"></span></header><div id="ob"></div><main id="m" aria-live="polite">loading…</main></div></div>
+<div id="pal" role="dialog" aria-modal="true" aria-label="Command palette" onclick="if(event.target.id=='pal')palClose()"><div class="box"><input id="palq" placeholder="Jump to a page, find a place, search memory…" autocomplete="off"><div class="res" id="palr"></div></div></div>
+<div id="toasts" aria-live="assertive"></div>
+<script>/*@JS*/</script></body></html>
