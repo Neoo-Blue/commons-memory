@@ -212,3 +212,24 @@ def test_extract_async_runs_once_and_failed_batches_are_read_again(tmp_path, mon
     gate.set()
     __import__("time").sleep(0.3)
     assert b["status"] == "running" and len(calls) == 1      # the first call's dict is live state, done by now
+
+
+def test_stats_related_and_the_graph_explorer_source(tmp_path):
+    from commons_memory.dashboard import API
+    s = make_store(tmp_path, "i11.db")
+    I.ingest_snapshot(s, _snap())
+    m = s.add_item("memory", "Radarr feeds the media library", project="media")["id"]
+    I.ingest_extraction(s, {"entities": [{"name": "radarr", "kind": "service", "note": ""}, {"name": "Media", "kind": "system", "note": ""}],
+                            "relations": [{"src": "radarr", "rel": "part_of", "dst": "Media", "evidence": [m]}]},
+                        [dict(id=m, created_at=now(), project="media", c="")])
+    st = API(s).infra_stats({})
+    pve = st["machines"][0]
+    assert pve["name"] == "pve" and {g["name"] for g in pve["guests"]} == {"arrstack (LXC 106)", "docker (LXC 100)"}
+    assert [g for g in pve["guests"] if g["name"].startswith("arrstack")][0]["ports"] == 1
+    r = I.node(s, I.resolve(s, "radarr"))
+    assert r["projects"][0]["title"] == "media" and r["siblings"] == []
+    assert I.node(s, I.resolve(s, "plex"))["siblings"] == []
+    import commons_memory.graphview as gv
+    html = gv.render({"nodes": {n["id"]: {"name": n["name"], "type": n["kind"]} for n in I.graph(s)["nodes"]},
+                      "edges": [{"src": e["src"], "dst": e["dst"], "type": e["rel"]} for e in I.graph(s)["edges"]]}, "Infrastructure")
+    assert "arrstack (LXC 106)" in html and "machine: '#f97316'" in html

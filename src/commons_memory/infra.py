@@ -169,6 +169,11 @@ def ingest_snapshot(s: Store, snap: dict, by: str | None = None) -> dict:
             continue
         host = ids.get(hosts.get(e["key"], "")) if kind == "service" else None
         attrs = dict(e.get("attrs") or {})
+        if kind in ("machine", "guest") and not attrs.get("ip"):  # a primary LAN address, for lookups and the map
+            lan = [x for x in attrs.get("ips") or [] if IP.fullmatch(str(x)) and not DOCKER_GW.match(x)
+                   and not re.match(r"172\.(1[6-9]|2\d|3[01])\.|127\.", x)]
+            if lan:
+                attrs["ip"] = lan[0]
         if kind in ("storage", "directory") and hosts.get(e["key"]):
             attrs.setdefault("host", ids.get(hosts[e["key"]], ""))
         name = e.get("name") or e["key"]
@@ -525,7 +530,7 @@ def node(s: Store, nid: str) -> dict:
     ev = json.loads(me["evidence"] or "[]")[:20]
     notes = [{"id": x["id"], "at": iso(x["created_at"]), "text": (x["c"] or "")[:300]} for x in s.q(
         f"SELECT id, created_at, substr(COALESCE(content, summary),1,300) c FROM items WHERE id IN ({','.join('?' * len(ev))})", ev)] if ev else []
-    return _node(me) | {"out": out, "in": inc, "chain": chain, "notes": notes}
+    return _node(me) | {"out": out, "in": inc, "chain": chain, "notes": notes} | related(s, me["id"])
 
 
 def resolve(s: Store, query: str) -> str | None:
@@ -714,3 +719,85 @@ def for_project(s: Store, project_ids: list[str]) -> dict:
     others = [_node(r) | {"cited": n} for n, r in score if r["kind"] != "system"][:40]
     top = systems[0]["name"] if systems else (others[0]["name"] if others else "")
     return {"systems": systems, "services": others, "text": describe(s, top) if top else ""}
+
+
+def _bytes(a: dict) -> tuple[float | None, float | None]:
+    """(used, total) bytes from a storage's attrs: pvesm reports KiB, zpool human sizes like 472G."""
+    def human(v):
+        m = re.fullmatch(r"([\d.]+)\s*([KMGTP]?)i?B?", str(v or "").strip(), re.I)
+        return float(m.group(1)) * 1024 ** "_KMGTP".index((m.group(2) or "_").upper()) if m else None
+    if a.get("total") and a.get("used"):
+        try:
+            return float(a["used"]) * 1024, float(a["total"]) * 1024
+        except (TypeError, ValueError):
+            return None, None
+    if a.get("size") and a.get("alloc"):
+        return human(a["alloc"]), human(a["size"])
+    return None, None
+
+
+def stats(s: Store) -> dict:
+    """What the charts draw: per machine its capacity and every guest's allocation, services and ports; storage use;
+    counts by kind."""
+    ensure(s)
+    byid = {r["id"]: r for r in s.q("SELECT * FROM infra_nodes WHERE hidden=0")}
+    runs = defaultdict(list)
+    for e in s.q("SELECT src, dst FROM infra_edges WHERE rel='runs_on' AND (verdict IS NULL OR verdict<>'no')"):
+        runs[e["dst"]].append(e["src"])
+    ports = defaultdict(int)
+    for e in s.q("SELECT src FROM infra_edges WHERE rel='reachable_at'"):
+        ports[e["src"]] += 1
+    machines = []
+    for mid, m in byid.items():
+        if m["kind"] != "machine":
+            continue
+        a = json.loads(m["attrs"] or "{}")
+        guests = []
+        for gid in runs.get(mid, []):
+            g = byid.get(gid)
+            if not g or g["kind"] != "guest":
+                continue
+            ga = json.loads(g["attrs"] or "{}")
+            svcs = [x for x in runs.get(gid, []) if x in byid and byid[x]["kind"] == "service"]
+            guests.append({"id": gid, "name": g["name"], "status": ga.get("status"), "stale": bool(g["stale"]),
+                           "cores": ga.get("cores"), "memory_mb": ga.get("memory_mb"), "ip": ga.get("ip"),
+                           "services": len(svcs), "ports": sum(ports[x] for x in svcs) + ports[gid]})
+        host_svcs = [x for x in runs.get(mid, []) if x in byid and byid[x]["kind"] == "service"]
+        machines.append({"id": mid, "name": m["name"], "cpu_count": a.get("cpu_count") or a.get("cores"),
+                         "memory_total": a.get("memory_total"), "memory_used": a.get("memory_used"),
+                         "host_services": len(host_svcs), "guests": sorted(guests, key=lambda g: -(g["memory_mb"] or 0))})
+    storage = []
+    for nid, n in byid.items():
+        if n["kind"] == "storage":
+            used, total = _bytes(json.loads(n["attrs"] or "{}"))
+            if total:
+                storage.append({"id": nid, "name": n["name"], "used": used, "total": total, "stale": bool(n["stale"])})
+    counts = defaultdict(int)
+    for n in byid.values():
+        counts[n["kind"]] += 1
+    return {"machines": sorted(machines, key=lambda m: -len(m["guests"])), "storage": sorted(storage, key=lambda x: -x["total"]),
+            "counts": dict(counts), "stale": sum(1 for n in byid.values() if n["stale"])}
+
+
+def related(s: Store, nid: str) -> dict:
+    """Beyond direct links: the projects whose notes mention it and what else runs on the same host."""
+    from .projects import _groups, _rows
+    ensure(s)
+    r = s.q("SELECT evidence FROM infra_nodes WHERE id=?", (nid,))
+    ev = json.loads(r[0]["evidence"] or "[]") if r else []
+    projects = []
+    if ev:
+        rows = _rows(s)
+        root_of = {m: root for root, ids in _groups(rows).items() for m in ids}
+        counts = defaultdict(int)
+        for x in s.q(f"SELECT project_id FROM items WHERE id IN ({','.join('?' * len(ev))}) AND project_id IS NOT NULL", ev):
+            counts[root_of.get(x["project_id"], x["project_id"])] += 1
+        projects = [{"id": p, "title": rows[p]["title"] or rows[p]["name"], "notes": n}
+                    for p, n in sorted(counts.items(), key=lambda kv: -kv[1]) if p in rows]
+    host = s.q("SELECT dst FROM infra_edges WHERE src=? AND rel='runs_on' LIMIT 1", (nid,))
+    siblings = []
+    if host:
+        siblings = [{"id": x["id"], "name": x["name"], "kind": x["kind"]} for x in s.q(
+            "SELECT n.id, n.name, n.kind FROM infra_edges e JOIN infra_nodes n ON n.id=e.src WHERE e.dst=? AND e.rel='runs_on' "
+            "AND n.id<>? AND n.hidden=0 ORDER BY n.name LIMIT 40", (host[0]["dst"], nid))]
+    return {"projects": projects, "siblings": siblings}

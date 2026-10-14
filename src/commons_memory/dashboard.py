@@ -140,6 +140,10 @@ class API:
         from . import infra as I
         return I.graph(self.s, q.get("root") or None, int(q.get("depth") or 2))
 
+    def infra_stats(self, q):
+        from . import infra as I
+        return I.stats(self.s)
+
     def infra_describe(self, q):
         from . import infra as I
         return {"text": I.describe(self.s, q.get("q") or "")}
@@ -153,6 +157,14 @@ class API:
         from .projects import _groups, _root, _rows
         rows = _rows(self.s)
         return I.for_project(self.s, _groups(rows)[_root(q.get("id") or "", rows)])
+
+    def refile_status(self, q):
+        from . import refile as R
+        return R.status(self.s) | {"suggestions": R.suggestions(self.s)}
+
+    def refile_estimate(self, q):
+        from . import refile as R
+        return R.estimate(self.s)
 
     def project_change(self, q):
         """One recorded change (commit, files, diff) by its folder path, for the change drawer."""
@@ -605,6 +617,16 @@ class API:
                 return I.hide(self.s, body["id"], bool(body.get("hidden", True)))
             if path == "/api/infra/extract":
                 return I.extract_async(self.s, full=bool(body.get("full")))
+        if path.startswith("/api/refile/"):
+            from . import refile as R
+            if path == "/api/refile/start":
+                return R.run_async(self.s)
+            if path == "/api/refile/apply":
+                return R.apply(self.s, body["key"], bool(body.get("sure_only", True)))
+            if path == "/api/refile/undo":
+                return R.undo(self.s, body["key"], float(body["at"]))
+            if path == "/api/refile/dismiss":
+                return R.dismiss(self.s, body["key"])
         if path.startswith("/api/project/"):
             from . import projects as P
             if path == "/api/project/group":
@@ -825,6 +847,13 @@ def make_handler(api: API, token: str | None):
                         self.end_headers()
                         return
                     return self._send(200, PAGE_BYTES, "text/html; charset=utf-8", cache)
+                if u.path == "/graph.html" and q.get("source") == "infra":  # the same explorer, on the infrastructure map
+                    from . import graphview
+                    from .infra import graph as infra_graph
+                    ig = infra_graph(api.s, q.get("root") or None, int(q.get("depth") or 2))
+                    g = {"nodes": {n["id"]: {"name": n["name"], "type": n["kind"], "stale": n["stale"]} for n in ig["nodes"]},
+                         "edges": [{"src": e["src"], "dst": e["dst"], "type": e["rel"]} for e in ig["edges"]]}
+                    return self._send(200, graphview.render(g, "Infrastructure"), "text/html; charset=utf-8")
                 if u.path == "/graph.html":
                     if q.get("scope") and q.get("id"):
                         from .graphlinks import subgraph
@@ -927,7 +956,7 @@ def make_handler(api: API, token: str | None):
 
 # changes an agent on the LAN could use to approve itself, reach a key, mint a key, or pick who does the work: once a
 # PIN exists they need the browser the owner unlocked with it
-OWNER_ONLY = ("/api/infra/extract", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
+OWNER_ONLY = ("/api/infra/extract", "/api/refile/start", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
               "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
               "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry")
 

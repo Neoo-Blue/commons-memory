@@ -1069,3 +1069,15 @@
   }
 }
 .proj-rename{font:inherit;font-weight:600;color:var(--fg-default);background:var(--bg-input);border:1px solid var(--acc-border,var(--acc));border-radius:var(--radius-sm,6px);padding:2px 8px;min-width:12ch;max-width:100%}
+
+/* re-filing cards: notes under the wrong project */
+.proj-refile-card{border:1px solid var(--border-default);border-radius:var(--radius-lg,12px);background:var(--bg-card);padding:14px 16px;margin:0 0 12px;display:grid;gap:8px}
+.proj-refile-card.quiet{background:transparent;border-style:dashed}
+.proj-refile-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.proj-refile-head b{font-weight:600;color:var(--fg-default)}
+.proj-refile-sure{font-size:var(--text-xs,12px);color:var(--fg-muted);font-variant-numeric:tabular-nums}
+.proj-refile-note{font-size:var(--text-sm,13px);color:var(--fg-muted);max-width:75ch}
+.proj-refile-samples{margin:0;padding-left:18px;color:var(--fg-muted);font-size:var(--text-sm,13px);display:grid;gap:2px}
+.proj-refile-samples li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj-refile-actions{display:flex;gap:8px;flex-wrap:wrap}
+@media (max-width:900px){.proj-refile-actions button{min-height:44px}}

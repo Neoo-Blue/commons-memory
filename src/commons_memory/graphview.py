@@ -545,7 +545,10 @@ body.presentation #canvas-container { top: 0 !important; }
     subtask: '#2ec4b6', workflow: '#ffbf69', task_type: '#cbf3f0', schedule: '#e9c46a',
     leftover: '#f4a261', preference: '#90be6d', usage: '#577590', secret_ref: '#ef476f',
     lease: '#d62828', model: '#adb5bd', scope: '#6c757d', job_result: '#c77dff',
-    entity: '#38bdf8'
+    entity: '#38bdf8',
+    machine: '#f97316', guest: '#3b82f6', service: '#22c55e', system: '#eab308', endpoint: '#a855f7', tunnel: '#ec4899',
+    storage: '#14b8a6', database: '#0ea5e9', network: '#64748b', place: '#f59e0b', repo: '#84cc16', directory: '#94a3b8',
+    credential: '#ef4444'
   };
 
   const COMM_PALETTE = [

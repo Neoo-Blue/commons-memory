@@ -271,6 +271,70 @@
   };
 
   function plural(n, w) { return `${n} ${w}${n === 1 ? "" : "s"}`; }
+
+  /* ---------- re-filing: notes under the wrong project (imports, folders like home) ---------- */
+  function refileCards(rf, onlyFrom) {
+    if (!rf) return "";
+    const job = rf.job || {};
+    let flows = rf.suggestions || [];
+    if (onlyFrom) flows = flows.filter(f => f.from === onlyFrom);
+    if (job.status === "running") {
+      if (!onlyFrom) setTimeout(() => { if (tab === "Projects" && !location.hash.includes("p=")) render(); }, 8000);
+      return onlyFrom ? "" : `<div class="proj-refile-card"><div class="proj-refile-head"><span class="status-dot live"></span>
+        <b>Checking where notes belong</b></div><div class="proj-refile-note">${E(job.note || "Reading imported notes and folders")}</div></div>`;
+    }
+    let h = "";
+    if (job.status === "failed" && !onlyFrom) {
+      h += `<div class="proj-refile-card"><div class="proj-refile-head"><b>The filing check stopped</b></div>
+        <div class="proj-refile-note">${E(job.error || "")}</div>
+        <div class="proj-refile-actions"><button type="button" class="btn sm" onclick="PRJ.refileEstimate()">Try again</button></div></div>`;
+    }
+    flows.slice(0, onlyFrom ? 4 : 8).forEach(f => {
+      h += `<div class="proj-refile-card">
+        <div class="proj-refile-head"><b>${E(plural(f.count, "note"))} under ${E(f.from_title)} look like ${E(f.to_title)}</b>
+          <span class="proj-refile-sure">${E(f.high)} sure</span></div>
+        <ul class="proj-refile-samples">${(f.samples || []).slice(0, 3).map(x => `<li>${E(x.text)}</li>`).join("")}</ul>
+        <div class="proj-refile-actions">
+          ${f.high ? `<button type="button" class="pri sm" onclick="PRJ.refileApply(${J(f.key)}, true)">Move the ${E(f.high)} sure</button>` : ""}
+          <button type="button" class="btn sm" onclick="PRJ.refileApply(${J(f.key)}, false)">Move all ${E(f.count)}</button>
+          <button type="button" class="btn sm" onclick="PRJ.refileDismiss(${J(f.key)})">Keep them here</button>
+        </div></div>`;
+    });
+    if (onlyFrom || flows.length) return h;
+    const est = S.refileEst;
+    if (est) {
+      return h + `<div class="proj-refile-card"><div class="proj-refile-head"><b>Check ${E(est.notes)} notes against ${E(est.projects)} projects</b></div>
+        <div class="proj-refile-note">A small model reads imported notes and folders like home and proposes where each belongs, for about
+          $${E(est.estimate_usd)}. Results usually arrive within the hour; nothing moves until you accept.</div>
+        <div class="proj-refile-actions"><button type="button" class="pri sm" onclick="PRJ.refileStart()">Start the check</button>
+          <button type="button" class="btn sm" onclick="S.refileEst=null;render()">Cancel</button></div></div>`;
+    }
+    const checked = job.status === "done";
+    return h + `<div class="proj-refile-card quiet"><div class="proj-refile-head">
+        <b>${checked ? "Filing checked: nothing left to move" : "Check where notes are filed"}</b></div>
+      <div class="proj-refile-note">${checked ? "Imported notes and folders like home were checked against your projects."
+        : "Imported notes and folders like home can sit under the wrong project. A small model checks them; nothing moves until you accept."}</div>
+      <div class="proj-refile-actions"><button type="button" class="btn sm" onclick="PRJ.refileEstimate()">${checked ? "Check again" : "Check filing"}</button></div></div>`;
+  }
+  window.PRJ = window.PRJ || {};
+  window.PRJ.refileEstimate = async function () {
+    try { S.refileEst = await api("refile_estimate"); } catch (e) { K.toast("Could not count notes: " + (e.message || e), { kind: "err" }); return; }
+    if (!S.refileEst.notes) { S.refileEst = null; K.toast("No imported or folder notes to check"); return; }
+    render();
+  };
+  window.PRJ.refileStart = async function () {
+    const r = await postRaw("refile/start", {});
+    S.refileEst = null;
+    if (r && r.error) K.toast(r.error, { kind: "err" });
+    render();
+  };
+  window.PRJ.refileApply = async function (key, sureOnly) {
+    const r = await postRaw("refile/apply", { key, sure_only: sureOnly });
+    if (!r || r.error) { K.toast((r && r.error) || "Could not move the notes", { kind: "err" }); return; }
+    K.toast(`Moved ${plural(r.moved, "note")}`, { undo: async () => { await postRaw("refile/undo", r.undo); render(); } });
+    render();
+  };
+  window.PRJ.refileDismiss = async function (key) { await postRaw("refile/dismiss", { key }); render(); };
   window.PRJ.renameProject = function (pid, currentTitle, el) {
     el = el || document.querySelector(`[data-proj-title="${CSS.escape(pid)}"]`);
     if (!el) { location.hash = "#Projects?p=" + encodeURIComponent(pid); return; }
@@ -593,6 +657,8 @@
       });
     }
 
+    out += refileCards(await api("refile_status").catch(() => null));
+
     // Projects Grid
     if (projects.length) {
       out += `<div class="proj-grid" id="proj-card-grid">`;
@@ -798,6 +864,8 @@
           <span class="proj-stat-val">${fmtMoney(data.cost_30d)}</span>
         </div>
       </div>`;
+
+    out += refileCards(await api("refile_status").catch(() => null), data.id);
 
     // Now Band
     if (hasNowWork) {
