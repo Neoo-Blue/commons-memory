@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import defaultdict
 
 from .ids import iso, new_id, now
@@ -229,16 +230,39 @@ EXTRACT_SCHEMA = {"type": "object", "additionalProperties": False, "required": [
                                  "dst": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "string"}}}}}}}
 
 
+STRONG = re.compile(r"\blxc\b|\bct ?\d{2,4}\b|proxmox|\bpve\b|synology|\bnas\b|cloudflare|tunnel|tailscale|wrangler|"
+                    r"\bvps\b|\bdroplet\b|vercel|systemd|docker compose|deploy\.sh|/mnt/|/volume\d", re.I)
+
+
+def _anchors(s: Store) -> re.Pattern | None:
+    """Once discovery has run, a note is worth reading when it names something discovered (an IP, a guest, a service, a
+    tunnel hostname) or clearly talks about infrastructure; the rest of the hint matches were mostly noise."""
+    names = set()
+    for r in s.q("SELECT kind, name, attrs FROM infra_nodes WHERE hidden=0 AND sources LIKE '%discovery%'"):
+        a = json.loads(r["attrs"] or "{}")
+        if a.get("ip"):
+            names.add(re.escape(a["ip"]))
+        base = re.sub(r"\s*\((?:LXC|VM) \d+\)$", "", r["name"])
+        if r["kind"] in ("guest", "service", "machine") and len(base) >= 4 and not base.isdigit():
+            names.add(r"\b" + re.escape(base.lower()) + r"\b")
+        if r["kind"] in ("endpoint", "tunnel") and not IP.search(r["name"]) and "." in r["name"]:
+            names.add(re.escape(re.sub(r"^https?://", "", r["name"]).split("/")[0].lower()))
+    return re.compile("|".join(sorted(names, key=len, reverse=True)), re.I) if names else None
+
+
 def candidates(s: Store, since: float = 0, limit: int | None = None) -> list[dict]:
     """Notes worth reading for the map: facts, decisions, documents and memories that mention hosts, ports, paths, domains
-    or the tools that run them, newest first, one copy of each text."""
+    or the tools that run them (and, once discovery has run, name something it found), newest first, one copy each."""
     out, seen = [], set()
+    anchors = _anchors(s)
     for r in s.q("SELECT i.id, i.kind, i.created_at, p.name project, substr(COALESCE(i.content, i.summary), 1, 900) c FROM items i "
                  "LEFT JOIN projects p ON p.id=i.project_id WHERE i.superseded_by IS NULL AND i.created_at>? AND "
                  "i.kind IN ('memory','decision','fact','document','handoff','note') ORDER BY i.created_at DESC", (since,)):
         c = r["c"] or ""
         k = _norm(c[:160])
         if len(c) < 40 or k in seen or not NOTE_HINT.search(c):
+            continue
+        if anchors and not (anchors.search(c) or STRONG.search(c)):
             continue
         seen.add(k)
         out.append(dict(r))
@@ -393,7 +417,7 @@ def extract(s: Store, model: str | None = None, since: float | None = None, limi
         since = float(r[0]["value"]) if r else 0.0
     notes = candidates(s, since, limit)
     batches = _batches(notes)
-    est = round(len(batches) * 0.07, 2)  # measured: a 22k-character batch costs about $0.07 with Haiku
+    est = round(len(batches) * 0.035, 2)  # measured $0.07 for a 22k-character batch with Haiku; the batch API halves it
     if dry_run or not notes:
         return {"notes": len(notes), "batches": len(batches), "estimate_usd": est, "since": iso(since) if since else None}
     pl = ProviderLayer(s)
@@ -402,13 +426,29 @@ def extract(s: Store, model: str | None = None, since: float | None = None, limi
         raise CommonsError("no model for the map: set the librarian role or add a provider key on the Setup page")
     known = known_names(s)
     cost, merged, failed = 0.0, defaultdict(int), []
+    prompts = ["Notes:\n" + "\n".join(f"[{n['id']}] {iso(n['created_at'])[:10]} ({n['project'] or 'no project'}): {n['c']}"
+                                     for n in b) for b in batches]
+    texts: list = []
+    if pl._p(model.partition("/")[0])["kind"] == "anthropic":  # the batch API: half price, results usually within the hour
+        bid = pl.batch_submit(model, [{"id": f"b{i}", "prompt": p, "system": EXTRACT_SYS, "cache_prefix": known,
+                                       "max_tokens": 32000, "schema": EXTRACT_SCHEMA} for i, p in enumerate(prompts)])
+        log(f"batch 0/{len(batches)}: submitted {bid}")
+        while True:
+            r = pl.batch_results(model, bid, role="librarian")
+            if r["status"] == "ended":
+                break
+            done = sum((r.get("counts") or {}).get(k, 0) for k in ("succeeded", "errored", "expired", "canceled"))
+            log(f"batch {done}/{len(batches)}: waiting, ${cost:.2f}")
+            time.sleep(30)
+        cost, texts = r.get("cost", 0.0) or 0.0, [r["results"].get(f"b{i}") for i in range(len(batches))]
     for i, b in enumerate(batches):
-        text = "\n".join(f"[{n['id']}] {iso(n['created_at'])[:10]} ({n['project'] or 'no project'}): {n['c']}" for n in b)
-        r = pl.chat(model, f"Notes:\n{text}", system=EXTRACT_SYS, max_tokens=32000, role="librarian", schema=EXTRACT_SCHEMA,
-                    cache_prefix=known)
-        cost += r.get("cost", 0) or 0
+        if i >= len(texts):
+            r = pl.chat(model, prompts[i], system=EXTRACT_SYS, max_tokens=32000, role="librarian", schema=EXTRACT_SCHEMA,
+                        cache_prefix=known)
+            cost += r.get("cost", 0) or 0
+            texts.append(r.get("text"))
         try:
-            got = ingest_extraction(s, json.loads(r["text"]), b)
+            got = ingest_extraction(s, json.loads(texts[i] or ""), b)
         except (ValueError, KeyError, TypeError) as e:
             log(f"batch {i + 1}: unreadable answer ({e})")
             failed += [n["created_at"] for n in b]

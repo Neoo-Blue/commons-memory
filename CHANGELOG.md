@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.30.1: building the map from memory costs a quarter
+- **Why.** On the live hub the first estimate read 6,993 notes for about $24: the note filter matched any note with a
+  URL, a port or the word "worker".
+- **Fewer, better notes.** Once live discovery has run, a note is read only when it names something discovery found (an
+  IP, a guest, a service, a tunnel hostname) or clearly talks about infrastructure (LXC, Proxmox, NAS, Cloudflare, a
+  mount path, a deploy script): 2,991 notes on the same hub.
+- **Half price.** With an Anthropic model the extraction goes through the Message Batches API, like the filing check.
+  The same hub now estimates about $5.90.
+- **For agents:** nothing changes.
+
 ## v0.30.0: an infrastructure map, for you and for every agent
 - **Why.** The owner: the knowledge base should know the structure of the code and the infrastructure, where everything
   resides and how it interacts, the project it belongs to and the credential it uses, "not only memorizing everything
