@@ -236,10 +236,10 @@
 
             <div class="drawer-links-bar">
               <a href="#Drive" class="drawer-link-btn" onclick="window.dp=${J(job.project || '')};window.dpath=${J(folder)};go('Drive');K.drawer.close();return false">
-                📁 Workspace: <code>${E(folder)}</code>
+                <svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg> Workspace: <code>${E(folder)}</code>
               </a>
               <a href="#Changes" class="drawer-link-btn" onclick="window.cjob=${J(job.id)};go('Changes');K.drawer.close();return false">
-                🧾 Changes for this job
+                <svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 11.5h6"/></svg> Changes for this job
               </a>
             </div>
           </div>`;
@@ -274,7 +274,7 @@
             gates.forEach(g => {
               const isWaiting = g.status === "waiting_owner" || g.status === "pending";
               gatesHtml += `<span class="drawer-gate-badge ${isWaiting ? 'waiting' : ''}" title="${E(g.title || g.type)}">
-                ${g.type === "owner" ? "👤 you approve" : "⚖ " + E(g.title || "Review")}: ${badgeHtml(g.verdict || g.status)}
+                ${g.type === "owner" ? "You approve" : E(g.title || "Review")}: ${badgeHtml(g.verdict || g.status)}
               </span>`;
             });
 
@@ -1348,13 +1348,13 @@
             ${path !== "/" ? `
               <tr style="border-bottom:1px solid var(--border-subtle);">
                 <td colspan="4" style="padding:6px;">
-                  📁 <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(path.split('/').slice(0, -1).join('/') || '/')};render();return false">.. (parent directory)</a>
+                  <svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg> <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(path.split('/').slice(0, -1).join('/') || '/')};render();return false">.. (parent directory)</a>
                 </td>
               </tr>
             ` : ""}
             ${(d.list.dirs || []).map(x => `
               <tr style="border-bottom:1px solid var(--border-subtle);">
-                <td style="padding:6px;">📁 <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(x)};window.df=null;render();return false">${E(x.split('/').pop())}</a></td>
+                <td style="padding:6px;"><svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg> <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(x)};window.df=null;render();return false">${E(x.split('/').pop())}</a></td>
                 <td class="mut sm" style="padding:6px;">folder</td>
                 <td class="mut sm" style="padding:6px;">-</td>
                 <td class="mut sm" style="padding:6px;">-</td>
@@ -1362,7 +1362,7 @@
             `).join("")}
             ${(d.list.mounts || []).map(x => `
               <tr style="border-bottom:1px solid var(--border-subtle);">
-                <td style="padding:6px;">🖴 <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(x)};window.df=null;render();return false">${E(x)}</a></td>
+                <td style="padding:6px;"><svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2.5-7.5h8L18.5 13M7.5 16.2h.01"/></svg> <a href="#" style="font-weight:600;color:var(--fg-default);" onclick="window.dpath=${J(x)};window.df=null;render();return false">${E(x)}</a></td>
                 <td class="mut sm" style="padding:6px;">mount</td>
                 <td class="mut sm" style="padding:6px;">-</td>
                 <td class="mut sm" style="padding:6px;">-</td>
@@ -1370,7 +1370,7 @@
             `).join("")}
             ${(d.list.files || []).map(f => `
               <tr style="border-bottom:1px solid var(--border-subtle);">
-                <td style="padding:6px;">${f.dir ? '📁' : '📄'} <a href="#" style="color:var(--fg-default);font-weight:500;" onclick="${f.dir ? `window.dpath=${J(f.path)}` : `window.df=${J(f.path)}`};render();return false">${E(f.path.split('/').pop())}</a></td>
+                <td style="padding:6px;">${f.dir ? '<svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>' : '<svg class="wico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4"/></svg>'} <a href="#" style="color:var(--fg-default);font-weight:500;" onclick="${f.dir ? `window.dpath=${J(f.path)}` : `window.df=${J(f.path)}`};render();return false">${E(f.path.split('/').pop())}</a></td>
                 <td class="mut sm" style="padding:6px;">${f.version ? 'v' + f.version : '-'}</td>
                 <td class="mut sm" style="padding:6px;">${f.size != null ? f.size + ' B' : '-'}</td>
                 <td class="mut sm" style="padding:6px;">${E(f.updated_by || '-')}</td>
