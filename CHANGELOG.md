@@ -2,6 +2,12 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.30.2: infra("phrase") finds the guest
+- **Fix.** `infra("phrase")` answered with the cloudflared tunnel `phrase-lxc` instead of the guest "phrase (LXC 108)":
+  a guest's name carries its id, so the bare name never matched. Guests now also answer to their plain name, and a loose
+  match prefers systems, machines, guests and services over tunnels and URLs.
+- **For agents:** `infra("<guest name>")` works without the "(LXC n)" suffix.
+
 ## v0.30.1: building the map from memory costs a quarter
 - **Why.** On the live hub the first estimate read 6,993 notes for about $24: the note filter matched any note with a
   URL, a port or the word "worker".

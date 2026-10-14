@@ -71,6 +71,9 @@ def _keys(kind: str, name: str, attrs: dict, extra: list[str] = ()) -> list[str]
         ks.append("cred:" + _norm(name.removeprefix("credential ")))
     if kind not in ("service", "storage", "directory", "endpoint"):
         ks.append(f"{kind}:{_norm(name)}")
+        base = re.sub(r"\s*\((?:LXC|VM) \d+\)$", "", name or "")
+        if base != name:  # "phrase (LXC 108)" also answers to "phrase"
+            ks.append(f"{kind}:{_norm(base)}")
     return [k for k in dict.fromkeys(ks) if k and not k.endswith(":")]
 
 
@@ -591,9 +594,11 @@ def resolve(s: Store, query: str) -> str | None:
     for k in [f"svcname:{n}"] + [f"{kind}:{n}" for kind in KINDS if kind != "credential"]:
         if key(k):
             return key(k)
-    r = s.q("SELECT id FROM infra_nodes WHERE hidden=0 AND kind<>'credential' AND lower(name)=? ORDER BY stale, last_seen DESC LIMIT 1",
-            (q.lower(),)) or s.q("SELECT id FROM infra_nodes WHERE hidden=0 AND kind<>'credential' AND lower(name) LIKE ? "
-                                 "ORDER BY stale, length(name) LIMIT 1", (f"%{q.lower()}%",))
+    rank = "CASE WHEN kind IN ('system','machine','guest','service') THEN 0 ELSE 1 END"  # things that run, before their URLs
+    r = s.q(f"SELECT id FROM infra_nodes WHERE hidden=0 AND kind<>'credential' AND lower(name)=? ORDER BY stale, {rank}, "
+            "last_seen DESC LIMIT 1", (q.lower(),)) or s.q(f"SELECT id FROM infra_nodes WHERE hidden=0 AND kind<>'credential' AND "
+                                                         f"lower(name) LIKE ? ORDER BY stale, {rank}, length(name) LIMIT 1",
+                                                         (f"%{q.lower()}%",))
     return r[0]["id"] if r else key(f"cred:{n}") or key(f"credential:{n}")
 
 

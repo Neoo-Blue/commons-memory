@@ -233,3 +233,12 @@ def test_stats_related_and_the_graph_explorer_source(tmp_path):
     html = gv.render({"nodes": {n["id"]: {"name": n["name"], "type": n["kind"]} for n in I.graph(s)["nodes"]},
                       "edges": [{"src": e["src"], "dst": e["dst"], "type": e["rel"]} for e in I.graph(s)["edges"]]}, "Infrastructure")
     assert "arrstack (LXC 106)" in html and "machine: '#f97316'" in html
+
+
+def test_a_bare_guest_name_finds_the_guest_before_a_tunnel_with_that_word(tmp_path):
+    s = make_store(tmp_path, "i12.db")
+    snap = _snap()
+    snap["entities"].append({"key": "tun/phrase", "kind": "tunnel", "name": "arrstack-tunnel"})
+    I.ingest_snapshot(s, snap)
+    assert I.node(s, I.resolve(s, "arrstack"))["kind"] == "guest"
+    assert I.node(s, I.resolve(s, "arrst"))["kind"] == "guest"
