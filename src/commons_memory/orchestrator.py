@@ -480,6 +480,109 @@ class Orchestrator:
         self.s.audit(agent_id, "job.cancel", job_id, reason)
         return self.status(job_id, brief=True)
 
+    # ---------------------------------------------------------------- the owner steering steps (dashboard, tools)
+    def _step(self, subtask_id: str) -> dict:
+        r = self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))
+        if not r:
+            raise CommonsError(f"unknown subtask {subtask_id}")
+        return dict(r[0])
+
+    def _agent_step(self, st: dict) -> None:
+        if st["status"] in ("done", "cancelled"):
+            raise CommonsError(f"this step is {st['status']}")
+        if st["type"] in ("owner", "tally"):
+            raise CommonsError("owner and tally steps aren't done by agents")
+
+    def _drop_claim(self, st: dict, why: str) -> None:
+        """The step's old holder learns at once that it no longer owns it; a fresh wake goes out for it."""
+        self.s.x("DELETE FROM meta WHERE key LIKE ?", (f"woke:{st['id']}:%",))
+        if st["status"] == "claimed" and st["claimed_by"]:
+            from .messaging import emit
+            emit(self.s, st["claimed_by"], "lease_expired", ref=st["id"], preview=f"{why}: {st['title'] or ''}",
+                 job=st["job_id"], subtask=st["id"])
+
+    def _step_view(self, subtask_id: str) -> dict:
+        st = self._step(subtask_id)
+        who = st["claimed_by"] or st["assigned_agent"]
+        return {"subtask_id": subtask_id, "status": st["status"], "attempts": st["attempts"],
+                "max_attempts": st["max_attempts"], "assigned_to": self.s.label(who)[1] if who else None,
+                "pinned": bool(self._pin(subtask_id)), "job_id": st["job_id"],
+                "job_status": self.s.q("SELECT status FROM jobs WHERE id=?", (st["job_id"],))[0]["status"]}
+
+    def retry_step(self, subtask_id: str, agent_id: str | None = None) -> dict:
+        """A failed or stuck step goes back to pending with one more attempt and is routed afresh (pinned work stays
+        with its agent). Agents that failed it may take it again: the owner asked. Its checks re-run on the new
+        attempt, and a rejected check's feedback goes with it. A failed job is running again."""
+        st = self._step(subtask_id)
+        self._agent_step(st)
+        job = self.s.q("SELECT status FROM jobs WHERE id=?", (st["job_id"],))[0]["status"]
+        if job not in ("running", "failed"):
+            raise CommonsError(f"the job is {job}")
+        gates = [self._step(g) for g in json.loads(st["gates"] or "[]")]
+        fb = "\n\n".join(f"[{x['type']} feedback]\n{x['result']}" for x in gates
+                         if x["status"] == "done" and x["verdict"] == "reject")
+        budget = max(st["max_attempts"], st["attempts"]) + 1
+        with self.s.lock:  # only from the state read above: a claim or completion in between wins
+            won = self.s.db.execute(
+                "UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, assigned_agent=?, "
+                "excluded_agents='[]', not_before=NULL, max_attempts=?, body=?, updated_at=? WHERE id=? AND status=?",
+                (self._pin(subtask_id), budget, st["body"] + (f"\n\n--- REWORK REQUIRED ---\n{fb}" if fb else ""),
+                 now(), subtask_id, st["status"])).rowcount
+        if won != 1:
+            raise CommonsError("the step changed meanwhile: reload and try again")
+        self._drop_claim(st, "retried by the owner")
+        self._reset_gates(gates)
+        self.s.x("UPDATE jobs SET status='running', updated_at=? WHERE id=? AND status='failed'", (now(), st["job_id"]))
+        self.s.audit(agent_id, "subtask.retry", subtask_id, {"was": st["status"], "max_attempts": budget})
+        self.allocate(st["job_id"])
+        return self._step_view(subtask_id)
+
+    def reassign_step(self, subtask_id: str, agent: str, agent_id: str | None = None) -> dict:
+        """Move a pending or claimed step to the named agent and keep it there (pinned, like a DAG's `agent`): the claim
+        is dropped, and the agent is woken when the step is ready."""
+        st = self._step(subtask_id)
+        self._agent_step(st)
+        if st["status"] not in ("pending", "claimed"):
+            raise CommonsError(f"this step is {st['status']}: only pending or claimed steps move")
+        a = self.s.get_agent(agent or "")
+        if not a:
+            raise CommonsError(f"unknown agent {agent}")
+        if a["id"] in self._author_of_chain(st):
+            raise CommonsError(f"{a['name']} did the work this step checks: a check needs another agent")
+        excl = [x for x in json.loads(st["excluded_agents"] or "[]") if x != a["id"]]
+        with self.s.lock:
+            won = self.s.db.execute(
+                "UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, assigned_agent=?, "
+                "excluded_agents=?, not_before=NULL, updated_at=? WHERE id=? AND status=? AND claimed_by IS ?",
+                (a["id"], _j(excl), now(), subtask_id, st["status"], st["claimed_by"])).rowcount
+        if won != 1:
+            raise CommonsError("the step changed meanwhile: reload and try again")
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{subtask_id}", a["id"]))
+        self.s.relate(subtask_id, a["id"], "assigned_to")
+        self._drop_claim(st, f"moved to {a['name']}")
+        old = st["claimed_by"] or st["assigned_agent"]
+        self.s.audit(agent_id, "subtask.reassign", subtask_id, {"from": self.s.label(old)[1] if old else None,
+                                                                 "to": a["name"]})
+        if not self._deps_ok(st):  # not ready yet: a heads-up now, the real wake when its dependencies are done
+            from .messaging import emit
+            emit(self.s, a["id"], "task_assigned", ref=subtask_id, preview=st["title"] or "", job=st["job_id"],
+                 subtask=subtask_id)
+        self._wake_ready(st["job_id"])
+        return self._step_view(subtask_id)
+
+    def retry_job(self, job_id: str, agent_id: str | None = None) -> dict:
+        """A failed job runs again: every failed step is retried and the job is back to running."""
+        status = self.status(job_id, brief=True)["status"]
+        if status != "failed":
+            raise CommonsError(f"the job is {status}: only a failed job is retried")
+        ids = [r["id"] for r in self.s.q("SELECT id FROM subtasks WHERE job_id=? AND status='failed' AND type NOT IN "
+                                         "('owner','tally') ORDER BY created_at", (job_id,))]
+        for sid in ids:
+            self.retry_step(sid, agent_id)
+        self.s.x("UPDATE jobs SET status='running', updated_at=? WHERE id=? AND status='failed'", (now(), job_id))
+        self.s.audit(agent_id, "job.retry", job_id, {"steps": ids})
+        return self.status(job_id, brief=True) | {"retried": ids}
+
     def jobs(self, status: str | None = None, limit: int = 50) -> list[dict]:
         sql = "SELECT id FROM jobs" + (" WHERE status=?" if status else "") + " ORDER BY created_at DESC LIMIT ?"
         return [self.status(r["id"]) for r in self.s.q(sql, ([status] if status else []) + [limit])]
@@ -1021,9 +1124,13 @@ class Orchestrator:
 
     def _rework(self, g: dict, gates: list[dict], feedback: str) -> None:
         """Send gated work back to its author with the feedback; every gate re-runs on the new revision."""
-        from . import board as B
         self.s.x("UPDATE subtasks SET status='pending', body=?, assigned_agent=?, claimed_by=NULL, updated_at=? "
                  "WHERE id=?", (g["body"] + "\n\n--- REWORK REQUIRED ---\n" + feedback, g["claimed_by"], now(), g["id"]))
+        self._reset_gates(gates)
+        self.allocate(g["job_id"])  # route the rework (and wake the author) instead of waiting for a poll
+
+    def _reset_gates(self, gates: list[dict]) -> None:
+        from . import board as B
         for x in gates:
             self.s.x("UPDATE subtasks SET status='pending', verdict=NULL, claimed_by=NULL, updated_at=? WHERE id=?",
                      (now(), x["id"]))
@@ -1033,7 +1140,6 @@ class Orchestrator:
                 self.s.x("DELETE FROM meta WHERE key=?", (f"ownerq:{x['id']}",))
                 if B.get(self.s, q[0]["value"]).get("status") != "done":
                     B.update(self.s, q[0]["value"], status="done", evidence="superseded: the work went back for rework")
-        self.allocate(g["job_id"])  # route the rework (and wake the author) instead of waiting for a poll
 
     def _fail(self, subtask_id: str, why: str) -> None:
         st = dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0])

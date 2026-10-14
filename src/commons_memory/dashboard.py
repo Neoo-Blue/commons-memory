@@ -30,9 +30,10 @@ class API:
         self.s, self.o, self.u, self.b = store, Orchestrator(store), Usage(store), Broker(store)
 
     def overview(self, q):
+        from . import board as B
         st = self.s.stats()
         return st | {"paused": self.o.paused(), "spent_24h": round(self.u.spent_today(), 4),
-                     "open_leftovers": len(self.o.leftovers()),
+                     "open_leftovers": len(self.o.leftovers()), "needs_user": B.needs_user(self.s),
                      "running_jobs": self.s.q("SELECT COUNT(*) c FROM jobs WHERE status='running'")[0]["c"]}
 
     def agents(self, q):
@@ -77,6 +78,62 @@ class API:
                                             (q["id"],))]
         return st
 
+    def job_detail(self, q):
+        """Everything a job drawer shows in one call: the job, its steps with their latest routing, the workspace
+        folder, and for a six-stage workflow the Workflow page's view."""
+        from .workspace import folder
+        r = self.s.q("SELECT * FROM jobs WHERE id=?", (q.get("id") or "",))
+        if not r:
+            raise CommonsError(f"unknown job {q.get('id')}")
+        job = dict(r[0])
+        route = {x["subtask_id"]: x for x in self.s.q("SELECT subtask_id, model, level, rationale FROM routing_decisions "
+                                                      "WHERE job_id=? ORDER BY created_at", (job["id"],))}  # last wins
+        subs = []
+        for s in self.s.q("SELECT * FROM subtasks WHERE job_id=? ORDER BY created_at", (job["id"],)):
+            who, rd, res = s["claimed_by"] or s["assigned_agent"], route.get(s["id"]), s["result"] or ""
+            subs.append({k: s[k] for k in ("id", "key", "type", "title", "status", "attempts", "max_attempts", "verdict",
+                                           "gate_of")}
+                        | {"agent": self.s.label(who)[1] if who else None, "deps": json.loads(s["deps"] or "[]"),
+                           "result": res[:300] + ("…" if len(res) > 300 else ""), "created_at": iso(s["created_at"]),
+                           "updated_at": iso(s["updated_at"]),
+                           "route": {"model": rd["model"], "effort": rd["level"], "rationale": rd["rationale"]} if rd else None})
+        pid = job.pop("project_id")
+        out = {"job": job | {"project": self.s.project_name(pid) if pid else None,
+                             "submitted_by": self.s.label(job["submitted_by"])[1] if job["submitted_by"] else None,
+                             "budget": json.loads(job["budget"] or "{}"), "used": json.loads(job["used"] or "{}"),
+                             "created_at": iso(job["created_at"]), "updated_at": iso(job["updated_at"])},
+               "subtasks": subs, "folder": folder(job["id"])}
+        if job["pattern"] == "sdlc":
+            from .sdlc import view
+            out["workflow"] = view(self.s, job["id"])
+        return out
+
+    def agent_detail(self, q):
+        """What an agent drawer shows: presence, profile, models, usage windows, its last 10 steps, CLI version and
+        unread mail."""
+        from . import quota as Q
+        from .agentcli import listing
+        from .messaging import Messaging, presence
+        a = self.s.get_agent(q.get("name") or "")
+        if not a:
+            raise CommonsError(f"unknown agent {q.get('name')}")
+        prof = json.loads(a["profile"] or "{}")
+        ok, until, win = Q.can_take(self.s, a["id"])
+        recent = self.s.q("SELECT t.id, t.job_id, t.title, t.status, t.updated_at, j.title job FROM subtasks t JOIN jobs j "
+                          "ON j.id=t.job_id WHERE t.claimed_by=? OR t.assigned_agent=? ORDER BY t.updated_at DESC LIMIT 10",
+                          (a["id"], a["id"]))
+        return {"name": a["name"], "id": a["id"], "platform": a["platform"], "vendor": a["vendor"], "model": a["model"],
+                "presence": presence(self.s, a["id"]),
+                "profile": {k: prof.get(k) for k in ("expertise", "cost", "speed", "max_concurrent")},
+                "models": [r["model_id"] for r in self.s.q("SELECT model_id FROM agent_models WHERE agent_id=? "
+                                                           "ORDER BY model_id", (a["id"],))],
+                "usage": {"can_take_work": ok, "waits_until": iso(until) if until else None, "blocking_window": win,
+                          "windows": next((x["windows"] for x in Q.status(self.s) if x["agent"] == a["name"]), [])},
+                "recent": [{"subtask_id": r["id"], "job_id": r["job_id"], "job": r["job"], "title": r["title"],
+                            "status": r["status"], "updated_at": iso(r["updated_at"])} for r in recent],
+                "cli": next((c for c in listing(self.s) if c["agent"] == a["name"]), None),
+                "unread": Messaging(self.s).unread(a["id"])}
+
     def usage(self, q):
         return {"by": q.get("by", "agent"), "rows": self.u.summary(q.get("by", "agent")),
                 "daily": self.u.summary("day"), "spent_24h": self.u.spent_today()}
@@ -112,6 +169,9 @@ class API:
         """Every board item (newest projects first) with project names; the page filters and nests client-side."""
         from . import board as B
         rows = [B.get(self.s, r["id"]) for r in self.s.q("SELECT id FROM board ORDER BY created_at LIMIT 2000")]
+        for r in rows:
+            if r["kind"] == "question" and r["status"] in B.OPEN:
+                r["choices"] = B.choices(r["text"])
         return {"items": rows, "projects": sorted({r["project"] for r in rows if r["project"]})}
 
     def audit(self, q):
@@ -350,6 +410,9 @@ class API:
         if path == "/api/setup/provider":
             from .onboarding import set_provider
             return set_provider(self.s, body.get("kind", ""), body.get("key") or "", body.get("base_url") or "")
+        if path == "/api/setup/provider_test":
+            from .onboarding import check_provider
+            return check_provider(self.s, body.get("kind", ""))
         if path == "/api/setup/provider_rm":
             from .onboarding import remove_provider
             return remove_provider(self.s, body.get("kind", ""))
@@ -456,6 +519,12 @@ class API:
             return self.o.set_paused(bool(body["paused"]), body.get("reason", "dashboard kill switch"))
         if path == "/api/job/cancel":
             return self.o.cancel(body["id"], "cancelled from dashboard")
+        if path == "/api/job/retry":
+            return self.o.retry_job(body["id"])
+        if path == "/api/subtask/retry":
+            return self.o.retry_step(body["id"])
+        if path == "/api/subtask/reassign":
+            return self.o.reassign_step(body["id"], body.get("agent") or "")
         if path == "/api/leftover/resolve":
             return self.o.resolve_leftover(body["id"], "resolved from dashboard")
         if path == "/api/kb/refresh":
@@ -764,11 +833,11 @@ def make_handler(api: API, token: str | None):
     return H
 
 
-# changes an agent on the LAN could use to approve itself, reach a key, or mint a key: once a PIN exists they need the
-# browser the owner unlocked with it
+# changes an agent on the LAN could use to approve itself, reach a key, mint a key, or pick who does the work: once a
+# PIN exists they need the browser the owner unlocked with it
 OWNER_ONLY = ("/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
               "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
-              "/api/librarian/config", "/api/skill/review", "/api/killswitch")
+              "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry")
 
 
 def _host_allowed(host_hdr: str, s: Store | None = None) -> bool:

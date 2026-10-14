@@ -45,6 +45,21 @@ def set_provider(s: Store, kind: str, key: str = "", base_url: str = "") -> dict
     return {"provider": kind, "ready": True}
 
 
+def check_provider(s: Store, kind: str) -> dict:
+    """Does the stored key work? Lists the provider's models (refreshing the registry). Answers with a count or a short
+    reason, never the key."""
+    if kind == "typesafe":
+        return {"ok": False, "models": 0, "error": "TypeSafe has no model list to check"}
+    if not s.q("SELECT 1 FROM providers WHERE name=?", (kind,)):
+        return {"ok": False, "models": 0, "error": f"{kind or 'that provider'} is not set up"}
+    from .providers import ProviderLayer
+    pl = ProviderLayer(s)
+    seen = pl.refresh_models(kind)["models_seen"]
+    err = pl._p(kind)["last_error"]
+    s.audit(None, "setup.provider_test", kind, {"ok": not err})
+    return {"ok": not err, "models": 0 if err else seen, "error": " ".join((err or "").split())[:160]}
+
+
 def remove_provider(s: Store, kind: str) -> dict:
     V.remove(s, _cred(kind))
     s.x("DELETE FROM providers WHERE name=?", (kind,))

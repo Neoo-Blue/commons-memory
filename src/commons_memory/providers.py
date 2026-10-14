@@ -176,7 +176,7 @@ class ProviderLayer:
             try:
                 models = self._fetch_models(p)
             except Exception as e:  # noqa: BLE001
-                self.s.x("UPDATE providers SET last_error=? WHERE name=?", (str(e)[:300], name))
+                self.s.x("UPDATE providers SET last_error=? WHERE name=?", (self._scrub(p, str(e))[:300], name))
                 continue
             for m in models:
                 seen += 1
@@ -187,6 +187,14 @@ class ProviderLayer:
         if new:
             self.s.audit(None, "models.new", ",".join(new))
         return {"providers": names, "models_seen": seen, "new_models": new}
+
+    def _scrub(self, p: dict, text: str) -> str:
+        """A provider's error can quote the key back: it is never stored or shown."""
+        try:
+            key = self._key(p)
+        except Exception:  # noqa: BLE001 - the key itself may be what failed
+            key = None
+        return redact(text.replace(key, "[key]") if key else text)[0]
 
     def _upsert_model(self, name: str, m: dict) -> bool:
         """Record one model of a provider (or an agent's own catalog); True when it is NEW since the first listing."""

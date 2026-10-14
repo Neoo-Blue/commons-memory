@@ -160,8 +160,42 @@ def needs_user(s: Store, project: str | None = None) -> list[dict]:
                    (d["parent"], d["id"])) if d.get("parent") else [{"n": 0}]
         d["holding_up"] = held[0]["n"]
         d["blocks"] = get(s, d["parent"])["text"][:160] if d.get("parent") else None
+        d["choices"] = choices(d["text"])
         out.append(d)
     return out
+
+
+YESNO = re.compile(r"(?i)(should|shall|can|could|may|might|do|does|did|is|are|was|were|will|would|have|has|am)\b")
+
+
+def choices(text: str) -> list[str]:
+    """Up to 4 one-tap answers read from a question's wording: "X or Y?" -> [X, Y], "A, B, or C?" -> [A, B, C], a
+    yes/no question -> ["Yes", "No"], anything less clear -> []. Approval questions have their own page: none."""
+    t = (text or "").strip()
+    if t.startswith(("[vault ", "[mcp ", "[gate ", "[rework ")):
+        return []
+    qs = [p for p in re.split(r"(?<=[.!?])\s+|\n", t) if "?" in p]
+    if not qs:
+        return []
+    q = qs[-1][:qs[-1].rindex("?")].rsplit(":", 1)[-1].strip()  # the last question; "Which one: A or B?" -> "A or B"
+    parts = [p.strip(" '\"`;") for p in re.split(r",\s+(?:or\s+)?|\s+or\s+", q, flags=re.I)]
+    if not re.search(r"(?i)\bor\b", q):
+        return ["Yes", "No"] if YESNO.match(q) or YESNO.match(q.rsplit(", ", 1)[-1]) else []
+    if parts[-1].lower() in ("not", "no"):  # "Should we ship it or not?"
+        return ["Yes", "No"]
+    words = lambda p: len(p.split())  # noqa: E731
+    opts = [parts[-1]]
+    for p in reversed(parts[:-1]):  # list items are about as long as the last one; a longer piece holds the first
+        if words(p) <= words(parts[-1]) + 1:  # option behind its question words ("Should we use React")
+            opts.insert(0, p)
+            continue
+        opts.insert(0, " ".join(p.split()[-max(map(words, opts)):]))
+        break
+    opts = [re.sub(r"(?i)^to\s+", "", o) for o in opts]
+    if not 2 <= len(opts) <= 4 or any(not o or words(o) > 6 or len(o) > 40 for o in opts) \
+            or any(YESNO.match(o) for o in opts[1:]):  # "deploy now or should I wait?" reads both ways
+        return []
+    return [o[0].upper() + o[1:] for o in opts]
 
 MENTION = re.compile(r"(?<![\w.])@([A-Za-z0-9][A-Za-z0-9_.-]{0,63})")
 
