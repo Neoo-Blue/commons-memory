@@ -648,7 +648,9 @@ setTimeout(() => syncDrawer(), 0);  // a #Page?drawer=<id> link opens once every
 
 return {
   toast: toastFn, optimistic, menu, action, copy, kv, spark, empty, skeleton, on, emit, refresh, noteChange, fuzzy, go: nav,
-  drawer: { open: dOpen, close: () => dClose(), on: drawerOn },
+  drawer: { open: dOpen, close: () => dClose(), on: drawerOn,
+            // open whatever drawer owns an id like "job:..." or "agent:...": one drawer per thing across every page
+            openId: id => { const fn = openerFor(String(id)); if (!fn) return false; fn(String(id)); return true; } },
   palette: { open: pOpen, close: () => pClose(), isOpen: () => !!P.el },
   keys: { bind, help, parse, fromEvent, kbd },
   fmt: { num, money, ago, tokens },
