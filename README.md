@@ -66,7 +66,7 @@ effect is real but not yet measured. Rival columns come from each project's own 
 
 | Feature | Without it → with it | mem0 | claude-mem | MemPalace | Archify |
 |---|---|---|---|---|---|
-| Hybrid search + neighbouring turns + date resolution | LoCoMo QA 69.5% → **78.8%**; LongMemEval QA 62% → **67%** (temporal 53% → 63%) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
+| Hybrid search + neighbouring turns (short hits) + date resolution | LoCoMo QA 69.5% → **78.7%**; LongMemEval QA unchanged by neighbours (65% either way, where giving them to every hit costs points) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
 | Indexed search | p50 at 30k memories 1,383 ms → **68 ms** | — | — | — | · |
 | Redesigned dashboard | answer, approve, retry, move or cancel from the page you are on instead of hunting across 32 tabs; every page works on a phone (not benchmarked) | — | — | — | — |
 | Lean tool list | tool schemas per session 39.7k → **6.3k tokens** (−84%) | — | — | 45 MCP tools | · |
@@ -222,7 +222,7 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (v0.9.0; LongMemEval QA on v0.20, tool sizes on v0.23)
+## Benchmarks (v0.9.0; QA on v0.28, tool sizes on v0.23)
 Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
 results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
@@ -230,8 +230,8 @@ results are in [benchmarks/README.md](benchmarks/README.md); every number is rep
 |---|---|---|
 | LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.4% / 76.5%** (v0.8: 31.2 / 71.1); reproduced on v0.21.1, [results](benchmarks/results/v0.21.1/) |
 | LoCoMo retrieval | evidence-session any@10 | **97.4%** (v0.8: 95.8) |
-| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.8%** with `context=2` and date resolution (69.5% for hits alone); no LLM at write time |
-| LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **67%** on v0.20.1 (v0.9: 62%); temporal 63% (v0.9: 53%). Hits alone: on its long sessions neighbouring turns cost 7 to 10 points (1 turn each side 60%, 2 turns 57%), nearly all in temporal reasoning (63% → 40% → 30%), so Commons hands the reader the hits, dated |
+| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.7%** with `context=2` (short hits, v0.28) and date resolution (78.5% when every hit gets neighbours, 69.5% for hits alone); no LLM at write time |
+| LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **65%** on v0.28 (67% on v0.20.1, run-to-run noise of a few points; v0.9: 62%). Since v0.28 neighbouring turns go only to short hits, so they no longer cost points on its long sessions (65% with or without them; 54.0% when every hit gets them) |
 | Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
 | Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer) | **6,291** for the 31 core tools in v0.23; listing all 183 would cost 39,710 |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |

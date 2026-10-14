@@ -4,6 +4,27 @@ Every number below is reproducible with `commons bench ...`; per-question result
 [`results/`](results/). Measurements were taken on an 8-core Apple M1 laptop that was running other jobs at the same
 time, so latencies are conservative.
 
+## v0.28.0: neighbouring turns only around short hits
+
+Same protocol as below (Haiku 4.5 reader and judge, k=20, date resolution), all runs on the v0.28 code through the
+Message Batches API. Neighbouring turns help a short reply ("yes, last week" needs the question it answers) and bury a
+long, self-contained turn, so `search(context=N)` and `--neighbors` now give them only to hits up to 320 characters.
+Chosen offline first: on the retrieved context of every question, the rule keeps all of LoCoMo's evidence-turn recall
+with neighbours (94.0% of questions with an evidence turn in context, vs 94.0% for every hit and 84.0% for hits
+alone) while LongMemEval's context stays the size of hits alone (11.1k vs 10.9k characters; 22.9k with neighbours for
+every hit). A relevance rule on top (keep a long hit's neighbour when it is closer to the question than the hit) moved
+LongMemEval by 1 question in 100 and was left out.
+
+| Run | LoCoMo QA (1,540) | LongMemEval QA (100) |
+|---|---|---|
+| hits alone | 69.5% (v0.9) | **65.0%** |
+| neighbours (2) for every hit | 78.5% | 54.0% (temporal 26.7%) |
+| **neighbours (2) for short hits (v0.28)** | **78.7%** | **65.0%** |
+
+LoCoMo by category (v0.28 rule): multi-hop 61.7, temporal 80.4, open-domain 46.9, single-hop 87.4. LongMemEval: the
+rule matches hits alone overall and in temporal reasoning (56.7% both). Cost of the five runs: $6.98. Results:
+[`results/v0.28.0/`](results/v0.28.0/).
+
 ## v0.9.0
 
 ### Retrieval: LoCoMo (10 conversations, 1,982 questions with evidence)

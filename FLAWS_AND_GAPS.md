@@ -119,8 +119,8 @@ Tests: `pytest` gives 109 passed and 1 skipped on SQLite. The skipped one is the
 ### Still open after v0.9
 | Risk / gap | Why |
 |---|---|
-| LongMemEval QA | 67% on a 100-question sample at v0.20.1 (62% at v0.9). Neighbouring-turn context drops it to 57% (temporal 63% -> 30%) because its turns are long, so `--neighbors` helps short-turn logs (LoCoMo +9) and hurts long sessions; no rival was run on it here. |
-| Context costs reader tokens | `context=2` lifted LoCoMo QA from 69.5% to 78.8% (beating mem0 70.3% in every category) but gives the reader ~2.5x more text; `context=0` stays the default for search. |
+| LongMemEval QA | 65% on a 100-question sample at v0.28 (67% at v0.20.1, 62% at v0.9). Neighbouring turns used to drop it (57% at v0.20.1, 54.0% at v0.28 when every hit gets them) because its turns are long; since v0.28 only hits up to 320 characters get them, which keeps LoCoMo's +9 and costs LongMemEval nothing. No rival was run on it here. |
+| Context costs reader tokens | `context=2` lifts LoCoMo QA from 69.5% to 78.7% (beating mem0 70.3% in every category) but gives the reader ~3x more text on short-turn logs; `context=0` stays the default for search. |
 | Postgres speed | As wired (one connection, translated SQLite dialect, many small queries) it is 4-10x slower than SQLite in `bench scale`; use it to share a database, not for speed. |
 | Per-thread SQLite readers | `COMMONS_SQLITE_READERS=1` exists but measured slower on an oversubscribed Mac; off until measured on the target host. |
 | Instant wake for chat-only AIs | A browser chat can't run while idle. Commons wakes daemon-backed agents instantly; chat agents see work on their next `msg_recv`. |

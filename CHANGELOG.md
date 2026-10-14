@@ -17,7 +17,10 @@ All notable changes, newest first. The README describes the current release only
   existing rows once. Limit: someone who can write the database can rebuild the whole chain or cut the newest rows; a
   signed export (`commons audit-export`) pins the head, so compare against your last one.
 - **Neighbouring turns only where they help.** `search(context=N)` (and `bench qa-* --neighbors`) now gives the turns
-  around a hit only when the hit is short (up to 320 characters). BENCH_LINE `COMMONS_CONTEXT_PRUNE=0` restores the old behaviour.
+  around a hit only when the hit is short (up to 320 characters): a reply needs the turn it answers, a long turn stands
+  alone and extra turns bury it. LoCoMo QA 78.7% (78.5% when every hit gets them, 69.5% for hits alone); LongMemEval
+  65.0%, the same as hits alone, where giving every hit its neighbours scored 54.0%. `COMMONS_CONTEXT_PRUNE=0` restores
+  the old behaviour.
 - **Optional sqlite-vec search.** `COMMONS_SQLITE_VEC=1` with the `[vec]` extra (now in the Docker image) runs vector
   search inside SQLite instead of a numpy matrix held in memory: peak memory at 50,000 memories 926 MB -> 237 MB, but
   the vector scan is about 20x slower (90-110 ms vs 5 ms), so it stays off by default; turn it on for a Pi or a small VPS.

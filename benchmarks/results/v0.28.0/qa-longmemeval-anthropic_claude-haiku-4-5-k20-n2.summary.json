@@ -1,0 +1,52 @@
+{
+  "benchmark": "qa-longmemeval",
+  "reader": "anthropic/claude-haiku-4-5",
+  "judge": "anthropic/claude-haiku-4-5",
+  "k": 20,
+  "n": 100,
+  "accuracy": 0.65,
+  "cost": 0.1791,
+  "by_type": {
+    "knowledge-update": {
+      "n": 8,
+      "accuracy": 0.75
+    },
+    "knowledge-update_abs": {
+      "n": 1,
+      "accuracy": 1.0
+    },
+    "multi-session": {
+      "n": 22,
+      "accuracy": 0.5909
+    },
+    "multi-session_abs": {
+      "n": 3,
+      "accuracy": 1.0
+    },
+    "single-session-assistant": {
+      "n": 11,
+      "accuracy": 0.5455
+    },
+    "single-session-preference": {
+      "n": 5,
+      "accuracy": 0.0
+    },
+    "single-session-user": {
+      "n": 18,
+      "accuracy": 0.9444
+    },
+    "single-session-user_abs": {
+      "n": 1,
+      "accuracy": 1.0
+    },
+    "temporal-reasoning": {
+      "n": 30,
+      "accuracy": 0.5667
+    },
+    "temporal-reasoning_abs": {
+      "n": 1,
+      "accuracy": 1.0
+    }
+  },
+  "commons_version": "0.28.0"
+}
