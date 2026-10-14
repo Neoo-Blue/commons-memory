@@ -56,6 +56,7 @@ Connect a second AI the same way and it can see the first one's memory immediate
 | **Skills & tools** | Shared skill pool with versioning, review gate and rollback: any model loads a skill with `skill(name)` and nothing installed, sees pool skills natively in its skills list, and asks another agent with `skill_help` when it can't run one · MCP prompts (slash commands like /checkin, /wrapup) and resources · MCP hub that proxies upstream servers with per-agent policy, keys from the vault, and approvals decided by your decision chain · research · Commons Drive (versioned shared files; S3, WebDAV, SFTP…) | [docs/drive.md](docs/drive.md) |
 | **You** | Preferences learned once and applied by every AI · retro learning from your past Claude/ChatGPT/Codex/Cursor history (review queue) · `commons import claude-mem|mem0|claude-memory|sesame [--curate]` with an AI manager that keeps, merges or drops each item | [docs/retro-learning.md](docs/retro-learning.md) |
 | **Access & audit** | Project ACLs plus row-level access: one memory, decision, board item or file can be limited to named agents (`restrict`, `remember(visible_to=...)`), and it then disappears from everyone else's search, graph, board, Drive and the shared knowledge base · signed, hash-chained audit export (`commons audit-export`, `audit-verify --key`) that proves nothing was edited, dropped or re-signed · secrets redacted everywhere, keys only through the vault | [docs/configuration.md](docs/configuration.md) |
+| **Dashboard** | Five workspaces (Home, Work, Agents, Knowledge, System) instead of a flat list of 32 pages. The Overview leads with what needs you: one-tap answers to agents' questions and your approvals. Every job and agent opens in a deep-linkable drawer with owner actions (retry or move a step, retry or cancel a job, update an agent's tool). Command palette (⌘K), keyboard shortcuts (`g o`, `g w`, `?`), working Back and Forward, toasts with Undo, dark and light themes, a bottom bar and sub-tabs on phones, and an optional password lock for the whole dashboard | [docs/guide.md](docs/guide.md) |
 | **Operations** | Setup page with a first-run checklist (keys, decision order, credentials, features) · model presets: with one provider key, planning, knowledge-base summaries and preference extraction just work (Haiku with an Anthropic key), summaries cached by content · Message Batches (half price) for curated imports and benchmarks · `commons setup` connects 17 AI clients in one command and `commons doctor --repair` fixes a broken connection · dashboard (30 pages, live updates) · usage and cost by agent/model/project · kill switch · backups, retention, dump/restore · Postgres + pgvector · SQLCipher · OpenTelemetry · Docker | [docs/networking.md](docs/networking.md) |
 
 ## What each feature buys you
@@ -67,6 +68,7 @@ effect is real but not yet measured. Rival columns come from each project's own 
 |---|---|---|---|---|---|
 | Hybrid search + neighbouring turns + date resolution | LoCoMo QA 69.5% → **78.8%**; LongMemEval QA 62% → **67%** (temporal 53% → 63%) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
 | Indexed search | p50 at 30k memories 1,383 ms → **68 ms** | — | — | — | · |
+| Redesigned dashboard | answer, approve, retry, move or cancel from the page you are on instead of hunting across 32 tabs; every page works on a phone (not benchmarked) | — | — | — | — |
 | Lean tool list | tool schemas per session 39.7k → **6.3k tokens** (−84%) | — | — | 45 MCP tools | · |
 | Verbatim capture hooks + `turn()` for chat apps | nothing said is lost to an agent's own summary; Claude Code, Codex, Gemini, Cursor, any chat app | ◐ | ✓ (8+ harnesses) | ✓ (3 clients) | · |
 | Project board | your asks survive compaction and agent switches; asked-twice is counted | · | · | · | · |
@@ -133,17 +135,16 @@ custom instructions. It is generated from the same master instructions, so it ne
 every agent the same playbook on its first check-in and whenever it changes.
 
 ## Screenshots
-Captured from a demo database (`examples/demo_multi_agent.py`); keys are redacted.
+Captured from a demo hub (`python scripts/demo_seed.py demo.db`): made-up agents, jobs and memories.
 
 | | |
 |---|---|
-| ![Overview](docs/screenshots/overview.png)<br>**Overview**: totals, spend, live agents | ![Board](docs/screenshots/board.png)<br>**Board** (new): what you asked, targets, actions and deliveries per project and layer |
-| ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: projects, jobs, agent load vs capacity | ![Board on a phone](docs/screenshots/board-mobile.png)<br>**On a phone**: every page works at 390 px |
-| ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent** (new in 0.8.1): pick a client, create a key, copy, verify | ![Task breakdown](docs/screenshots/task-breakdown.png)<br>**Task breakdown**: the job DAG with routing reasons per subtask |
-| ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph | ![Org chart](docs/screenshots/org-chart.png)<br>**Org chart**: workspace → projects → jobs → agents |
-| ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: auto-built, cited KB per project | ![Skills](docs/screenshots/skills.png)<br>**Skills**: shared pool with versions and review |
-| ![Drive](docs/screenshots/drive.png)<br>**Drive**: versioned shared files | ![Usage](docs/screenshots/usage.png)<br>**Usage**: cost and budgets by agent, model and project |
-| ![Presence](docs/screenshots/presence.png)<br>**Presence**: agent feed, messages and wake channels | |
+| ![Overview](docs/screenshots/overview.png)<br>**Overview**: what needs you first (one-tap answers, approvals), then spend, running jobs, the team and activity | ![Jobs cockpit](docs/screenshots/workflow.png)<br>**Jobs**: every job with live filters; a job opens in a drawer with its stage spine, steps, routing and owner actions |
+| ![Agents](docs/screenshots/agents.png)<br>**Agents**: the fleet, what each is doing, its models, quota and tool version; click for the agent drawer | ![On a phone](docs/screenshots/phone.png)<br>**On a phone**: every page works at 390 px, with a bottom bar and sub-tabs |
+| ![Board](docs/screenshots/board.png)<br>**Board** (light theme): what you asked, targets and deliveries, with one-click Done and Undo | ![Usage](docs/screenshots/usage.png)<br>**Usage**: spend and tokens per day by agent, 7 to 30 days |
+| ![Memory](docs/screenshots/memory.png)<br>**Memory**: search first, filter chips, drawers, bulk actions | ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent**: pick the AI, create its key, one command, watch it connect |
+| ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: an auto-built, cited knowledge base per project | ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph |
+| ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: fair-share scheduling and agent load against capacity | |
 
 ## Multi-agent in 5 commands
 ```sh

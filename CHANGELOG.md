@@ -2,6 +2,34 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.27.0: the dashboard, rebuilt
+- **Why.** The owner's verdict on the old dashboard: not clean, not smart, not efficient, not interactive, "built in
+  2010-2015". A full audit (87 screenshots) found 32 flat pages, equal-weight stat walls, browser-default controls, raw
+  JSON in tables, broken phone layouts, a permanent red kill switch in every header, dead-end empty states, job views
+  scattered across four pages, and Back / Forward that did nothing.
+- **Five workspaces.** Home, Work, Agents, Knowledge and System group the 32 pages; the header shows where you are,
+  what is running and today's spend; on a phone a bottom bar and swipeable sub-tabs replace the drawer menu. The kill
+  switch moved to System and the More menu, and shows as a banner only while work is paused.
+- **Decisions first.** The Overview leads with what needs you: agents' questions get one-tap answers proposed from the
+  question ("ISO 8601" / "The account locale"), approvals get a Review button, and answers can be undone for 5 seconds.
+  Then four KPI tiles, the team, active jobs with progress and a readable activity feed.
+- **Act where you are.** Every job and agent opens in one deep-linkable drawer from any page, with owner actions:
+  retry a step, move it to another agent, retry or cancel a job, update an agent's tool. Board items are Done or
+  Dropped in one click with Undo. Memory is search-first with filter chips, drawers and bulk actions in menus instead
+  of browser prompts. Setup tests a provider key in place. Every reversible action offers Undo.
+- **Everywhere.** A command palette (Cmd/Ctrl+K or /) for pages, actions and memory search; keyboard shortcuts (g o,
+  g w, g a, g m, g s, g b, t, ?); working Back and Forward; a new design system (Geist, one copper accent, calibrated
+  dark and light themes, hairline borders, real empty, loading and error states); 390 px phones without sideways
+  scrolling; usage charts by agent with per-agent tokens.
+- **Built by the whole bench.** Antigravity (audit, design system, Work and System pages, two security reviews),
+  Claude sub-agents (interaction kit, backend actions, Home and Agents pages), Grok (Knowledge pages, reviews); the
+  pages are plain files under `src/commons_memory/web/`, assembled into one response with no build step.
+- **Backend for it.** `POST /api/subtask/retry`, `/api/subtask/reassign`, `/api/job/retry` and
+  `/api/setup/provider_test` (owner-only), `GET /api/job_detail` and `/api/agent_detail`, one-tap `choices` on open
+  questions, per-agent `token_series` in usage; provider errors never echo a key.
+- **Fixes.** Agent-written names in inline handlers are encoded safely; phones scroll the window instead of a fixed
+  body; the drawer no longer inherits legacy or header styles; `scripts/demo_seed.py` seeds made-up data for screenshots.
+
 ## v0.26.0: API seats, so work keeps moving when your subscription agents can't take it
 - **API seats.** Switch on `api_seats` (Setup, or Turn on in the Models page's API seats card): one seat agent uses
   three models from your own API key (by default Anthropic Haiku 5.5, Sonnet 5.5 and Opus 5.5, or your

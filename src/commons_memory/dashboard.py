@@ -297,9 +297,11 @@ class API:
 
     def usage_series(self, q):
         days = int(q.get("days", 14))
-        start = now() - days * 86400
-        rows = self.s.q("SELECT CAST((ts-?)/86400 AS INT) d, agent_id, SUM(cost) c, SUM(tokens_in+tokens_out) t "
-                        "FROM usage WHERE ts>=? GROUP BY d, agent_id", (start, start))
+        # UTC calendar days ending today (Postgres rounds CAST(float AS INT), so a rolling window dropped today's usage)
+        first = int(now()) // 86400 - days + 1
+        rows = [dict(r) | {"d": r["d"] - first} for r in self.s.q(
+            "SELECT CAST(ts AS INTEGER)/86400 d, agent_id, SUM(cost) c, SUM(tokens_in+tokens_out) t "
+            "FROM usage WHERE ts>=? GROUP BY d, agent_id", (first * 86400,))]
         agents = sorted({r["agent_id"] for r in rows if r["agent_id"]}, key=str)
         series = {self.s.label(a)[1]: [0.0] * days for a in agents}
         token_series = {self.s.label(a)[1]: [0] * days for a in agents}
