@@ -109,6 +109,28 @@ class API:
             out["workflow"] = view(self.s, job["id"])
         return out
 
+    # ---- v0.29: projects (one page per product: grouped raw names, timeline, work, changes, people)
+    def project_list(self, q):
+        from .projects import listing
+        return listing(self.s)
+
+    def project_detail(self, q):
+        from .projects import detail
+        return detail(self.s, q.get("id") or "")
+
+    def project_timeline(self, q):
+        from .projects import timeline
+        return timeline(self.s, q.get("id") or "", float(q["before"]) if q.get("before") else None,
+                        max(1, min(int(q.get("limit") or 60), 200)), q.get("types") or "highlights", q.get("agent") or None)
+
+    def project_change(self, q):
+        """One recorded change (commit, files, diff) by its folder path, for the change drawer."""
+        from .workspace import recent
+        got = recent(self.s, limit=1, diff_chars=60_000, where=("path=?", [(q.get("path") or "").rstrip("/") + "/changes.json"]))
+        if not got:
+            raise CommonsError("unknown change")
+        return got[0]
+
     def agent_detail(self, q):
         """What an agent drawer shows: presence, profile, models, usage windows, its last 10 steps, CLI version and
         unread mail."""
@@ -542,6 +564,16 @@ class API:
             return self.b.revoke(body["id"])
         if path in ("/api/item/update", "/api/item/delete", "/api/items/bulk"):
             return self._items(path, body)
+        if path.startswith("/api/project/"):
+            from . import projects as P
+            if path == "/api/project/group":
+                return P.group(self.s, body["into"], list(body.get("ids") or []), body.get("title"))
+            if path == "/api/project/ungroup":
+                return P.ungroup(self.s, body["id"])
+            if path == "/api/project/update":
+                return P.update(self.s, body["id"], body.get("title"), body.get("kind"))
+            if path == "/api/project/dismiss":
+                return P.dismiss(self.s, body["key"])
         raise CommonsError("unknown action")
 
     def _items(self, path, body):

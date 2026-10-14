@@ -133,10 +133,15 @@ def packet_view(s: Store, st: dict, budget_chars: int = 6000) -> dict:
                     "Report code you changed with complete_subtask(repo, branch, commit, diff)."}
 
 
-def recent(s: Store, agent: str | None = None, limit: int = 30, diff_chars: int = 8000) -> list[dict]:
-    """Recorded changes across all jobs, work and sessions, newest first; agent filters to one agent's."""
+def recent(s: Store, agent: str | None = None, limit: int = 30, diff_chars: int = 8000,
+           where: tuple[str, list] | None = None) -> list[dict]:
+    """Recorded changes across all jobs, work and sessions, newest first; agent filters to one agent's, where adds an
+    SQL condition on drive_files (a project page passes its names and jobs)."""
     sql = "SELECT * FROM drive_files WHERE path LIKE '%/changes.json' AND deleted_at IS NULL"
     args: list = []
+    if where:
+        sql += f" AND {where[0]}"
+        args += list(where[1])
     if agent:
         a = s.get_agent(agent)
         sql += " AND updated_by=?"
@@ -149,6 +154,8 @@ def recent(s: Store, agent: str | None = None, limit: int = 30, diff_chars: int 
         except Exception:  # noqa: BLE001
             continue
         try:
+            if not diff_chars:
+                raise LookupError("diff not wanted")
             diff = d.read(r["path"].replace("/changes.json", "/changes.diff"), r["project"] or None,
                           max_tokens=diff_chars // 3 + 50)["text"] or ""
             meta["diff"] = diff[:diff_chars] + ("…" if len(diff) > diff_chars else "")

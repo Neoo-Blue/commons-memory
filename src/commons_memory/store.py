@@ -120,7 +120,8 @@ class Store:
         from .schema_v2 import migrate
         migrate(self.db)
         from .facts import add_columns
-        add_columns(self.db, [("audit", "prev", "TEXT"), ("audit", "hash", "TEXT")])
+        from .projects import COLUMNS as PROJECT_COLUMNS
+        add_columns(self.db, [("audit", "prev", "TEXT"), ("audit", "hash", "TEXT")] + PROJECT_COLUMNS)
         self._backfill_audit_chain()
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
@@ -294,7 +295,7 @@ class Store:
             raise CommonsError(f"invalid project name {name!r}: use 1-64 letters, digits, '.', '_', '-' or spaces, "
                                "starting with a letter or digit (e.g. 'commons-live')")
         pid = new_id("prj")
-        self.x("INSERT INTO projects VALUES(?,?,?,?)", (pid, name, root, now()))
+        self.x("INSERT INTO projects(id,name,root,created_at) VALUES(?,?,?,?)", (pid, name, root, now()))
         self.x("INSERT OR IGNORE INTO entities(id,type,name,project_id,path,line,meta,created_at) VALUES(?,?,?,?,?,?,?,?)",
                (pid, "project", name, pid, root, None, "{}", now()))
         return pid
