@@ -243,8 +243,21 @@ def build_app(store: Store) -> Starlette:
             return JSONResponse({"error": str(e)}, status_code=403)
         return JSONResponse(r)
 
+    @guard
+    async def infra_in(req: Request):
+        """Discovery snapshots from `commons infra collect --submit` (a machine that can reach the hosts)."""
+        aid, _ = _me(store)
+        if not aid:
+            raise PermissionError("an agent key is required")
+        from .infra import ingest_snapshot
+        b = await body(req)
+        snaps = b.get("snapshots") if isinstance(b.get("snapshots"), list) else [b]
+        out = [await asyncio.to_thread(ingest_snapshot, store, x) for x in snaps if isinstance(x, dict) and x.get("entities")]
+        return JSONResponse({"ok": True, "merged": out})
+
     routes = [Route("/hooks/{token}", inhook, methods=["POST"]),
-              Route("/agent/hook", hook, methods=["POST"]), Route("/agent/wake/ack", wack, methods=["POST"]),
+              Route("/agent/hook", hook, methods=["POST"]), Route("/agent/infra", infra_in, methods=["POST"]),
+              Route("/agent/wake/ack", wack, methods=["POST"]),
               Route("/agent/wake/replay", wreplay)]
     for prefix in ("/bus", "/agent"):
         routes += [Route(f"{prefix}/send", send, methods=["POST"]), Route(f"{prefix}/recv", recv),

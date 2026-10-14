@@ -123,6 +123,37 @@ class API:
         return timeline(self.s, q.get("id") or "", float(q["before"]) if q.get("before") else None,
                         max(1, min(int(q.get("limit") or 60), 200)), q.get("types") or "highlights", q.get("agent") or None)
 
+    # ---- v0.30: infrastructure map (machines -> guests -> services -> endpoints, storage, repos, credentials)
+    def infra_overview(self, q):
+        from . import infra as I
+        return I.overview(self.s) | {"job": json.loads((self.s.q("SELECT value FROM meta WHERE key='infra:job'") or [{"value": "null"}])[0]["value"])}
+
+    def infra_nodes(self, q):
+        from . import infra as I
+        return I.nodes(self.s, q.get("kind") or None, q.get("q") or "")
+
+    def infra_node(self, q):
+        from . import infra as I
+        return I.node(self.s, q.get("id") or "")
+
+    def infra_graph(self, q):
+        from . import infra as I
+        return I.graph(self.s, q.get("root") or None, int(q.get("depth") or 2))
+
+    def infra_describe(self, q):
+        from . import infra as I
+        return {"text": I.describe(self.s, q.get("q") or "")}
+
+    def infra_estimate(self, q):
+        from . import infra as I
+        return I.extract(self.s, since=0.0 if q.get("full") else None, dry_run=True)
+
+    def infra_project(self, q):
+        from . import infra as I
+        from .projects import _groups, _root, _rows
+        rows = _rows(self.s)
+        return I.for_project(self.s, _groups(rows)[_root(q.get("id") or "", rows)])
+
     def project_change(self, q):
         """One recorded change (commit, files, diff) by its folder path, for the change drawer."""
         from .workspace import recent
@@ -564,6 +595,16 @@ class API:
             return self.b.revoke(body["id"])
         if path in ("/api/item/update", "/api/item/delete", "/api/items/bulk"):
             return self._items(path, body)
+        if path.startswith("/api/infra/"):
+            from . import infra as I
+            if path == "/api/infra/verdict":
+                return I.verdict(self.s, body["edge"], bool(body["ok"]))
+            if path == "/api/infra/merge":
+                return I.merge_nodes(self.s, body["keep"], body["drop"])
+            if path == "/api/infra/hide":
+                return I.hide(self.s, body["id"], bool(body.get("hidden", True)))
+            if path == "/api/infra/extract":
+                return I.extract_async(self.s, full=bool(body.get("full")))
         if path.startswith("/api/project/"):
             from . import projects as P
             if path == "/api/project/group":
@@ -886,7 +927,7 @@ def make_handler(api: API, token: str | None):
 
 # changes an agent on the LAN could use to approve itself, reach a key, mint a key, or pick who does the work: once a
 # PIN exists they need the browser the owner unlocked with it
-OWNER_ONLY = ("/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
+OWNER_ONLY = ("/api/infra/extract", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
               "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
               "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry")
 
