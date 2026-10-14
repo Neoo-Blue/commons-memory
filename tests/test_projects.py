@@ -103,3 +103,34 @@ def test_overrides_and_dismiss(tmp_path):
     key = P.listing(s)["suggestions"][0]["key"]
     P.dismiss(s, key)
     assert P.listing(s)["suggestions"] == []
+
+
+def test_review_fixes_paging_sessions_finish_order_agent_filter_and_ungroup_by_name(tmp_path):
+    from commons_memory.workspace import record_changes
+    s = make_store(tmp_path, "pr.db")
+    a, b, job, _ = _seed(s)
+    st = dict(s.q("SELECT * FROM subtasks WHERE job_id=?", (job,))[0])
+    for i in range(3):  # three changes in the job, one in a session of the project
+        record_changes(s, b, subtask=st | {"key": f"ui{i}"}, diff=f"--- a/f{i}\n+++ b/f{i}\n@@\n+x\n", stat=f" f{i} | 1 +")
+    sess = s.q("SELECT id FROM sessions WHERE goal='write the projects page'")[0]["id"]
+    record_changes(s, a, session=sess, diff="--- a/s\n+++ b/s\n@@\n+y\n", stat=" s | 1 +")
+    pid = P.detail(s, "commons-dev")["id"]
+    assert P.detail(s, pid)["counts"]["changes"] == 4                                  # the session's change counts too
+    seen, cur = [], None
+    for _ in range(6):                                                                 # page one change at a time
+        page = P.timeline(s, pid, types="change", limit=1, before=cur)
+        seen += page["events"]
+        if not page["next"]:
+            break
+        cur = page["next"]
+    assert len(seen) == 4
+    s.x("UPDATE jobs SET status='done', created_at=?, updated_at=? WHERE id=?", (now() - 9 * DAY, now(), job))
+    top = P.timeline(s, pid, types="job_done,job", limit=1)["events"]
+    assert top and top[0]["type"] == "job_done"                                         # finished today, started 9 days ago
+    s.x("UPDATE jobs SET submitted_by=? WHERE id=?", (b, job))
+    assert [e for e in P.timeline(s, pid, types="job", limit=50, agent="grok")["events"] if e["type"] == "job"]
+    P.group(s, pid, ["commons-live"])
+    P.ungroup(s, "commons-live")                                                       # a name works like an id
+    home = [e for e in P.listing(s)["folders"] if e["name"] == "home"][0]
+    P.group(s, home["id"], ["quick-fix"], "Dotfiles")
+    assert "Dotfiles" in [e["title"] for e in P.listing(s)["projects"] + P.listing(s)["tasks"]]

@@ -41,27 +41,28 @@ def _groups(rows: dict[str, dict]) -> dict[str, list[str]]:
     return g
 
 
-def _stats(s: Store) -> dict[str, dict]:
-    """Per raw project: counts and last activity, one GROUP BY per table."""
+def _stats(s: Store, only: list[str] | None = None) -> dict[str, dict]:
+    """Per raw project: counts and last activity, one GROUP BY per table (only: just these raw projects)."""
     st: dict[str, dict] = defaultdict(lambda: defaultdict(float))
+    lim, la = (f" AND project_id IN ({','.join('?' * len(only))})", list(only)) if only else ("", [])
     def add(sql, *fields, args=()):
-        for r in s.q(sql, args):
+        for r in s.q(sql.format(lim=lim), list(args) + la):
             for f in fields:
                 v = r[f] or 0
                 st[r["p"]][f] = max(st[r["p"]][f], v) if f == "last" else st[r["p"]][f] + v
     add("SELECT project_id p, COUNT(*) items, MAX(created_at) last, SUM(CASE WHEN kind='decision' THEN 1 ELSE 0 END) "
-        "decisions FROM items WHERE project_id IS NOT NULL GROUP BY project_id", "items", "last", "decisions")
+        "decisions FROM items WHERE project_id IS NOT NULL{lim} GROUP BY project_id", "items", "last", "decisions")
     add("SELECT project_id p, COUNT(DISTINCT CAST(created_at AS INTEGER)/86400) days FROM items "
-        "WHERE project_id IS NOT NULL GROUP BY project_id", "days")
-    add("SELECT project_id p, COUNT(*) sessions, MAX(updated_at) last FROM sessions WHERE project_id IS NOT NULL "
+        "WHERE project_id IS NOT NULL{lim} GROUP BY project_id", "days")
+    add("SELECT project_id p, COUNT(*) sessions, MAX(updated_at) last FROM sessions WHERE project_id IS NOT NULL{lim} "
         "GROUP BY project_id", "sessions", "last")
     add("SELECT project_id p, COUNT(*) jobs, SUM(CASE WHEN status IN ('running','queued','paused') THEN 1 ELSE 0 END) "
-        "open_jobs, MAX(updated_at) last FROM jobs WHERE project_id IS NOT NULL GROUP BY project_id", "jobs", "open_jobs", "last")
+        "open_jobs, MAX(updated_at) last FROM jobs WHERE project_id IS NOT NULL{lim} GROUP BY project_id", "jobs", "open_jobs", "last")
     add("SELECT project_id p, SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open_asks, MAX(updated_at) last FROM board "
-        "WHERE project_id IS NOT NULL GROUP BY project_id", "open_asks", "last")
+        "WHERE project_id IS NOT NULL{lim} GROUP BY project_id", "open_asks", "last")
     add("SELECT project_id p, COUNT(*) claims, MAX(COALESCE(done_at, started_at)) last FROM work_claims "
-        "WHERE project_id IS NOT NULL GROUP BY project_id", "claims", "last")
-    add("SELECT project_id p, SUM(cost) cost FROM usage WHERE project_id IS NOT NULL AND ts>=? GROUP BY project_id",
+        "WHERE project_id IS NOT NULL{lim} GROUP BY project_id", "claims", "last")
+    add("SELECT project_id p, SUM(cost) cost FROM usage WHERE ts>=? AND project_id IS NOT NULL{lim} GROUP BY project_id",
         "cost", args=(now() - 30 * DAY,))
     return st
 
@@ -131,9 +132,15 @@ def suggestions(s: Store, rows: dict[str, dict] | None = None, st: dict | None =
     return out
 
 
+def _label(s: Store, aid: str, cache: dict) -> str:
+    if aid not in cache:
+        cache[aid] = s.label(aid)[1]
+    return cache[aid]
+
+
 def listing(s: Store) -> dict:
     """Projects (newest activity first), one-off tasks, folders that aren't projects, and grouping suggestions."""
-    rows, st = _rows(s), _stats(s)
+    rows, st, names = _rows(s), _stats(s), {}
     top: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))  # raw project -> agent -> items
     for r in s.q("SELECT project_id p, agent_id a, COUNT(*) n FROM items WHERE project_id IS NOT NULL AND agent_id IS NOT NULL "
                  "GROUP BY project_id, agent_id"):
@@ -151,7 +158,7 @@ def listing(s: Store) -> dict:
         for i in ids:
             for ag, n in top[i].items():
                 who[ag] += n
-        e["agents"] = [s.label(ag)[1] for ag, _ in sorted(who.items(), key=lambda kv: -kv[1])[:4]]
+        e["agents"] = [_label(s, ag, names) for ag, _ in sorted(who.items(), key=lambda kv: -kv[1])[:4]]
         (projects if e["kind"] == "project" else tasks if e["kind"] == "task" else folders).append(e)
     for x in (projects, tasks, folders):
         x.sort(key=lambda e: e["last"] or "", reverse=True)
@@ -176,7 +183,7 @@ def detail(s: Store, pid: str) -> dict:
     root = _root(pid, rows)
     ids = _groups(rows)[root]
     names = [rows[i]["name"] for i in ids]
-    st = _stats(s)
+    st = _stats(s, ids)
     agg = _sum(st, ids)
     ph = ",".join("?" * len(ids))
     def items(kind, n):
@@ -184,12 +191,14 @@ def detail(s: Store, pid: str) -> dict:
                  if r["agent_id"] else None, "at": iso(r["created_at"])}
                 for r in s.q(f"SELECT id, title, summary, content, agent_id, created_at FROM items WHERE project_id IN ({ph}) "
                              f"AND kind=? AND superseded_by IS NULL ORDER BY created_at DESC LIMIT ?", ids + [kind, n])]
-    jobs = []
-    for j in s.q(f"SELECT id, title, status, pattern, created_at, updated_at FROM jobs WHERE project_id IN ({ph}) "
-                 "ORDER BY updated_at DESC LIMIT 30", ids):
-        c = s.q("SELECT COUNT(*) n, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) d FROM subtasks WHERE job_id=?", (j["id"],))[0]
-        jobs.append({"id": j["id"], "title": j["title"], "status": j["status"], "pattern": j["pattern"],
-                     "steps": c["n"] or 0, "done": c["d"] or 0, "created_at": iso(j["created_at"]), "updated_at": iso(j["updated_at"])})
+    jr = s.q(f"SELECT id, title, status, pattern, created_at, updated_at FROM jobs WHERE project_id IN ({ph}) "
+             "ORDER BY updated_at DESC LIMIT 30", ids)
+    steps = {r["job_id"]: r for r in s.q(f"SELECT job_id, COUNT(*) n, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) d FROM "
+                                          f"subtasks WHERE job_id IN ({','.join('?' * len(jr)) or 'NULL'}) GROUP BY job_id",
+                                          [j["id"] for j in jr])} if jr else {}
+    jobs = [{"id": j["id"], "title": j["title"], "status": j["status"], "pattern": j["pattern"],
+             "steps": (steps.get(j["id"]) or {"n": 0})["n"] or 0, "done": (steps.get(j["id"]) or {"d": 0})["d"] or 0,
+             "created_at": iso(j["created_at"]), "updated_at": iso(j["updated_at"])} for j in jr]
     claims = [{"id": r["id"], "what": r["what"], "agent": s.label(r["agent_id"])[1] if r["agent_id"] else None,
                "status": r["status"], "result": (r["result"] or "")[:300], "at": iso(r["done_at"] or r["started_at"])}
               for r in s.q(f"SELECT * FROM work_claims WHERE project_id IN ({ph}) ORDER BY COALESCE(done_at, started_at) DESC "
@@ -208,22 +217,34 @@ def detail(s: Store, pid: str) -> dict:
             "changes": changes(s, names, ids, limit=10)}
 
 
-def _change_where(s: Store, names: list[str], ids: list[str]) -> tuple[str, list]:
-    """Recorded changes filed under the project's names, or made inside one of its jobs."""
-    jobs = [r["id"] for r in s.q(f"SELECT id FROM jobs WHERE project_id IN ({','.join('?' * len(ids))})", ids)]
-    w = f"project IN ({','.join('?' * len(names))})" + "".join(" OR path LIKE ?" for _ in jobs)
-    return f"({w})", names + [f"/jobs/{j}/%" for j in jobs]
+def _change_paths(s: Store, names: list[str], ids: list[str], before: float | None = None) -> list[str]:
+    """Recorded changes (newest first) filed under the project's names, or made inside one of its jobs, claimed work or
+    sessions. Filtered here, not with one SQL condition per job, so a project with hundreds of jobs stays cheap."""
+    ph = ",".join("?" * len(ids))
+    mine = {("jobs", r["id"]) for r in s.q(f"SELECT id FROM jobs WHERE project_id IN ({ph})", ids)}
+    mine |= {("work", r["id"]) for r in s.q(f"SELECT id FROM work_claims WHERE project_id IN ({ph})", ids)}
+    mine |= {("sessions", r["id"]) for r in s.q(f"SELECT id FROM sessions WHERE project_id IN ({ph})", ids)}
+    out = []
+    for r in s.q("SELECT path, project FROM drive_files WHERE path LIKE '%/changes.json' AND deleted_at IS NULL AND updated_at<? "
+                 "ORDER BY updated_at DESC", (before or now() + 1,)):
+        seg = r["path"].split("/")
+        if (r["project"] or "") in names or (len(seg) > 2 and (seg[1], seg[2]) in mine):
+            out.append(r["path"])
+    return out
 
 
 def _change_count(s: Store, names: list[str], ids: list[str]) -> int:
-    w, a = _change_where(s, names, ids)
-    return s.q(f"SELECT COUNT(*) n FROM drive_files WHERE path LIKE '%/changes.json' AND deleted_at IS NULL AND {w}", a)[0]["n"]
+    return len(_change_paths(s, names, ids))
 
 
-def changes(s: Store, names: list[str], ids: list[str], limit: int = 20, diff_chars: int = 4000) -> list[dict]:
+def changes(s: Store, names: list[str], ids: list[str], limit: int = 20, diff_chars: int = 4000,
+            before: float | None = None) -> list[dict]:
     """Recorded diffs and commits for the project, newest first (diff_chars=0: without the diff text)."""
     from .workspace import recent
-    return recent(s, limit=limit, diff_chars=diff_chars, where=_change_where(s, names, ids))
+    paths = _change_paths(s, names, ids, before)[:limit]
+    if not paths:
+        return []
+    return recent(s, limit=limit, diff_chars=diff_chars, where=(f"path IN ({','.join('?' * len(paths))})", paths))
 
 
 def timeline(s: Store, pid: str, before: float | None = None, limit: int = 60, types: str = "highlights",
@@ -259,15 +280,16 @@ def timeline(s: Store, pid: str, before: float | None = None, limit: int = 60, t
                 "ORDER BY created_at DESC LIMIT ?", ids + [cut] + by[1] + [limit]),
             "session", "created_at", lambda r: r["goal"] or "session", lambda r: r["status"], lambda r: r["agent_id"],
             lambda r: {"kind": "session", "id": r["id"]})
-    if want & {"job", "job_done"} and not aid:
-        jr = s.q(f"SELECT id, title, status, submitted_by, created_at, updated_at FROM jobs WHERE project_id IN ({ph}) AND "
-                 "created_at<? ORDER BY created_at DESC LIMIT ?", ids + [cut, limit])
-        if "job" in want:
-            add(jr, "job", "created_at", lambda r: r["title"], lambda r: "submitted", lambda r: r["submitted_by"],
-                lambda r: {"kind": "job", "id": r["id"]})
-        if "job_done" in want:
-            add([r for r in jr if r["status"] in ("done", "failed", "cancelled") and r["updated_at"] < cut], "job_done",
-                "updated_at", lambda r: r["title"], lambda r: r["status"], None, lambda r: {"kind": "job", "id": r["id"]})
+    jb = (" AND submitted_by=?", [aid]) if aid else ("", [])
+    if "job" in want:
+        add(s.q(f"SELECT id, title, submitted_by, created_at FROM jobs WHERE project_id IN ({ph}) AND created_at<?{jb[0]} "
+                "ORDER BY created_at DESC LIMIT ?", ids + [cut] + jb[1] + [limit]),
+            "job", "created_at", lambda r: r["title"], lambda r: "submitted", lambda r: r["submitted_by"],
+            lambda r: {"kind": "job", "id": r["id"]})
+    if "job_done" in want:  # by when it finished: an old job that finished today belongs at the top
+        add(s.q(f"SELECT id, title, status, updated_at FROM jobs WHERE project_id IN ({ph}) AND status IN "
+                f"('done','failed','cancelled') AND updated_at<?{jb[0]} ORDER BY updated_at DESC LIMIT ?", ids + [cut] + jb[1] + [limit]),
+            "job_done", "updated_at", lambda r: r["title"], lambda r: r["status"], None, lambda r: {"kind": "job", "id": r["id"]})
     if "step" in want:
         sb = (" AND t.claimed_by=?", [aid]) if aid else ("", [])
         add(s.q(f"SELECT t.id, t.job_id, t.title, t.status, t.result, t.claimed_by, t.updated_at FROM subtasks t JOIN jobs j "
@@ -275,21 +297,22 @@ def timeline(s: Store, pid: str, before: float | None = None, limit: int = 60, t
                 "ORDER BY t.updated_at DESC LIMIT ?", ids + [cut] + sb[1] + [limit]),
             "step", "updated_at", lambda r: r["title"], lambda r: r["result"] or r["status"], lambda r: r["claimed_by"],
             lambda r: {"kind": "job", "id": r["job_id"]})
-    if want & {"work", "work_done"}:
-        wr = s.q(f"SELECT id, what, status, result, agent_id, started_at, done_at FROM work_claims WHERE project_id IN ({ph}) AND "
-                 f"started_at<?{by[0]} ORDER BY started_at DESC LIMIT ?", ids + [cut] + by[1] + [limit])
-        if "work" in want:
-            add(wr, "work", "started_at", lambda r: r["what"], None, lambda r: r["agent_id"], lambda r: {"kind": "claim", "id": r["id"]})
-        if "work_done" in want:
-            add([r for r in wr if r["done_at"] and r["done_at"] < cut], "work_done", "done_at", lambda r: r["what"],
-                lambda r: r["result"] or r["status"], lambda r: r["agent_id"], lambda r: {"kind": "claim", "id": r["id"]})
+    if "work" in want:
+        add(s.q(f"SELECT id, what, agent_id, started_at FROM work_claims WHERE project_id IN ({ph}) AND started_at<?{by[0]} "
+                "ORDER BY started_at DESC LIMIT ?", ids + [cut] + by[1] + [limit]),
+            "work", "started_at", lambda r: r["what"], None, lambda r: r["agent_id"], lambda r: {"kind": "claim", "id": r["id"]})
+    if "work_done" in want:
+        add(s.q(f"SELECT id, what, status, result, agent_id, done_at FROM work_claims WHERE project_id IN ({ph}) AND done_at<?"
+                f"{by[0]} ORDER BY done_at DESC LIMIT ?", ids + [cut] + by[1] + [limit]),
+            "work_done", "done_at", lambda r: r["what"], lambda r: r["result"] or r["status"], lambda r: r["agent_id"],
+            lambda r: {"kind": "claim", "id": r["id"]})
     if "ask" in want:
         add(s.q(f"SELECT id, kind, text, status, agent_id, created_at FROM board WHERE project_id IN ({ph}) AND created_at<?{by[0]} "
                 "ORDER BY created_at DESC LIMIT ?", ids + [cut] + by[1] + [limit]),
             "ask", "created_at", lambda r: r["text"], lambda r: f"{r['kind']} · {r['status']}", lambda r: r["agent_id"],
             lambda r: {"kind": "board", "id": r["id"]})
     if "change" in want:
-        for c in changes(s, names, ids, limit=limit, diff_chars=0):
+        for c in changes(s, names, ids, limit=limit, diff_chars=0, before=cut):
             if (c.get("ts") or 0) < cut and (not agent or c.get("by") == agent):
                 ev.append({"t": c["ts"], "at": iso(c["ts"]), "type": "change", "agent": c.get("by"),
                            "title": (c.get("commit") or "")[:12] + (f" on {c['branch']}" if c.get("branch") else "") or "changes",
@@ -321,13 +344,17 @@ def group(s: Store, into: str, ids: list[str], title: str | None = None) -> dict
             s.x("UPDATE projects SET kind=NULL WHERE id=? AND kind='folder'", (i,))
         if title is not None:
             s.x("UPDATE projects SET title=? WHERE id=?", ((title or "").strip()[:80] or None, root))
+        r = rows[root]
+        if r["kind"] == "folder" or (r["kind"] is None and r["name"].lower() in FOLDERISH):  # grouping into it says it is one
+            s.x("UPDATE projects SET kind='project' WHERE id=?", (root,))
     s.audit(None, "project.group", root, {"ids": ids, "title": title})
     return detail(s, root)
 
 
 def ungroup(s: Store, pid: str) -> dict:
     rows = _rows(s)
-    if pid not in rows:
+    pid = pid if pid in rows else next((i for i, r in rows.items() if r["name"] == pid), "")
+    if not pid:
         raise CommonsError("unknown project")
     s.x("UPDATE projects SET parent_id=NULL WHERE id=?", (pid,))
     s.audit(None, "project.ungroup", pid, None)

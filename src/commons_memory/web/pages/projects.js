@@ -246,7 +246,7 @@
           card.style.display = "";
         },
         commit: async () => {
-          const r = await postRaw("project/group", { into, ids, title });
+          const r = await postRaw("project/group", { into: ids.includes(into) ? into : ids[0], ids, title });
           if (r && !r.error) {
             render();
             return r;
