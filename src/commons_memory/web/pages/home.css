@@ -197,6 +197,9 @@ a.hm-kpi:hover{border-color:var(--border-strong);background:var(--bg-card-hover)
 .hm-brow{--dep:0;display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3) var(--space-2) calc(var(--space-4) + var(--dep) * 22px);
   border-bottom:1px solid var(--border-subtle);transition:background var(--duration-fast) var(--ease-out)}
 .hm-brow:last-child{border-bottom:0}
+/* a big board is hundreds of rows: off-screen ones skip style and layout until scrolled near (600 rows at 4x CPU:
+   113 -> 43 ms per render). auto remembers each row's real height once it has been laid out */
+.hm-brow{content-visibility:auto;contain-intrinsic-size:auto 64px}
 .hm-brow:hover{background:var(--bg-card-hover)}
 .hm-bst{display:inline-grid;place-items:center;color:var(--fg-subtle);line-height:0}
 .hm-bst .hm-i{width:17px;height:17px}
@@ -366,6 +369,7 @@ a.hm-act{display:inline-flex;align-items:center;text-decoration:none;border:1px 
   .drawer:has(.hm-d) .drawer-x{width:44px;height:44px}
 }
 @media (max-width:640px){
+  .hm-brow{contain-intrinsic-size:auto 128px}
   .hm-sec-hint{display:none}
   .hm-job-sub{flex-wrap:wrap;row-gap:4px}
   .hm-job-now{flex-basis:100%}

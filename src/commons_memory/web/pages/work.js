@@ -557,7 +557,7 @@
           ${projects.map(p => `<option value="${E(p.name)}" ${filterProject === p.name ? 'selected' : ''}>${E(p.name)}</option>`).join("")}
         </select>
 
-        <input type="search" class="work-search" placeholder="Search jobs, agents, steps..." value="${E(window.work_search || '')}" oninput="window.work_search=this.value;render()" aria-label="Search jobs">
+        <input type="search" id="work-search" class="work-search" placeholder="Search jobs, agents, steps..." value="${E(window.work_search || '')}" oninput="window.work_search=this.value;clearTimeout(window._wsT);window._wsT=setTimeout(render,250)" aria-label="Search jobs">
       </div>
 
       <div class="work-job-list">
@@ -658,8 +658,7 @@
      PAGE 3: Task breakdown
      ========================================================================== */
   V["Task breakdown"] = async function () {
-    const jobs = await api("jobs_index");
-    const d = await api("breakdown_view?job=" + (window.bj || ""));
+    const [jobs, d] = await Promise.all([api("jobs_index"), api("breakdown_view?job=" + (window.bj || ""))]);
 
     if (!d || !d.job) {
       return `<div class="work-page">
@@ -973,7 +972,7 @@
           ${agents.map(a => `<option value="${E(a)}" ${window.cagent === a ? 'selected' : ''}>${E(a)}</option>`).join("")}
         </select>
 
-        <input type="search" class="work-search" placeholder="Search files, commits, paths..." value="${E(window.csearch || '')}" oninput="window.csearch=this.value;render()" aria-label="Search changes">
+        <input type="search" id="work-csearch" class="work-search" placeholder="Search files, commits, paths..." value="${E(window.csearch || '')}" oninput="window.csearch=this.value;clearTimeout(window._csT);window._csT=setTimeout(render,250)" aria-label="Search changes">
 
         ${filterJob ? `
           <button type="button" class="chip" onclick="window.cjob='';render()">

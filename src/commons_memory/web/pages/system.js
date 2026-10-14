@@ -354,14 +354,16 @@ window.openSecretDrawer = function (cred) {
 window.secFilterState = window.secFilterState || { q: "", tab: "all" };
 window.secSetFilter = function (key, val) {
   window.secFilterState[key] = val;
-  render();
+  clearTimeout(window._secT);
+  if (key === "q") window._secT = setTimeout(render, 250); else render();  // typing refetches once the user pauses
 };
 
 /* Filter handler for Recurring page */
 window.recFilterQuery = window.recFilterQuery || "";
-window.recSetQuery = function (q) {
+window.recSetQuery = function (q, typing) {
   window.recFilterQuery = q;
-  render();
+  clearTimeout(window._recT);
+  if (typing) window._recT = setTimeout(render, 250); else render();
 };
 
 /* Drag and drop for decision chain */
@@ -1390,10 +1392,11 @@ V["Recurring"] = async function () {
         <div class="sys-filter-bar">
           <input
             class="sys-filter-input"
+            id="rec-filter-in"
             type="search"
             placeholder="Search by schedule name, cron expression, or task..."
             value="${E(window.recFilterQuery || "")}"
-            oninput="recSetQuery(this.value)">
+            oninput="recSetQuery(this.value, true)">
           ${query ? `
             <button type="button" class="btn sm" onclick="recSetQuery('')">Clear search</button>
           ` : ""}

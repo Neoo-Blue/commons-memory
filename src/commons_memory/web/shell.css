@@ -51,7 +51,8 @@ header .icon-btn:hover,header .menu-btn:hover{background:var(--bg-card-hover,var
   header .search{min-width:0;width:34px;padding:0;justify-content:center;border-color:transparent;background:none}
   header .crumbs{display:none}
   .subtabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding:8px 14px;border-bottom:1px solid var(--border-subtle,var(--line));
-    position:sticky;top:58px;z-index:4;background:var(--bg-app,var(--bg))}
+    position:sticky;top:58px;z-index:4;background:var(--bg-app,var(--bg));
+    min-height:53px}  /* the row's filled height, reserved before JS fills it: content below doesn't jump on load */
   .subtabs::-webkit-scrollbar{display:none}
   .subtabs a{flex:none;display:inline-flex;align-items:center;min-height:36px;padding:0 12px;border-radius:999px;color:var(--fg-muted,var(--mut));
     font-size:13px;text-decoration:none;white-space:nowrap}

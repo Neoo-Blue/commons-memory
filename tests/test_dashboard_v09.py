@@ -31,7 +31,7 @@ def test_page_guards_are_present():
     assert "never seen" in PAGE
     assert "dataset.oc" in PAGE
     assert "stopPoll" in PAGE
-    assert "No subtasks" in PAGE
+    assert "no breakdown steps yet" in PAGE  # Task breakdown (work.js) on a job with no nodes
     assert "vis.has(k)" in PAGE
     assert "${e.type}" not in PAGE
     assert "name:'${E(window.sh)}'" not in PAGE

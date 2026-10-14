@@ -28,8 +28,16 @@ STALE_DAYS = float(os.environ.get("COMMONS_LIBRARIAN_STALE_DAYS", "90"))
 class Librarian:
     def __init__(self, store: Store):
         self.s = store
-        self.agent_id = store.ensure_agent("librarian")
+        self._agent_id = None
         self._emb = HashEmbedder()
+
+    @property
+    def agent_id(self) -> str:
+        """Registered (and marked seen) on first write, not on construction: the dashboard and the palette read the
+        librarian's status on every view, and touching agents.last_seen there fired a live "change" each time."""
+        if self._agent_id is None:
+            self._agent_id = self.s.ensure_agent("librarian")
+        return self._agent_id
 
     # ------------------------------------------------------------------ config
     def auto_approve(self) -> bool:

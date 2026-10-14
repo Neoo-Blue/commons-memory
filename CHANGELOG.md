@@ -24,11 +24,16 @@ All notable changes, newest first. The README describes the current release only
 - **Built by the whole bench.** Antigravity (audit, design system, Work and System pages, two security reviews),
   Claude sub-agents (interaction kit, backend actions, Home and Agents pages), Grok (Knowledge pages, reviews); the
   pages are plain files under `src/commons_memory/web/`, assembled into one response with no build step.
+- **Faster.** The Overview's largest paint drops from 4.8 s to 2.9 s and its first load from 19 API calls to 9. The page
+  is gzipped once at startup and revalidates with a bodiless 304 over a kept-alive connection. Pages that only read
+  (Librarian, search, the palette, the Import preview) no longer fire a live "change" that redrew every open dashboard,
+  and live updates no longer steal focus from the search box.
 - **Backend for it.** `POST /api/subtask/retry`, `/api/subtask/reassign`, `/api/job/retry` and
   `/api/setup/provider_test` (owner-only), `GET /api/job_detail` and `/api/agent_detail`, one-tap `choices` on open
   questions, per-agent `token_series` in usage; provider errors never echo a key.
 - **Fixes.** Agent-written names in inline handlers are encoded safely; phones scroll the window instead of a fixed
   body; the drawer no longer inherits legacy or header styles; `scripts/demo_seed.py` seeds made-up data for screenshots.
+- **For agents:** nothing changes; a dashboard link of the form `#Workflow?drawer=job:<id>` opens that job in its drawer, handy in handoffs.
 
 ## v0.26.0: API seats, so work keeps moving when your subscription agents can't take it
 - **API seats.** Switch on `api_seats` (Setup, or Turn on in the Models page's API seats card): one seat agent uses

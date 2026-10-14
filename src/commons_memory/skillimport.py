@@ -143,7 +143,8 @@ def run(store: Store, project_dir: str = ".", extra: list[str] | None = None, dr
             (src / "SKILL.md").write_text(ptr.replace("name: commons", f"name: {s['name']}", 1) +
                                           f"\nThis skill now lives in the Commons pool: `skill_get(\"{s['name']}\")`.\n")
             out["replaced"].append({"path": str(src), "backup": str(bak)})
-    store.audit(agent_id, "skills.import.local", f"{len(out['imported'])} new", {k: len(v) for k, v in out.items() if isinstance(v, list)})
+    if not dry_run:  # a preview changes nothing; auditing it filled the log and fired a live "change" per Import view
+        store.audit(agent_id, "skills.import.local", f"{len(out['imported'])} new", {k: len(v) for k, v in out.items() if isinstance(v, list)})
     return out
 
 

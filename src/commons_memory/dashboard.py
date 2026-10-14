@@ -6,6 +6,7 @@ Secrets: only references, leases and audit events are ever shown — never value
 """
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import hashlib
 import hmac
@@ -612,6 +613,9 @@ def metrics(api: API) -> str:
 
 def make_handler(api: API, token: str | None):
     class H(BaseHTTPRequestHandler):
+        # keep-alive: a page's API calls reuse one connection instead of paying a TCP (and TLS) handshake each
+        protocol_version = "HTTP/1.1"
+
         def log_message(self, *a):
             pass
 
@@ -656,10 +660,12 @@ def make_handler(api: API, token: str | None):
         def _events(self):
             """Server-Sent Events: pushes a 'change' event whenever activity happens (jobs, memories, usage, audit,
             notifications), plus a heartbeat. The page re-renders live views on change instead of polling."""
+            self.close_connection = True  # no Content-Length: the stream ends when the socket closes
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
             self.end_headers()
             last, beat = None, time.time()
             try:
@@ -683,18 +689,19 @@ def make_handler(api: API, token: str | None):
                                                          json.dumps(body, default=str)).encode()
             gz = len(data) > 1400 and "gzip" in (self.headers.get("Accept-Encoding") or "")
             if gz:  # the page and big JSON lists shrink 4-6x: what a phone or a Tailscale hop waits for
-                import gzip
-                data = gzip.compress(data, compresslevel=5)
+                data = PAGE_GZ if data is PAGE_BYTES else gzip.compress(data, compresslevel=5)
+            extra = dict(extra or {})
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
             if gz:
                 self.send_header("Content-Encoding", "gzip")
                 self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com")
             self.send_header("X-Frame-Options", "SAMEORIGIN")
-            self.send_header("Cache-Control", "no-store")
-            for k, v in (extra or {}).items():
+            self.send_header("Cache-Control", extra.pop("Cache-Control", "no-store"))
+            for k, v in extra.items():
                 self.send_header(k, v)
             self.end_headers()
             if self.command != "HEAD":  # health checks ask with HEAD: same status and headers, no body
@@ -736,7 +743,15 @@ def make_handler(api: API, token: str | None):
                 if u.path == "/events":
                     return self._events()
                 if u.path in ("/", "/index.html"):
-                    return self._send(200, PAGE, "text/html; charset=utf-8", extra)
+                    # same bytes until the hub is upgraded: a browser that has them revalidates and gets a bodiless 304
+                    cache = {"ETag": PAGE_ETAG, "Cache-Control": "private, no-cache"} | (extra or {})
+                    if PAGE_ETAG in (self.headers.get("If-None-Match") or ""):
+                        self.send_response(304)
+                        for k, v in cache.items():
+                            self.send_header(k, v)
+                        self.end_headers()
+                        return
+                    return self._send(200, PAGE_BYTES, "text/html; charset=utf-8", cache)
                 if u.path == "/graph.html":
                     if q.get("scope") and q.get("id"):
                         from .graphlinks import subgraph
@@ -1003,13 +1018,20 @@ def _install_v7():
     global PAGE
     from . import dashboard_v7 as v7
     v7.install(API)
-    js = "Object.assign(ICON," + json.dumps(v7.ICONS) + ");\n" + v7.JS
+    # only the icons of v7 and v25 ship: web/pages/work.js replaced every page their JS defined (Mission control,
+    # Changes, Task breakdown, Routing, Presence, Drive, Workflow), so that JS was ~12 KB gzipped of dead weight.
+    # v81's JS stays: agents.js's Connect page calls its cx* helpers.
+    js = "Object.assign(ICON," + json.dumps(v7.ICONS) + ");\n"
     from . import dashboard_v81 as v81
     v81.install(API)
     js += "\nICON.Connect=" + json.dumps(v81.ICON) + ";\n" + v81.JS
-    from . import dashboard_v25 as v25  # the Workflow page: six-stage jobs as a spine, agent tree and traceability
-    js += "\nICON.Workflow=" + json.dumps(v25.ICON) + ";\n" + v25.JS
+    from . import dashboard_v25 as v25
+    js += "\nICON.Workflow=" + json.dumps(v25.ICON) + ";\n"
     PAGE = PAGE.replace("async function render(){", js + "\nasync function render(){", 1)
 
 
 _install_v7()
+# the page is the same bytes for every request: compress it once, and give it a validator so a reload revalidates
+PAGE_BYTES = PAGE.encode()
+PAGE_GZ = gzip.compress(PAGE_BYTES, 9)
+PAGE_ETAG = 'W/"' + hashlib.sha256(PAGE_BYTES).hexdigest()[:20] + '"'

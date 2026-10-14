@@ -532,10 +532,9 @@ V.Connect = async function () {
   skel("Connect");
   let b, s;
   try {
-    b = await cxBundle();
+    [b, s] = await Promise.all([cxBundle(), api("connect_status?name=" + encodeURIComponent(cx.watch || cx.name)).catch(() => null)]);
     if (b && b.error) throw new Error(b.error);
     if (!cx.url) cx.url = b.detected_url;
-    s = await api("connect_status?name=" + encodeURIComponent(cx.watch || cx.name)).catch(() => null);
   } catch (e) { return `<div class="ag-page">${head("Connect", "")}${failed(e)}</div>`; }
   CX.last = s; CX.blocks = arr(b.blocks);
   cxPoll();
