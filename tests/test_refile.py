@@ -100,3 +100,12 @@ def test_a_description_lets_notes_leave_for_unsorted(tmp_path, monkeypatch):
     R.apply(s, flow["key"])
     assert s.q("SELECT project_id FROM items WHERE id=?", (stray,))[0]["project_id"] == s.project_id("unsorted")
     assert "unsorted" in [e["name"] for e in P.listing(s)["folders"]]
+
+
+def test_a_described_projects_live_notes_are_checked_too(tmp_path):
+    s = make_store(tmp_path, "rf4.db")
+    wrong, right, live, home = _seed(s)
+    before = R.estimate(s)["notes"]
+    sp = [e for e in P.listing(s)["projects"] if e["name"] == "soul-pool"][0]
+    P.update(s, sp["id"], description="The pool-playing agent")
+    assert R.estimate(s)["notes"] > before                 # its live notes (incl. the Poise one written in its folder)

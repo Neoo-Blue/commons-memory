@@ -65,8 +65,9 @@ def catalog(s: Store) -> tuple[list[dict], dict[str, str]]:
     return out, root_of
 
 
-def candidates(s: Store, root_of: dict[str, str], folder_ids: set[str]) -> list[dict]:
-    """Imported notes and notes in folder buckets, not yet decided, newest first."""
+def candidates(s: Store, root_of: dict[str, str], folder_ids: set[str], described: set[str] = frozenset()) -> list[dict]:
+    """Imported notes, notes in folder buckets, and every note of a project the owner described (a session run in the
+    soul-pool folder while working on Poise is filed under soul-pool too), not yet decided, newest first."""
     ensure(s)
     done = {r["item_id"] for r in s.q("SELECT item_id FROM refile_moves")}
     out = []
@@ -75,7 +76,7 @@ def candidates(s: Store, root_of: dict[str, str], folder_ids: set[str]) -> list[
                  "('memory','decision','fact','document','handoff','note') ORDER BY created_at DESC"):
         if r["id"] in done or len((r["c"] or "").strip()) < 30:
             continue
-        if r["project_id"] in folder_ids or _imported(r["meta"]):
+        if r["project_id"] in folder_ids or _imported(r["meta"]) or root_of.get(r["project_id"]) in described:
             out.append({"id": r["id"], "pid": r["project_id"], "c": " ".join((r["c"] or "").split())})
     return out
 
@@ -85,7 +86,7 @@ def _setup(s: Store):
     cat, root_of = catalog(s)
     folders = {m for e in listing(s)["folders"] for m in [e["id"]]}
     folders |= {m for m, r in root_of.items() if r in folders}
-    return cat, root_of, candidates(s, root_of, folders)
+    return cat, root_of, candidates(s, root_of, folders, {p["id"] for p in cat if p.get("description")})
 
 
 def estimate(s: Store) -> dict:

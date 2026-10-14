@@ -2,6 +2,17 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.30.4: a described project's own notes get checked too
+- **Why.** After the import was re-filed, soul-pool still held a few Poise and Commons decisions that had been captured
+  live: the capture files a session by the folder it runs in, and work on other products happened from the soul-pool
+  folder. Live notes were never candidates.
+- **The owner's description wins over the folder.** Once a project has a description, every note under it is checked
+  against it, not only imported ones. Projects without one keep the old rule.
+- **On the live hub.** soul-pool went from 8,605 notes to about 2,600: 6,013 moved to Poise, 555 pool-agent notes came
+  in from `home` and other buckets, and the pool agent's other names (pool-sim, billiards, billiards-bot) were grouped
+  under it.
+- **For agents:** nothing changes.
+
 ## v0.30.3: say what a project is, and the filing check listens
 - **Why.** soul-pool, the pool-playing agent, still showed Poise decisions: the filing check judged projects by sample
   note titles, and soul-pool's samples were the polluted imports themselves.
