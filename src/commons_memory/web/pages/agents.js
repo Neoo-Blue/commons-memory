@@ -388,7 +388,7 @@ function drawUsage() {
   if (!d) return;
   const a = document.querySelector('[data-chart="spend"]'), b = document.querySelector('[data-chart="tokens"]');
   if (a) drawChart(a, { labels: d.labels, series: d.series, fmt: (v, full) => full ? K.fmt.money(v) : v >= 100 ? "$" + Math.round(v) : "$" + (+v.toFixed(2)), long: i => dayLong(i, d.labels.length), aria: d.ariaSpend });
-  if (b) drawChart(b, { labels: d.labels, series: [{ name: "Tokens", color: "var(--ag-ink)", values: d.tokens }], fmt: (v, full) => full ? Math.round(v).toLocaleString() + " tokens" : K.fmt.num(v), long: i => dayLong(i, d.labels.length), aria: d.ariaTokens });
+  if (b) drawChart(b, { labels: d.labels, series: d.tokSeries, fmt: (v, full) => full ? Math.round(v).toLocaleString() + " tokens" : K.fmt.num(v), long: i => dayLong(i, d.labels.length), aria: d.ariaTokens });
 }
 let roT = 0;
 if (window.ResizeObserver) new ResizeObserver(() => { clearTimeout(roT); roT = setTimeout(() => { if (document.querySelector("[data-chart]")) drawUsage(); }, 120); }).observe(document.querySelector("main#m") || document.body);
@@ -402,31 +402,40 @@ V.Usage = async function () {
     if (u && u.error) throw new Error(u.error);
   } catch (e) { return `<div class="ag-page">${head("Usage", "")}${failed(e)}</div>`; }
   const days = +ser.days || 30, n = Math.min(S.range, days), off = days - n;
-  const names = Object.keys(obj(ser.series)).sort();  // fixed order for the whole page: colour follows the agent, never its rank
+  const spendNames = Object.keys(obj(ser.series)), ledNames = Object.keys(obj(led && led.agents));
+  const names = [...new Set(spendNames.concat(ledNames))].sort();  // fixed order for the whole page: colour follows the agent, never its rank
   if (S.agent && !names.includes(S.agent)) S.agent = "";
   const color = nm => { const i = names.indexOf(nm); return i < 8 ? `var(--ag-s${i + 1})` : "var(--ag-other)"; };
-  let series = names.filter(nm => !S.agent || nm === S.agent).map(nm => ({ name: nm, color: color(nm), values: ser.series[nm].slice(off) }));
-  if (series.length > 8) {  // past eight agents, fold the smallest into Other instead of inventing hues
-    const keep = series.slice().sort((x, y) => y.values.reduce((s, v) => s + v, 0) - x.values.reduce((s, v) => s + v, 0)).slice(0, 7).map(s => s.name);
-    const rest = series.filter(s => !keep.includes(s.name));
-    series = series.filter(s => keep.includes(s.name)).concat([{ name: "Other", color: "var(--ag-other)", values: Array.from({ length: n }, (_, i) => rest.reduce((t, s) => t + s.values[i], 0)) }]);
-  }
-  // per-agent daily tokens when an agent is picked (token_series), else everyone's
-  const tokens = arr(S.agent && ser.token_series && ser.token_series[S.agent] ? ser.token_series[S.agent] : ser.tokens).slice(off), labels = Array.from({ length: n }, (_, i) => dayLabel(i, n));
+  const sum = v => v.reduce((t, x) => t + x, 0);
+  const fold = list => {  // past eight agents, fold the smallest into Other instead of inventing hues
+    if (list.length <= 8) return list;
+    const keep = list.slice().sort((x, y) => sum(y.values) - sum(x.values)).slice(0, 7).map(x => x.name), rest = list.filter(x => !keep.includes(x.name));
+    return list.filter(x => keep.includes(x.name)).concat([{ name: "Other", color: "var(--ag-other)", values: Array.from({ length: n }, (_, i) => sum(rest.map(x => x.values[i]))) }]);
+  };
+  const series = fold(spendNames.filter(nm => !S.agent || nm === S.agent).sort().map(nm => ({ name: nm, color: color(nm), values: ser.series[nm].slice(off) })));
+  // tokens per day, stacked by agent, from every agent's own records (Claude Code included); an older hub: report_usage
+  const ledAg = Object.entries(obj(led && led.agents)).filter(([a]) => !S.agent || a === S.agent);
+  let tokSeries = fold(ledAg.sort().map(([nm, v]) => ({ name: nm, color: color(nm), values: arr(v).slice(-n).map(x => +x || 0) })));
+  if (!tokSeries.length && !led) tokSeries = [{ name: "Tokens", color: "var(--ag-ink)", values: arr(S.agent && ser.token_series && ser.token_series[S.agent] ? ser.token_series[S.agent] : ser.tokens).slice(off) }];
+  const labels = Array.from({ length: n }, (_, i) => dayLabel(i, n)), tokens = labels.map((_, i) => sum(tokSeries.map(x => +x.values[i] || 0)));
   const daySpend = labels.map((_, i) => series.reduce((s, x) => s + x.values[i], 0));
   const spend = daySpend.reduce((s, v) => s + v, 0), tok = tokens.reduce((s, v) => s + v, 0);
-  U.data = { labels, series, tokens, ariaSpend: `Spend per day, last ${n} days, ${K.fmt.money(spend)} total`, ariaTokens: `Tokens per day, last ${n} days, ${K.fmt.num(tok)} total` };
+  U.data = { labels, series, tokSeries, ariaSpend: `Spend per day, last ${n} days, ${K.fmt.money(spend)} total`, ariaTokens: `Tokens per day, last ${n} days, ${K.fmt.num(tok)} total` };
   setTimeout(drawUsage);
   const top = series.map(s => [s.name, s.values.reduce((a, v) => a + v, 0)]).sort((x, y) => y[1] - x[1])[0];
   const cutoff = new Date(Date.now() - (n - 1) * 864e5).toISOString().slice(0, 10);
   const allDays = arr(u.daily).slice().sort((x, y) => String(y.key).localeCompare(String(x.key)));
   const daily = S.allDays ? allDays : allDays.filter(r => String(r.key) >= cutoff);
+  const ledDay = {};  // the same per-day tokens as the chart, where the hub keeps each agent's own records
+  arr(led && led.days).forEach((d, i) => { if (ledAg.length) ledDay[d] = ledAg.reduce((t, [, v]) => t + (+arr(v)[i] || 0), 0); });
+  const dayTok = r => r.key in ledDay ? ledDay[r.key] : (+r.tokens_in || 0) + (+r.tokens_out || 0);
   const rows = arr(u.rows), maxC = Math.max(1e-9, ...rows.map(r => +r.cost || 0)), maxT = Math.max(1, ...rows.map(r => (+r.tokens_in || 0) + (+r.tokens_out || 0)));
   const legendHtml = series.length > 1 ? `<div class="ag-clegend">${series.map(s => `<span><i style="background:${s.color}"></i>${E(s.name)} <b>${E(K.fmt.money(s.values.reduce((a, v) => a + v, 0)))}</b></span>`).join("")}</div>` : "";
   const filt = `<div class="ag-bar ag-filters">${seg([[7, "7 days"], [14, "14 days"], [30, "30 days"]], S.range, "AG.setRange", "Range")}
     <select aria-label="Agent" onchange="AG.setAgent(this.value)"><option value="">All agents</option>${names.map(nm => `<option ${nm === S.agent ? "selected" : ""} value="${E(nm)}">${E(nm)}</option>`).join("")}</select></div>`;
   const tile = (label, value, hint, extra = "") => `<div class="tile"><div class="tile-header"><span class="tile-label">${E(label)}</span></div><div class="tile-value">${E(value)}</div><div class="tile-footer"><span class="tile-hint">${E(hint)}</span></div>${extra}</div>`;
-  const anySpend = names.length > 0;
+  const anySpend = spendNames.length > 0;
+  const tokLegend = tokSeries.length > 1 ? `<div class="ag-clegend">${tokSeries.map(x => `<span><i style="background:${x.color}"></i>${E(x.name)} <b>${E(K.fmt.num(sum(x.values)))}</b></span>`).join("")}</div>` : "";
   // every agent's own records (Claude Code transcripts, bridge jobs) plus Commons' own calls: who ran which model, at what effort
   const lrows = arr(led && led.rows).filter(r => !S.agent || r.agent === S.agent), maxL = Math.max(1, ...lrows.map(r => +r.total || 0));
   const ledTok = lrows.reduce((t, r) => t + (+r.total || 0), 0), ledSub = `last ${E(n)} days · ${E(plural(lrows.length, "row"))}`;
@@ -441,18 +450,18 @@ V.Usage = async function () {
   return `<div class="ag-page">${head("Usage", "Tokens and spend per agent, model and effort: Claude Code's own transcripts, the peers' bridge jobs, and what agents report with report_usage.")}
     ${filt}
     <div class="ag-tiles">
-      ${tile(`Spend, last ${n} days`, K.fmt.money(spend), S.agent ? S.agent : "all agents", `<div class="ag-tile-spark">${K.spark(daySpend, { w: 120, h: 28 })}</div>`)}
-      ${tile("Average per day", K.fmt.money(spend / n), top && top[1] > 0 && !S.agent ? `most from ${top[0]}` : `over ${n} days`)}
-      ${tile(`Tokens, last ${n} days`, K.fmt.num(ledTok || tok), ledTok ? "every model, cache reads aside" : S.agent ? S.agent : "all agents")}
+      ${tile(`Tokens, last ${n} days`, K.fmt.num(tok), led ? "input, output and cache writes" : S.agent ? S.agent : "all agents", `<div class="ag-tile-spark">${K.spark(tokens, { w: 120, h: 28 })}</div>`)}
+      ${tile(`Spend, last ${n} days`, K.fmt.money(spend), S.agent ? S.agent : "API calls; subscriptions are not billed per call", `<div class="ag-tile-spark">${K.spark(daySpend, { w: 120, h: 28 })}</div>`)}
+      ${tile("Average spend per day", K.fmt.money(spend / n), top && top[1] > 0 && !S.agent ? `most from ${top[0]}` : `over ${n} days`)}
       ${tile("Last 24 hours", K.fmt.money(+u.spent_24h || 0), "all agents")}
     </div>
+    <section class="ag-sec"><div class="ag-chartcard"><div class="ag-sec-h"><h3>Tokens per day</h3><span class="ag-sec-sub">${S.agent ? E(S.agent) : tokSeries.length > 1 ? "stacked by agent" : "all agents"}</span></div>
+      ${tok ? `<div class="ag-chart" data-chart="tokens" tabindex="0" aria-label="${E(U.data.ariaTokens + ". Use the arrow keys to read each day.")}"></div>${tokLegend}` : empty("Usage", "No tokens in this range", "The quota sync sends each agent's own records every few minutes.")}</div></section>
     ${sec("Models and effort", `<div class="ag-bar"><span class="ag-count">${ledSub}${ledTok ? ` · ${E(K.fmt.num(ledTok))} tokens, cache reads not counted` : ""}</span></div>${ledger}`)}
-    <section class="ag-sec"><div class="ag-chartcard"><div class="ag-sec-h"><h3>Spend per day</h3><span class="ag-sec-sub">${S.agent ? E(S.agent) : series.length > 1 ? "stacked by agent" : ""}</span></div>
-      ${anySpend ? `<div class="ag-chart" data-chart="spend" tabindex="0" aria-label="${E(U.data.ariaSpend + ". Use the arrow keys to read each day.")}"></div>${legendHtml}` : empty("Usage", "No spend yet", "Agents log cost with report_usage; the worker does it automatically.")}</div></section>
     <div class="ag-cols">
-      <section class="ag-sec"><div class="ag-chartcard"><div class="ag-sec-h"><h3>Tokens per day</h3><span class="ag-sec-sub">${E(S.agent || "all agents")}</span></div>
-        ${tok ? `<div class="ag-chart" data-chart="tokens" tabindex="0" aria-label="${E(U.data.ariaTokens + ". Use the arrow keys to read each day.")}"></div>` : empty("", "No tokens in this range", "")}</div></section>
-      <section class="ag-sec"><div class="ag-chartcard ag-dailycard"><div class="ag-sec-h"><h3>Daily totals</h3><span class="ag-sec-sub">all agents · calendar days in UTC</span>${allDays.length > daily.length || S.allDays ? `<button type="button" class="ag-link ag-sec-act" onclick="AGS.allDays=!AGS.allDays;render()">${S.allDays ? "Only this range" : `All ${E(allDays.length)} days`}</button>` : ""}</div>${daily.length ? `<div class="ag-daily"><div class="ag-row ag-row-h" aria-hidden="true"><span>Day</span><span>Spend</span><span>Tokens</span><span>Calls</span></div>${daily.map(r => `<div class="ag-row"><span>${E(new Date(r.key + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }))}</span><b>${E(K.fmt.money(r.cost))}</b><span>${E(K.fmt.num((+r.tokens_in || 0) + (+r.tokens_out || 0)))}</span><span>${E(r.calls || 0)}</span></div>`).join("")}</div>` : '<div class="ag-quiet">No usage in this range.</div>'}</div></section>
+      <section class="ag-sec"><div class="ag-chartcard"><div class="ag-sec-h"><h3>Spend per day</h3><span class="ag-sec-sub">${S.agent ? E(S.agent) : series.length > 1 ? "stacked by agent" : ""}</span></div>
+        ${anySpend ? `<div class="ag-chart" data-chart="spend" tabindex="0" aria-label="${E(U.data.ariaSpend + ". Use the arrow keys to read each day.")}"></div>${legendHtml}` : empty("Usage", "No spend yet", "Agents log cost with report_usage; the worker does it automatically.")}</div></section>
+      <section class="ag-sec"><div class="ag-chartcard ag-dailycard"><div class="ag-sec-h"><h3>Daily totals</h3><span class="ag-sec-sub">all agents · calendar days in UTC</span>${allDays.length > daily.length || S.allDays ? `<button type="button" class="ag-link ag-sec-act" onclick="AGS.allDays=!AGS.allDays;render()">${S.allDays ? "Only this range" : `All ${E(allDays.length)} days`}</button>` : ""}</div>${daily.length ? `<div class="ag-daily"><div class="ag-row ag-row-h" aria-hidden="true"><span>Day</span><span>Spend</span><span>Tokens</span><span>Calls</span></div>${daily.map(r => `<div class="ag-row"><span>${E(new Date(r.key + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }))}</span><b>${E(K.fmt.money(r.cost))}</b><span>${E(K.fmt.num(dayTok(r)))}</span><span>${E(r.calls || 0)}</span></div>`).join("")}</div>` : '<div class="ag-quiet">No usage in this range.</div>'}</div></section>
     </div>
     ${sec("Breakdown", `<div class="ag-bar">${seg([["agent", "Agent"], ["project", "Project"], ["job", "Job"], ["model", "Model"]], S.by, "AG.setBy", "Group by")}<span class="ag-count">all time · ${E(plural(rows.length, "row"))}</span></div>
       ${rows.length ? `<div class="ag-list ag-brk"><div class="ag-row ag-row-h" aria-hidden="true"><span>${E(S.by)}</span><span>Cost</span><span>Tokens in / out</span><span>Time</span><span>Calls</span></div>${rows.map(r => `<div class="ag-row">

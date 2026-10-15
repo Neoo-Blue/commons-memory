@@ -370,3 +370,19 @@ def test_fable_window_maps_with_the_weekly_one_and_forecasts_like_claude_ai(stor
     assert Q.label_of("antigravity:claude_and_gpt_models:5h") == "Claude and GPT models, 5 hours"
     assert Q.runs_out(100, week_reset, "weekly", t) is None               # already full: no "runs out now" banner
     assert abs(_parse_time(wk["updated"]) - (t - 60)) < 2                # "as of" is when aiusage read it, not when it arrived
+
+
+def test_a_limit_on_some_models_does_not_stop_the_whole_agent(store):
+    far = time.time() + 3 * 86400
+    ag = store.ensure_agent("antigravity")
+    Q.report(store, ag, [{"window": "antigravity:claude_and_gpt_models:weekly", "used_pct": 96, "resets_at": far},
+                         {"window": "antigravity:gemini_models:weekly", "used_pct": 40, "resets_at": far}])
+    assert Q.can_take(store, ag)[0]                       # Gemini still has room
+    Q.report(store, ag, [{"window": "antigravity:gemini_models:weekly", "used_pct": 99, "resets_at": far}])
+    assert not Q.can_take(store, ag)[0]                   # every model group is out
+    cl = store.ensure_agent("Claude")
+    Q.report(store, cl, [{"window": "claude:seven_day", "used_pct": 30, "resets_at": far},
+                         {"window": "claude:weekly_scoped:fable", "used_pct": 100, "resets_at": far}])
+    assert Q.can_take(store, cl)[0] and Q.headroom(store, cl)[0] > 0.3   # Fable is out, Opus is not
+    Q.report(store, cl, [{"window": "claude:seven_day", "used_pct": 95, "resets_at": far}])
+    assert not Q.can_take(store, cl)[0]

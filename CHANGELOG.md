@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.31.2: tokens lead the Usage page; a limit on some models no longer stops the agent
+- **Tokens first.** The Usage page opens with tokens per day, stacked by agent, from each agent's own records, so Claude
+  Code work on a subscription (no per-call spend) shows day by day. Spend moves beside the daily totals, and the agent
+  filter lists agents that only have token records. The daily totals use the same token numbers as the chart.
+- **Model-scoped limits.** A limit on some of an agent's models no longer stops the whole agent: Fable's own weekly
+  limit is a sub-limit of Claude's week (Claude keeps working on Opus), and when model groups split an agent
+  (Antigravity's Gemini and Claude buckets) the roomiest group decides. Before this, a full Claude bucket on Antigravity
+  would have held all of its work until the weekly reset.
+- **For agents:** nothing changes.
+
 ## v0.31.1: window names keep their capitals
 - **Fix.** Antigravity's bucket read "Claude and gpt models"; it now reads "Claude and GPT models".
 - **For agents:** nothing changes.

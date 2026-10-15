@@ -143,12 +143,33 @@ def task_cost(s: Store, agent_id: str, task_type: str, window: str) -> float:
     return median(rows) if rows else float(os.environ.get("COMMONS_QUOTA_TASK_PCT", "5"))
 
 
+def _scoped(window: str) -> bool:
+    """A limit on some of the agent's models only (Fable's own week, Antigravity's Claude and GPT bucket)."""
+    return "weekly_scoped:" in window or "_models:" in window
+
+
+def _rooms(s: Store, agent_id: str, task_type: str) -> list[tuple[float, dict]]:
+    """(room after the reserve and one task, window) for each window that limits the agent as a whole. A model-scoped
+    window is a sub-limit when an agent-wide window covers its period (Fable full: Claude still runs Opus), and when
+    model groups split the agent (Gemini vs Claude buckets) the roomiest group decides."""
+    rooms = [(100 - w["used_pct"] - reserve(s, agent_id, w) - task_cost(s, agent_id, task_type, w["window"]), w)
+             for w in windows(s, agent_id)]
+    out = []
+    for r, w in rooms:
+        if _scoped(w["window"]):
+            if any(not _scoped(x["window"]) and x["period"] == w["period"] for _, x in rooms):
+                continue
+            if r < max(r2 for r2, x in rooms if _scoped(x["window"]) and x["period"] == w["period"]):
+                continue
+        out.append((r, w))
+    return out
+
+
 def can_take(s: Store, agent_id: str, task_type: str = "general") -> tuple[bool, float | None, str | None]:
     """(has headroom for one more task of this type, when the blocking window resets, which window blocks).
     No reported windows = unknown = allowed (an agent that never reports is limited only by its own errors)."""
     worst = None
-    for w in windows(s, agent_id):
-        room = 100 - w["used_pct"] - reserve(s, agent_id, w) - task_cost(s, agent_id, task_type, w["window"])
+    for room, w in _rooms(s, agent_id, task_type):
         if room < 0 and (worst is None or (w["resets_at"] or 0) > (worst["resets_at"] or 0)):
             worst = w  # the latest-resetting blocked window is the one that decides when work can resume
     if worst is None:
@@ -159,11 +180,9 @@ def can_take(s: Store, agent_id: str, task_type: str = "general") -> tuple[bool,
 def headroom(s: Store, agent_id: str, task_type: str = "general") -> tuple[float | None, bool]:
     """(room left after the user's reserve and one task of this type, 0..1, the tightest window deciding; whether that
     room expires unused soon: a window with real room resets within 3 hours). None = the agent reports no windows."""
-    ws = windows(s, agent_id)
-    if not ws:
+    rooms = _rooms(s, agent_id, task_type)
+    if not rooms:
         return None, False
-    rooms = [(100 - w["used_pct"] - reserve(s, agent_id, w) - task_cost(s, agent_id, task_type, w["window"]), w)
-             for w in ws]
     room = max(0.0, min(r for r, _ in rooms)) / 100
     expiring = room >= 0.2 and any(r >= 30 and w["resets_at"] and 0 < w["resets_at"] - now() < 3 * 3600 for r, w in rooms)
     return room, expiring

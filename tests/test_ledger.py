@@ -97,6 +97,7 @@ def test_hub_stores_totals_not_increments_and_summarises_with_commons_calls(tmp_
     hub_rows = [r for r in out["rows"] if r["agent"] == "provider:anthropic"]
     assert hub_rows and hub_rows[0]["source"] == "commons" and hub_rows[0]["cost"] == pytest.approx(0.01)
     assert out["totals"]["calls"] == 13 and len(out["days"]) == 7
+    assert out["agents"]["Claude"][-1] == 100 + 1500 + 2000                # per-day tokens per agent, for the chart
     assert API(s).usage_ledger({"agent": "nobody"})["rows"] == []        # an unknown agent shows nothing, not everyone
 
 

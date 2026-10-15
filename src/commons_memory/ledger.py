@@ -60,6 +60,7 @@ def summary(s: Store, days: int = 14, agent: str | None = None) -> dict:
     aid = (s.get_agent(agent) or {}).get("id", "unknown") if agent else None
     out: dict = {}
     series: dict = defaultdict(lambda: defaultdict(int))
+    per_agent: dict = defaultdict(lambda: defaultdict(int))
     from .projects import _groups, _rows
     prow = _rows(s)
     root_of = {m: root for root, ids in _groups(prow).items() for m in ids}
@@ -71,7 +72,9 @@ def summary(s: Store, days: int = 14, agent: str | None = None) -> dict:
         e["days"].add(day)
         if key[3]:  # named as the Projects page groups it (commons-dev, commons-test -> Commons)
             e["projects"][shown.get(key[3], key[3])] += (vals.get("tokens_in") or 0) + (vals.get("tokens_out") or 0)
-        series[key[0] + " / " + key[1]][day] += (vals.get("tokens_in") or 0) + (vals.get("tokens_out") or 0) + (vals.get("cache_write") or 0)
+        tok = (vals.get("tokens_in") or 0) + (vals.get("tokens_out") or 0) + (vals.get("cache_write") or 0)
+        series[key[0] + " / " + key[1]][day] += tok
+        per_agent[key[0]][day] += tok
     q, a = "SELECT * FROM usage_ledger WHERE day>=?", [since]
     if aid:
         q, a = q + " AND agent_id=?", a + [aid]
@@ -110,6 +113,7 @@ def summary(s: Store, days: int = 14, agent: str | None = None) -> dict:
     days_list = [time.strftime("%Y-%m-%d", time.gmtime(now() - (days - 1 - i) * 86400)) for i in range(days)]
     return {"days": days_list, "rows": rows,
             "series": {k: [v.get(d, 0) for d in days_list] for k, v in sorted(series.items(), key=lambda kv: -sum(kv[1].values()))[:12]},
+            "agents": {k: [v.get(d, 0) for d in days_list] for k, v in per_agent.items()},
             "totals": {f: sum(r[f] for r in rows) for f in FIELDS} | {"total": sum(r["total"] for r in rows)}}
 
 
