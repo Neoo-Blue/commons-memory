@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.31.1: window names keep their capitals
+- **Fix.** Antigravity's bucket read "Claude and gpt models"; it now reads "Claude and GPT models".
+- **For agents:** nothing changes.
+
 ## v0.31.0: what Claude Code actually ran, and limits that match claude.ai
 - **Why.** The Usage page showed only what agents reported with `report_usage`, so a month of Claude Code work on the
   subscription was nearly invisible: no models, no effort, no tokens. The Claude card showed two windows where claude.ai

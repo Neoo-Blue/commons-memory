@@ -367,5 +367,6 @@ def test_fable_window_maps_with_the_weekly_one_and_forecasts_like_claude_ai(stor
     out = _parse_time(wk["runs_out_at"])
     assert t + 70 * 3600 < out < week_reset                              # ~77h at 49% over 74h: runs out before the reset
     assert ws["claude:weekly_scoped:fable"]["runs_out_at"] is None       # nothing used, nothing to forecast
+    assert Q.label_of("antigravity:claude_and_gpt_models:5h") == "Claude and GPT models, 5 hours"
     assert Q.runs_out(100, week_reset, "weekly", t) is None               # already full: no "runs out now" banner
     assert abs(_parse_time(wk["updated"]) - (t - 60)) < 2                # "as of" is when aiusage read it, not when it arrived

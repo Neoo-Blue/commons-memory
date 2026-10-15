@@ -202,7 +202,8 @@ def label_of(window: str) -> str:
     if parts[0] == "product":
         return re.sub(r"^grok", "Grok ", parts[-1]).title()
     if len(parts) == 2 and parts[1] in ("5h", "weekly"):
-        return f"{parts[0].replace('_', ' ').capitalize()}, {'5 hours' if parts[1] == '5h' else 'this week'}"
+        group = re.sub(r"\bgpt\b", "GPT", parts[0].replace("_", " "))
+        return f"{group[:1].upper()}{group[1:]}, {'5 hours' if parts[1] == '5h' else 'this week'}"
     return " ".join(parts).replace("_", " ")
 
 
