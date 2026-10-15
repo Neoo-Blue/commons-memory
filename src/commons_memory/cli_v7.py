@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import shlex
 import subprocess
@@ -236,6 +237,9 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
         env = os.environ | {"COMMONS_MODEL_FULL": model, "COMMONS_EFFORT": tgt.get("effort") or "",
                             # an agent's own catalog is listed as <agent>/<model>: its CLI wants just <model>
                             "COMMONS_MODEL": model.split("/", 1)[1] if "/" in model else model}
+        suffix = re.search(r"-(minimal|low|medium|high|xhigh|max)$", env["COMMONS_MODEL"])
+        if suffix:  # the model id carries its own effort (agy's claude-opus-5-5-medium): a second, different one is refused
+            env["COMMONS_EFFORT"] = suffix.group(1)
         if args.agent_cmd:
             log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}"
                 + (f" (model {env['COMMONS_MODEL']}, effort {env['COMMONS_EFFORT']})" if model or env["COMMONS_EFFORT"] else ""))

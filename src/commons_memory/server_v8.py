@@ -103,12 +103,15 @@ def register_v8(mcp, store, who):
 
     @mcp.tool()
     def quota_report(windows: list[dict], for_agent: str = "", models: list | None = None, cli: dict | None = None,
-                     agent: str = "", api_key: str = "") -> str:
+                     ledger: list[dict] | None = None, current_model: str = "", agent: str = "", api_key: str = "") -> str:
         """Report your usage windows so Commons only hands you work you can finish: [{window: "five_hour", used_pct:
         14, resets_at: "2026-10-13T03:00:00Z"}, {window: "weekly", ...}]. models: the models you can run right now
         ([{id, name}] or ids); new ones are announced. cli: your tool's {version, latest?, can_check?} (after an update
-        also {result, ok}); the answer's cli.update says whether to run your updater now. for_agent: report for another agent (only callers listed in
-        COMMONS_QUOTA_REPORTERS, e.g. the machine running `commons quota sync` from aiusage)."""
+        also {result, ok}); the answer's cli.update says whether to run your updater now. ledger: daily token totals from your
+        own records [{day, model, effort, project, source, calls, tokens_in, tokens_out, thinking, cache_read, cache_write,
+        cost}] (totals replace earlier ones for the same day and key); current_model: the model you run now. for_agent:
+        report for another agent (only callers listed in COMMONS_QUOTA_REPORTERS, e.g. the machine running
+        `commons quota sync` from aiusage)."""
         import os as _os
         from . import quota as Q
         caller = me(agent, api_key)
@@ -130,6 +133,12 @@ def register_v8(mcp, store, who):
         if cli:
             from .agentcli import report
             out["cli"] = report(store, target, cli)
+        if ledger:
+            from .ledger import ingest
+            out["ledger"] = ingest(store, target, ledger)
+        if current_model:
+            store.x("UPDATE agents SET model=? WHERE id=?", (current_model[:80], target))
+            out["current_model"] = current_model[:80]
         return _js(out)
 
     @mcp.tool()

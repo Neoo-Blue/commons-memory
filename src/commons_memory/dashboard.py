@@ -140,6 +140,11 @@ class API:
         from . import infra as I
         return I.graph(self.s, q.get("root") or None, int(q.get("depth") or 2))
 
+    def usage_ledger(self, q):
+        """Which model, from which agent, at what effort, used how many tokens (agents' own records + Commons' calls)."""
+        from .ledger import summary
+        return summary(self.s, max(1, min(int(q.get("days") or 14), 60)), q.get("agent") or None)
+
     def infra_stats(self, q):
         from . import infra as I
         return I.stats(self.s)

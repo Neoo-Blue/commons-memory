@@ -342,3 +342,30 @@ def test_work_lists_connected_portions_to_update(store):
     assert doc in ids and talk not in ids                       # connected portion found; conversation history isn't
     done = W.finish(store, a, r["claim_id"], "prompt now generated from INSTRUCTIONS")
     assert doc in [x["id"] for x in done["check_related"]] and "outdated" in done["do"]
+
+
+def test_fable_window_maps_with_the_weekly_one_and_forecasts_like_claude_ai(store, tmp_path):
+    import sqlite3
+    db = tmp_path / "usage.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE quota (provider, window, ts, used_pct, resets_at, source, detail)")
+    t = time.time()
+    week_reset = t + (3 * 24 + 22) * 3600                                # 3d 22h left of the week
+    for win, used, ra in (("five_hour", 4, t + 4 * 3600), ("seven_day", 49, week_reset),
+                          ("weekly_scoped:fable", 0, week_reset), ("seven_day", 30, week_reset)):
+        c.execute("INSERT INTO quota VALUES ('claude',?,?,?,?,'oauth','')", (win, t - 120 if used == 30 else t - 60, used, ra))
+    c.commit()
+    got = Q.from_aiusage(str(db), {"claude": {"five_hour": ["Claude"], "seven_day": ["Claude"]}})  # an old map, no Fable key
+    assert sorted(w["window"] for w in got["Claude"]) == ["claude:five_hour", "claude:seven_day", "claude:weekly_scoped:fable"]
+    a = store.ensure_agent("Claude")
+    Q.report(store, a, got["Claude"])
+    ws = {w["window"]: w for w in Q.status(store)[0]["windows"]}
+    assert ws["claude:weekly_scoped:fable"]["label"] == "Fable this week" and ws["claude:five_hour"]["label"] == "Current session"
+    wk = ws["claude:seven_day"]
+    assert wk["used_pct"] == 49                                          # the latest reading, not the older 30%
+    from commons_memory.store import _parse_time
+    out = _parse_time(wk["runs_out_at"])
+    assert t + 70 * 3600 < out < week_reset                              # ~77h at 49% over 74h: runs out before the reset
+    assert ws["claude:weekly_scoped:fable"]["runs_out_at"] is None       # nothing used, nothing to forecast
+    assert Q.runs_out(100, week_reset, "weekly", t) is None               # already full: no "runs out now" banner
+    assert abs(_parse_time(wk["updated"]) - (t - 60)) < 2                # "as of" is when aiusage read it, not when it arrived

@@ -109,7 +109,7 @@ function meter(w, mini) {
   const sev = f <= 0 ? "bad" : f < 15 ? "warn" : "";
   return `<div class="ag-meter ${sev} ${mini ? "mini" : ""}" role="img" aria-label="${E(`used ${pct(u)}, reserved ${pct(r)}, free for Commons ${pct(f)}`)}"><span class="u" style="width:${u}%"></span>${r ? `<span class="r" style="width:${r}%"></span>` : ""}</div>`;
 }
-const winName = w => String(w.window || "").replace(/^[a-z0-9_]+:/i, "").replace(/_/g, " ");
+const winName = w => w.label || String(w.window || "").replace(/^[a-z0-9_]+:/i, "").replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 
 /* ---------- live search filtering, without a re-render ---------- */
 function applyFind(key) {
@@ -289,8 +289,9 @@ V.Presence = async function () {
    Capacity
    ================================================================================================================= */
 function capWin(w) {
-  return `<div class="ag-capwin"><div class="ag-capwin-h"><span class="ag-capwin-n">${E(winName(w))}</span>${w.period && w.period !== winName(w) ? `<span class="ag-sub">${E(w.period)}</span>` : ""}<span class="ag-capwin-free"><b>${pct(w.free_for_commons_pct)}</b> free</span></div>
-    ${meter(w)}<div class="ag-capwin-f"><span>used ${pct(w.used_pct)}</span><span>reserved ${pct(w.reserve_pct)}</span>${w.resets_at ? `<span class="ag-capwin-r">${ico("clock", "ag-i-s")}resets <span data-until="${E(w.resets_at)}">${E(until(w.resets_at))}</span></span>` : ""}</div></div>`;
+  return `<div class="ag-capwin"><div class="ag-capwin-h"><span class="ag-capwin-n">${E(winName(w))}</span>${w.period && !w.label && w.period !== winName(w) ? `<span class="ag-sub">${E(w.period)}</span>` : ""}<span class="ag-capwin-free"><b>${pct(w.free_for_commons_pct)}</b> free</span></div>
+    ${meter(w)}<div class="ag-capwin-f"><span>used ${pct(w.used_pct)}</span><span>reserved ${pct(w.reserve_pct)}</span>${w.resets_at ? `<span class="ag-capwin-r">${ico("clock", "ag-i-s")}resets <span data-until="${E(w.resets_at)}">${E(until(w.resets_at))}</span></span>` : ""}${w.updated ? `<span class="ag-capwin-a" title="When the provider was last read">read ${E(K.fmt.ago(w.updated))}</span>` : ""}</div>
+    ${w.runs_out_at ? `<div class="ag-capwin-p">${ico("clock", "ag-i-s")}At this pace it runs out ${E(new Date(tms(w.runs_out_at)).toLocaleString([], { weekday: "long", hour: "numeric" }))}, before it resets</div>` : ""}</div>`;
 }
 const legend = `<div class="ag-legend" aria-hidden="true"><span><i class="u"></i>Used</span><span><i class="r"></i>Reserved for you</span><span><i class="f"></i>Free for Commons</span></div>`;
 V.Capacity = async function () {
@@ -393,9 +394,10 @@ let roT = 0;
 if (window.ResizeObserver) new ResizeObserver(() => { clearTimeout(roT); roT = setTimeout(() => { if (document.querySelector("[data-chart]")) drawUsage(); }, 120); }).observe(document.querySelector("main#m") || document.body);
 V.Usage = async function () {
   skel("Usage");
-  let ser, u;
+  let ser, u, led;
   try {
-    [ser, u] = await Promise.all([api("usage_series?days=30"), api("usage?by=" + encodeURIComponent(S.by))]);
+    [ser, u, led] = await Promise.all([api("usage_series?days=30"), api("usage?by=" + encodeURIComponent(S.by)),
+      api("usage_ledger?days=" + S.range).catch(() => null)]);
     if (ser && ser.error) throw new Error(ser.error);
     if (u && u.error) throw new Error(u.error);
   } catch (e) { return `<div class="ag-page">${head("Usage", "")}${failed(e)}</div>`; }
@@ -425,14 +427,26 @@ V.Usage = async function () {
     <select aria-label="Agent" onchange="AG.setAgent(this.value)"><option value="">All agents</option>${names.map(nm => `<option ${nm === S.agent ? "selected" : ""} value="${E(nm)}">${E(nm)}</option>`).join("")}</select></div>`;
   const tile = (label, value, hint, extra = "") => `<div class="tile"><div class="tile-header"><span class="tile-label">${E(label)}</span></div><div class="tile-value">${E(value)}</div><div class="tile-footer"><span class="tile-hint">${E(hint)}</span></div>${extra}</div>`;
   const anySpend = names.length > 0;
-  return `<div class="ag-page">${head("Usage", "Spend and tokens your agents report with report_usage. The worker reports for its own runs.")}
+  // every agent's own records (Claude Code transcripts, bridge jobs) plus Commons' own calls: who ran which model, at what effort
+  const lrows = arr(led && led.rows).filter(r => !S.agent || r.agent === S.agent), maxL = Math.max(1, ...lrows.map(r => +r.total || 0));
+  const ledTok = lrows.reduce((t, r) => t + (+r.total || 0), 0), ledSub = `last ${E(n)} days · ${E(plural(lrows.length, "row"))}`;
+  const ledger = lrows.length ? `<div class="ag-list ag-led"><div class="ag-row ag-row-h" aria-hidden="true"><span>Model</span><span>Effort</span><span>Calls</span><span>Input / output</span><span>Cache read / write</span><span>Projects</span></div>${lrows.map(r => `<div class="ag-row">
+      <span class="ag-led-n"><b class="ag-ellip" title="${E(r.model)}">${E(r.model)}</b><span class="ag-sub ag-ellip">${E(r.agent)} · ${E(r.source)}</span></span>
+      <span>${r.effort ? badge(r.effort) : '<span class="ag-sub" title="Not recorded">default</span>'}</span>
+      <span class="ag-num">${E(K.fmt.num(r.calls))}</span>
+      <span class="ag-brk-v"><span class="ag-hbar t"><i style="width:${(100 * (+r.total || 0) / maxL).toFixed(1)}%"></i></span><span>${E(K.fmt.num(r.tokens_in))} / ${E(K.fmt.num(r.tokens_out))}${+r.thinking ? `<span class="ag-led-th" title="Thinking tokens, part of output"> · ${E(K.fmt.num(r.thinking))} thinking</span>` : ""}</span></span>
+      <span class="ag-num ag-sub">${E(K.fmt.num(r.cache_read))} / ${E(K.fmt.num(r.cache_write))}</span>
+      <span class="ag-sub ag-ellip" title="${E(arr(r.top_projects).map(x => x[0]).join(", "))}">${E(arr(r.top_projects).slice(0, 2).map(x => x[0]).join(", ") || "-")}</span></div>`).join("")}</div>`
+    : `<div class="ag-quiet">${led ? "No model calls recorded in this range. The quota sync sends each agent's records every few minutes." : "This hub does not keep model records yet: update it to v0.31."}</div>`;
+  return `<div class="ag-page">${head("Usage", "Tokens and spend per agent, model and effort: Claude Code's own transcripts, the peers' bridge jobs, and what agents report with report_usage.")}
     ${filt}
     <div class="ag-tiles">
       ${tile(`Spend, last ${n} days`, K.fmt.money(spend), S.agent ? S.agent : "all agents", `<div class="ag-tile-spark">${K.spark(daySpend, { w: 120, h: 28 })}</div>`)}
       ${tile("Average per day", K.fmt.money(spend / n), top && top[1] > 0 && !S.agent ? `most from ${top[0]}` : `over ${n} days`)}
-      ${tile(`Tokens, last ${n} days`, K.fmt.num(tok), S.agent ? S.agent : "all agents")}
+      ${tile(`Tokens, last ${n} days`, K.fmt.num(ledTok || tok), ledTok ? "every model, cache reads aside" : S.agent ? S.agent : "all agents")}
       ${tile("Last 24 hours", K.fmt.money(+u.spent_24h || 0), "all agents")}
     </div>
+    ${sec("Models and effort", `<div class="ag-bar"><span class="ag-count">${ledSub}${ledTok ? ` · ${E(K.fmt.num(ledTok))} tokens, cache reads not counted` : ""}</span></div>${ledger}`)}
     <section class="ag-sec"><div class="ag-chartcard"><div class="ag-sec-h"><h3>Spend per day</h3><span class="ag-sec-sub">${S.agent ? E(S.agent) : series.length > 1 ? "stacked by agent" : ""}</span></div>
       ${anySpend ? `<div class="ag-chart" data-chart="spend" tabindex="0" aria-label="${E(U.data.ariaSpend + ". Use the arrow keys to read each day.")}"></div>${legendHtml}` : empty("Usage", "No spend yet", "Agents log cost with report_usage; the worker does it automatically.")}</div></section>
     <div class="ag-cols">

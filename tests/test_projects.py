@@ -134,3 +134,17 @@ def test_review_fixes_paging_sessions_finish_order_agent_filter_and_ungroup_by_n
     home = [e for e in P.listing(s)["folders"] if e["name"] == "home"][0]
     P.group(s, home["id"], ["quick-fix"], "Dotfiles")
     assert "Dotfiles" in [e["title"] for e in P.listing(s)["projects"] + P.listing(s)["tasks"]]
+
+
+def test_usage_by_project_rolls_up_to_the_grouped_project(tmp_path):
+    from commons_memory.usage import Usage
+    s = make_store(tmp_path, "pu.db")
+    _seed(s)
+    a = s.ensure_agent("claude-code")
+    for name, cost in (("commons-memory", 1.0), ("commons-dev", 0.5), (None, 2.0)):
+        Usage(s).report(a, tokens_in=10, tokens_out=1, cost=cost, project=name, note="x")
+    sug = P.listing(s)["suggestions"][0]
+    P.group(s, sug["into"], [m["id"] for m in sug["members"]], "Commons")
+    rows = {r["label"]: r for r in Usage(s).summary("project")}
+    assert rows["Commons"]["cost"] == 1.5 and rows["Commons"]["calls"] == 2
+    assert rows["No project (Commons' own model calls)"]["cost"] == 2.0

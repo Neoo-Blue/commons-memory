@@ -86,11 +86,25 @@ class Usage:
                "tokens_out, cost, seconds, calls FROM usage_daily)")  # pruned rows live on as daily rollups
         rows = self.s.q(f"SELECT {col} k, SUM(tokens_in) tin, SUM(tokens_out) tout, SUM(cost) cost, SUM(seconds) secs,"
                         f" SUM(calls) n FROM {src} u WHERE ts>=? GROUP BY k ORDER BY cost DESC", (since or 0,))
+        if by == "project":  # one row per project as the Projects page groups it, not per repo or worktree name
+            from .projects import _groups, _rows
+            prow = _rows(self.s)
+            root_of = {m: root for root, ids in _groups(prow).items() for m in ids}
+            agg: dict = {}
+            for r in rows:
+                k = root_of.get(r["k"], r["k"]) if r["k"] else None
+                a = agg.setdefault(k, {"tin": 0, "tout": 0, "cost": 0.0, "secs": 0.0, "n": 0})
+                for f in ("tin", "tout", "cost", "secs", "n"):
+                    a[f] += r[f] or 0
+            rows = [{"k": k} | v for k, v in sorted(agg.items(), key=lambda kv: -kv[1]["cost"])]
+            label_of = {pid: (r["title"] or r["name"]) for pid, r in prow.items()}
         out = []
         for r in rows:
             label = r["k"]
-            if by in ("agent", "project", "job") and r["k"]:
-                label = self.s.label(r["k"])[1] if by != "project" else (self.s.project_name(r["k"]) or r["k"])
+            if by in ("agent", "job") and r["k"]:
+                label = self.s.label(r["k"])[1]
+            elif by == "project":
+                label = label_of.get(r["k"], r["k"]) if r["k"] else "No project (Commons' own model calls)"
             out.append({"key": r["k"], "label": label or "-", "tokens_in": r["tin"] or 0, "tokens_out": r["tout"] or 0,
                         "cost": round(r["cost"] or 0, 4), "seconds": round(r["secs"] or 0, 1), "calls": r["n"]})
         return out

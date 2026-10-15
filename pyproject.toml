@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "commons-memory"
-version = "0.30.4"
+version = "0.31.0"
 description = "Unified cross-AI memory: one MCP hub for shared memory, code graph, handoffs, reasoning logs and safe secret references."
 dynamic = ["readme"]
 license = "MIT"

@@ -70,10 +70,12 @@ def report(s: Store, agent_id: str, windows: list[dict], source: str = "agent") 
         ra = w.get("resets_at")
         ra = float(ra) if isinstance(ra, (int, float)) else (_parse_time(ra) if ra else None)
         per = w.get("period") or period_of(name)
+        seen = w.get("read_at")  # when the provider was actually read (aiusage polls on its own clock): shown as "as of"
+        seen = min(t, float(seen) if isinstance(seen, (int, float)) else _parse_time(seen)) if seen else t
         s.x("INSERT INTO agent_quota(agent_id,win,period,used_pct,resets_at,source,updated_at) VALUES(?,?,?,?,?,?,?) "
             "ON CONFLICT(agent_id,win) DO UPDATE SET period=excluded.period, used_pct=excluded.used_pct, "
             "resets_at=excluded.resets_at, source=excluded.source, updated_at=excluded.updated_at",
-            (agent_id, name, per, used, ra, source, t))
+            (agent_id, name, per, used, ra, source, seen))
         s.x("INSERT INTO quota_log(agent_id,win,used_pct,ts,busy) VALUES(?,?,?,?,?)", (agent_id, name, used, t, busy))
         out.append(name)
     return {"agent_id": agent_id, "windows": out}
@@ -184,6 +186,38 @@ def record_cost(s: Store, agent_id: str, task_type: str, before: dict) -> None:
                 (agent_id, task_type, w["window"], round(w["used_pct"] - b, 3), now()))
 
 
+PERIOD_S = {"5h": 5 * 3600, "weekly": 7 * 86400, "daily": 86400}
+NAMES = {"five_hour": "Current session", "seven_day": "This week", "weekly_all": "This week, all products"}
+
+
+def label_of(window: str) -> str:
+    """claude:weekly_scoped:fable -> "Fable this week", antigravity:gemini_models:5h -> "Gemini models, 5 hours"."""
+    parts = window.split(":")
+    if len(parts) > 1 and parts[0] in DEFAULT_MAP:
+        parts = parts[1:]
+    if parts[0] in NAMES:
+        return NAMES[parts[0]]
+    if parts[0] == "weekly_scoped":
+        return f"{parts[-1].replace('_', ' ').title()} this week"
+    if parts[0] == "product":
+        return re.sub(r"^grok", "Grok ", parts[-1]).title()
+    if len(parts) == 2 and parts[1] in ("5h", "weekly"):
+        return f"{parts[0].replace('_', ' ').capitalize()}, {'5 hours' if parts[1] == '5h' else 'this week'}"
+    return " ".join(parts).replace("_", " ")
+
+
+def runs_out(used: float, resets_at: float | None, period: str, t: float) -> float | None:
+    """When the window fills at the pace since it opened (claude.ai's "at this pace you'll run out"), if before it resets."""
+    span = PERIOD_S.get(period)
+    if not (span and resets_at and 0 < used < 100):
+        return None
+    elapsed = t - (resets_at - span)
+    if elapsed < span * 0.05:  # too early in the window to call a pace
+        return None
+    at = t + (100 - used) * elapsed / used
+    return at if at < resets_at else None
+
+
 def status(s: Store) -> list[dict]:
     out = []
     for a in s.q("SELECT DISTINCT q.agent_id, a.name FROM agent_quota q JOIN agents a ON a.id=q.agent_id ORDER BY a.name"):
@@ -193,7 +227,8 @@ def status(s: Store) -> list[dict]:
             ws.append({"window": w["window"], "period": w["period"], "used_pct": round(w["used_pct"], 1),
                        "reserve_pct": round(res, 1), "free_for_commons_pct": round(max(0.0, 100 - w["used_pct"] - res), 1),
                        "resets_at": iso(w["resets_at"]) if w["resets_at"] else None, "source": w["source"],
-                       "updated": iso(w["updated_at"])})
+                       "updated": iso(w["updated_at"]), "label": label_of(w["window"]),
+                       "runs_out_at": iso(ro) if (ro := runs_out(w["used_pct"], w["resets_at"], w["period"], now())) else None})
         ok, until, win = can_take(s, a["agent_id"])
         out.append({"agent": a["name"], "can_take_work": ok, "waits_until": iso(until) if until else None,
                     "blocking_window": win, "windows": ws})
@@ -203,7 +238,7 @@ def status(s: Store) -> list[dict]:
 # aiusage provider/window -> Commons agents (override with ~/.commons/quota-map.json)
 DEFAULT_MAP = {
     "claude": {"five_hour": ["my-agent"], "seven_day": ["my-agent"]},
-    "antigravity": {"gemini_models:5h": ["antigravity"], "gemini_models:weekly": ["antigravity"]},
+    "antigravity": {"*:5h": ["antigravity"], "*:weekly": ["antigravity"]},
     "grok": {"product:grokbuild": ["grok-build"], "weekly_all": ["grok-build", "grok"], "product:grokchat": ["grok"]},
 }
 
@@ -291,8 +326,10 @@ def local_models(cmds: dict | None = None) -> dict[str, list[dict]]:
 
 
 def from_aiusage(db_path: str | None = None, mapping: dict | None = None) -> dict[str, list[dict]]:
-    """Latest window per provider from the aiusage database, grouped by Commons agent name."""
+    """Latest window per provider from the aiusage database, grouped by Commons agent name.
+    Mapping keys may be patterns ("*:5h")."""
     import sqlite3
+    from fnmatch import fnmatchcase
     from pathlib import Path
     p = Path(db_path or Path.home() / ".aiusage" / "usage.db")
     if not p.exists():
@@ -302,11 +339,14 @@ def from_aiusage(db_path: str | None = None, mapping: dict | None = None) -> dic
         mapping = json.loads(mp.read_text()) if mp.exists() else DEFAULT_MAP
     db = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
     out: dict[str, list[dict]] = {}
-    for prov, win, used, ra in db.execute(
-            "SELECT q.provider, q.window, q.used_pct, q.resets_at FROM quota q JOIN (SELECT provider, window, MAX(ts) m "
+    for prov, win, used, ra, ts in db.execute(
+            "SELECT q.provider, q.window, q.used_pct, q.resets_at, q.ts FROM quota q JOIN (SELECT provider, window, MAX(ts) m "
             "FROM quota GROUP BY provider, window) l ON l.provider=q.provider AND l.window=q.window AND l.m=q.ts"):
-        for agent in (mapping.get(prov) or {}).get(win, []):
+        agents = {a for pat, names in (mapping.get(prov) or {}).items() if fnmatchcase(win, pat) for a in names}
+        if not agents and win.startswith("weekly_scoped:"):  # a model's own weekly limit (Fable) follows the weekly one
+            agents = set((mapping.get(prov) or {}).get("seven_day", []))
+        for agent in sorted(agents):
             if used is not None:
                 out.setdefault(agent, []).append({"window": f"{prov}:{win}", "used_pct": float(used), "resets_at": ra,
-                                                  "period": period_of(win)})
+                                                  "period": period_of(win), "read_at": ts})
     return out

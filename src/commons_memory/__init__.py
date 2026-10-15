@@ -1,5 +1,5 @@
 """Commons: unified cross-AI memory hub (MCP gateway + SQLite store)."""
-__version__ = "0.30.4"
+__version__ = "0.31.0"
 
 
 def _ca_bundle() -> None:

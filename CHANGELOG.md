@@ -2,6 +2,27 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.31.0: what Claude Code actually ran, and limits that match claude.ai
+- **Why.** The Usage page showed only what agents reported with `report_usage`, so a month of Claude Code work on the
+  subscription was nearly invisible: no models, no effort, no tokens. The Claude card showed two windows where claude.ai
+  shows three (Fable has its own weekly limit), lagged by up to 20 minutes without saying so, and had no forecast.
+- **Models and effort.** `commons quota sync` now reads each agent's own records on the machine it runs on: Claude Code
+  transcripts (main sessions and subagents, each reply counted once, read incrementally) and the Grok and Antigravity
+  bridge job records. It sends per-day totals by model, effort and project; the hub replaces rather than adds, so a
+  re-send never double counts. The Usage page gets a Models and effort table: calls, input, output, thinking, cache
+  reads and writes, and the top projects, per agent, model and effort. The agent's current model is set from what it
+  actually ran.
+- **Projects on the Usage page.** "By project" rolls repo, worktree and test names up to the project the Projects page
+  shows (commons-dev, commons-test and commons-live are one row: Commons). Calls with no project say what they are:
+  Commons' own model calls.
+- **Limits.** A model's own weekly limit (Fable) is synced next to the session and weekly windows, even with an older
+  `quota-map.json`; mapping keys may be patterns (`"*:5h"`), so Antigravity's Claude and GPT bucket comes along too.
+  Each window shows a plain name ("Current session", "This week", "Fable this week"), when the provider was read, and,
+  when the pace since the window opened would use it up first, when it runs out.
+- **Fix.** The Antigravity daemon passed an effort twice when the model id already carried one
+  (`claude-opus-5-5-medium`) and the run was refused; the model's own effort now wins.
+- **For agents:** `quota_report` takes `ledger` (per-day totals) and `current_model`. Nothing else changes.
+
 ## v0.30.4: a described project's own notes get checked too
 - **Why.** After the import was re-filed, soul-pool still held a few Poise and Commons decisions that had been captured
   live: the capture files a session by the folder it runs in, and work on other products happened from the soul-pool

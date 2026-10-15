@@ -296,6 +296,16 @@ def handle_nostore(args) -> int:
         except CommonsError:  # no aiusage database on this machine: still send models and the CLI
             wins_by = {}
         models_by, clis = Q.local_models(eff.get("_models")), Q.local_clis(eff, eff.get("_cli"))
+        from . import ledger as L
+        claude_agent = next(iter(sorted({a for ws in (eff.get("claude") or {}).values() for a in ws})), "Claude")
+        try:  # each agent's own records: which model, at what effort, how many tokens (never blocks the windows)
+            led_state, ledger_by, seen = L.collect({"claude": claude_agent} | (eff.get("_ledger") or {}))
+        except Exception as e:  # noqa: BLE001
+            led_state, ledger_by, seen = None, {}, {}
+            print(json.dumps({"ledger": f"not read: {str(e)[:160]}"}), file=sys.stderr)
+        for agent, info in seen.items():  # a tool with no model list (Claude Code): the models it actually ran lately
+            if agent not in models_by and info["models"]:
+                models_by[agent] = [{"id": m, "name": m} for m in info["models"]]
 
         def old_hub(exc):
             text = str(exc).lower()
@@ -308,22 +318,32 @@ def handle_nostore(args) -> int:
             try:
                 return json.loads(cli._call("call", {"tool": "quota_report", "args": payload}) or "{}"), True
             except Exception as first:  # noqa: BLE001
-                slim = {k: v for k, v in payload.items() if k not in ("models", "cli")}
-                if not (("models" in payload or "cli" in payload) and slim.get("windows") and old_hub(first)):
+                slim = {k: v for k, v in payload.items() if k not in ("models", "cli", "ledger", "current_model")}
+                if not (any(k in payload for k in ("models", "cli", "ledger", "current_model")) and slim.get("windows")
+                        and old_hub(first)):
                     raise first
                 return json.loads(cli._call("call", {"tool": "quota_report", "args": slim}) or "{}"), False
         sent = {}
-        for agent in sorted(set(wins_by) | set(models_by) | set(clis)):
+        for agent in sorted(set(wins_by) | set(models_by) | set(clis) | set(ledger_by)):
             try:
                 # the hub must list this key's agent in COMMONS_QUOTA_REPORTERS to report for others
                 a = {"windows": wins_by.get(agent, []), "for_agent": agent}
                 if agent in models_by:
                     a["models"] = models_by[agent]
+                rows = ledger_by.get(agent) or []
+                if rows:
+                    a["ledger"] = rows[:1000]
+                if (seen.get(agent) or {}).get("current"):
+                    a["current_model"] = seen[agent]["current"]
                 info = clis.get(agent)
                 if info:
                     a["cli"] = {k: v for k, v in info.items() if k != "update"}
                 r, full = report(a)
-                line = [w["window"] for w in a["windows"]]
+                for i in range(1000, len(rows) if full else 0, 1000):  # the first big read sends weeks of totals: in pieces
+                    report({"windows": [], "for_agent": agent, "ledger": rows[i:i + 1000]})
+                if full and rows and led_state is not None:
+                    L.mark_sent(led_state, agent)
+                line = [w["window"] for w in a["windows"]] + ([f"{len(rows)} usage rows"] if full and rows else [])
                 if full:
                     line += ([f"{len(a['models'])} models"] if "models" in a else []) \
                         + [f"NEW: {n}" for n in (r.get("models") or {}).get("new", [])] \
@@ -348,6 +368,8 @@ def handle_nostore(args) -> int:
                 if key:
                     msg = msg.replace(key, "[key]")
                 sent[agent] = [f"error: {msg[:180]}"]
+        if led_state is not None:
+            L.save(led_state)  # offsets and what is still unsent: the next sync picks up where this one stopped
         print(json.dumps({"synced": sent}))
         return 0
     if c == "import":
