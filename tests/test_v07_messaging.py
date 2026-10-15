@@ -214,7 +214,9 @@ def test_bus_import_and_daemon(store, tmp_path):
     out = tmp_path / "prompt.txt"
     args = SimpleNamespace(agent="worker1", agent_cmd=f"tee {out}", url=None, api_key=None, wait=0, once=True, timeout=30)
     assert daemon(args, store, log=lambda *_: None) == 0
-    assert "do the thing" in out.read_text()
+    prompt = out.read_text()
+    assert "from boss" in prompt and "msg_get(" in prompt
+    assert "do the thing" not in prompt          # the body is read with the agent's own key, as data, not pasted in
     assert m.unread(store.get_agent("worker1")["id"]) == 0
 
 

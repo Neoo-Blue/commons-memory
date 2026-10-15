@@ -90,7 +90,7 @@ def post(self, path, body):
     if path == "/api/msg/send":
         from .messaging import Messaging
         m = Messaging(self.s)
-        return m.send(m._aid("user"), body["to"], body["text"], mtype=body.get("type", "message"))
+        return m.send(m._aid("user"), body["to"], body["text"], mtype=body.get("type", "message"), via="the Commons dashboard")
     if path == "/api/wake/redrive":
         from .messaging import Dispatcher
         return {"redriven": Dispatcher.redrive(self.s, body.get("id"))}

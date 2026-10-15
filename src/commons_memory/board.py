@@ -135,7 +135,7 @@ def answer(s: Store, item_id: str, text: str, by: str = "user") -> dict:
     if r["agent_id"]:
         from .messaging import Messaging
         Messaging(s).send(None, r["agent_id"], f"Answer to your question {item_id} ({r['text'][:120]}):\n{text.strip()}",
-                          mtype="message", subject="answer: " + r["text"][:60], meta={"board": item_id})
+                          mtype="message", subject="answer: " + r["text"][:60], meta={"board": item_id}, by="the user's answer on the board")
     from .vault import answered
     answered(s, r["text"], text)  # a credential request the decision agent passed to the user
     from .mcphub import answered as mcp_answered

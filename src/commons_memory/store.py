@@ -1265,7 +1265,7 @@ class Store:
 
     # ------------------------------------------------------------------ inbox / delegation
     def post_task(self, from_agent: str | None, to_agent: str, body: str, kind: str = "task",
-                  context_ids: list[str] | None = None, project: str | None = None) -> dict:
+                  context_ids: list[str] | None = None, project: str | None = None, by: str | None = None) -> dict:
         body, found = redact(body)
         to = self.get_agent(to_agent)
         to_id = to["id"] if to else ("*" if to_agent in ("*", "any") else self.ensure_agent(to_agent))
@@ -1281,7 +1281,7 @@ class Store:
             from .messaging import Messaging
             Messaging(self).send(from_agent, to_id, f"{body}\n\n(task {tid}: answer with respond_task)",
                                  mtype="handoff" if kind == "handoff" else "task", subject=body[:80],
-                                 meta={"task": tid})
+                                 meta={"task": tid}, by=by)
         else:
             from .messaging import emit
             emit(self, to_id, "escalation", ref=tid, preview=body, sender=self.label(from_agent)[1] if from_agent else None)

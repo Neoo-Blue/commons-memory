@@ -520,6 +520,15 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         res = _post(url, harness, event, payload, timeout)
     else:
         res = _local(harness, event, payload, store_factory)
+    if event == "session_start" and url:
+        try:  # Commons still registered as this client's MCP server? (put back if something removed it)
+            from .setup import ensure_mcp
+            note = ensure_mcp(harness, url)
+            if note:
+                res = dict(res or {})
+                res["context"] = (note + "\n\n" + (res.get("context") or "")).strip()
+        except Exception:  # noqa: BLE001 - never block a session over this
+            pass
     if res and event == "session_start" and isinstance(res.get("skills"), list):
         try:
             from .skillsync import write

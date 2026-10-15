@@ -8,6 +8,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -83,14 +84,39 @@ def _merge_json(path: str, key: str, value: dict, section: str = "mcpServers") -
     return f"wrote {p}"
 
 
-def mcp(client: str, url: str, key: str) -> str:
+def _claude_entry(url: str, helper: str) -> dict:
+    """Claude Code's entry: the key is fetched by a headers helper at connect time, so ~/.claude.json never holds it."""
+    return {"type": "http", "url": url, "headersHelper": helper}
+
+
+def _hook_wrapper() -> str:
+    """The command the Commons hooks run through in Claude Code (a secret-manager wrapper, or plain `commons`): the
+    headers helper goes through the same door, so it finds the key exactly where the hooks do."""
+    try:
+        cfg = json.loads((Path.home() / ".claude" / "settings.json").read_text())
+        for groups in (cfg.get("hooks") or {}).values():
+            for g in groups:
+                for h in g.get("hooks", []):
+                    cmd = h.get("command", "")
+                    if " hook claude-code " in cmd:
+                        return cmd.split(" hook claude-code ")[0]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return ""
+
+
+def mcp(client: str, url: str, key: str, agent: str = "") -> str:
     auth = f"Bearer {key}"
     if client == "claude-code":
-        if not shutil.which("claude"):
+        claude = shutil.which("claude") or shutil.which("claude", path=os.path.expanduser("~/.local/bin"))
+        if not claude:
             return "skipped: claude CLI not on PATH"
-        subprocess.run(["claude", "mcp", "remove", "commons", "-s", "user"], capture_output=True)
-        r = subprocess.run(["claude", "mcp", "add", "--transport", "http", "--scope", "user", "commons", url,
-                            "--header", f"Authorization: {auth}"], capture_output=True, text=True)
+        wrapper = _hook_wrapper()
+        helper = f"{wrapper} mcp-auth" if wrapper else \
+            f"COMMONS_AGENT={shlex.quote(agent)} {shlex.quote(sys.executable)} -m commons_memory mcp-auth"
+        subprocess.run([claude, "mcp", "remove", "commons", "-s", "user"], capture_output=True)
+        r = subprocess.run([claude, "mcp", "add-json", "--scope", "user", "commons", json.dumps(_claude_entry(url, helper))],
+                           capture_output=True, text=True)
         return "added to Claude Code (user scope)" if r.returncode == 0 else f"failed: {(r.stderr or r.stdout)[-200:]}"
     if client in JSON_MCP:
         path, section, entry = JSON_MCP[client]
@@ -130,7 +156,7 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
             print(f"- {LABELS[name]}: FAILED: {str(e).replace(key, '[key]')[:300]}")
 
     print(f"Setting up {client} as Commons agent '{agent}' ({mcp_url}); key saved at {keyfile}")
-    step("mcp", lambda: mcp(client, mcp_url, key))
+    step("mcp", lambda: mcp(client, mcp_url, key, agent))
 
     def instructions():
         from . import instructions as I
@@ -175,6 +201,30 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
     step("verify", verify)
     print("Done. Restart the AI so it loads Commons." if ok else "Finished with failures above; fix them and run again.")
     return 0 if ok else 1
+
+
+def ensure_mcp(client: str, url: str) -> str:
+    """Session start: is Commons still registered as this client's MCP server? If not, put it back through the client's
+    own CLI (in the background, so the session never waits) and say so in the session's context. '' = all well."""
+    if client != "claude-code" or not url:
+        return ""
+    base = url.rstrip("/").removesuffix("/mcp")
+    try:
+        servers = json.loads((Path.home() / ".claude.json").read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError):
+        return ""  # missing or mid-write: look again next session
+    if str((servers.get("commons") or {}).get("url", "")).rstrip("/").removesuffix("/mcp") == base:
+        return ""
+    wrapper = _hook_wrapper()
+    claude = shutil.which("claude") or shutil.which("claude", path=os.path.expanduser("~/.local/bin"))
+    if not (wrapper and claude):
+        return "Commons is not connected as an MCP server here; run `commons doctor --repair` to connect it."
+    subprocess.Popen([claude, "mcp", "add-json", "--scope", "user", "commons",
+                      json.dumps(_claude_entry(base + "/mcp", f"{wrapper} mcp-auth"))],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return ("Commons was not registered as an MCP server in Claude Code, so its tools are missing from this session. "
+            "It has been re-registered and the tools load in the next session; until then this context comes from the "
+            "Commons hooks, and the hub answers over HTTP with the same key.")
 
 
 def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:

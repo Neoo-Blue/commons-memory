@@ -127,6 +127,15 @@ def watch(s: Store, t: float | None = None) -> list[dict]:
             if job and job[0]["status"] == "done":
                 s.x("UPDATE recurring SET last_ok=?, last_status=? WHERE id=?", (t, f"covered (job {cov[0]['value']})", r["id"]))
             continue
+        pre = f"sched_cover:{r['id']}:"
+        earlier = [m["value"] for m in s.q("SELECT value FROM meta WHERE substr(key, 1, ?)=?", (len(pre), pre))]
+        jobs = s.q(f"SELECT id, status, updated_at FROM jobs WHERE id IN ({','.join('?' * len(earlier))})", earlier) if earlier else []
+        if any(j["status"] not in ("done", "failed", "cancelled") for j in jobs):
+            continue  # an earlier missed run's takeover is still open: it covers this run too (one per schedule, not per hour)
+        late = [j for j in jobs if j["status"] == "done" and (j["updated_at"] or 0) >= slot]
+        if late:  # it finished after this run was due, so it did this run's work
+            s.x("UPDATE recurring SET last_ok=?, last_status=? WHERE id=?", (t, f"covered (job {late[0]['id']})", r["id"]))
+            continue
         grace = r["grace_s"] or 1800
         owner = r["owner_agent"]
         ok, until, win = Q.can_take(s, owner) if owner else (True, None, None)

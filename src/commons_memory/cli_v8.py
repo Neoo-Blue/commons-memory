@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-NOSTORE = {"hook", "hooks", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra"}
+NOSTORE = {"hook", "hooks", "mcp-auth", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export",
         "audit-chain", "graphiti", "approvals"} | NOSTORE
 
@@ -75,6 +75,8 @@ def add_parsers(sub) -> None:
     x = sub.add_parser("hook", help="(called by agent harness hooks) handle one lifecycle event from stdin; never blocks")
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "generic"])
     x.add_argument("event")
+    sub.add_parser("mcp-auth", help="(called by Claude Code as the MCP headers helper) print the Authorization header, "
+                                    "from COMMONS_API_KEY or this agent's key file, so no config file holds the key")
     x = sub.add_parser("hooks", help="install/uninstall lifecycle hooks for an agent harness")
     x.add_argument("action", choices=["install", "uninstall", "show"])
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "all"])
@@ -384,6 +386,14 @@ def handle_nostore(args) -> int:
             out = ""
         if out:
             print(out)
+        return 0
+    if c == "mcp-auth":
+        from .capture import _key
+        key = _key()
+        if not key:
+            print("commons mcp-auth: no key (set COMMONS_API_KEY or COMMONS_AGENT with a saved key file)", file=sys.stderr)
+            return 1
+        print(json.dumps({"Authorization": f"Bearer {key}"}))
         return 0
     if c == "hooks":
         from .capture import HOOK_TARGETS, install_hooks

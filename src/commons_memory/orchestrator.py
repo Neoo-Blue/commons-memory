@@ -693,7 +693,8 @@ class Orchestrator:
                                    f"(job {job_id}). Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
                                    subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"],
                                                                     "model": tgt.get("model"),
-                                                                    "effort": (tgt.get("effort") or {}).get("level")},
+                                                                    "effort": (tgt.get("effort") or {}).get("level"),
+                                                                    "by": "the job scheduler: work assigned to you"},
                                    event=ev)
 
     def _ask_owner(self, job_id: str) -> None:
@@ -1183,7 +1184,7 @@ class Orchestrator:
                 from .messaging import Messaging
                 Messaging(self.s).send(None, self.s.label(job["submitted_by"])[1],
                                        f"Done: {job['title']} (job {job_id})\n\n{merged[:6000]}", mtype="message",
-                                       subject=f"done: {job['title'][:60]}", meta={"job": job_id})
+                                       subject=f"done: {job['title'][:60]}", meta={"job": job_id}, by="the job scheduler: your job finished")
             except Exception:  # noqa: BLE001 - the result is stored either way
                 pass
 

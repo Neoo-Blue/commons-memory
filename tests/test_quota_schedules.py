@@ -386,3 +386,21 @@ def test_a_limit_on_some_models_does_not_stop_the_whole_agent(store):
     assert Q.can_take(store, cl)[0] and Q.headroom(store, cl)[0] > 0.3   # Fable is out, Opus is not
     Q.report(store, cl, [{"window": "claude:seven_day", "used_pct": 95, "resets_at": far}])
     assert not Q.can_take(store, cl)[0]
+
+
+def test_an_hourly_schedule_missed_for_hours_gets_one_takeover_not_one_per_hour(store):
+    o = Orchestrator(store)
+    owner, *_ = _agents(store, o, "grok", "muse", "checker")
+    SC.register(store, owner, "periodic-proactive", "34 * * * *", "Check the feeds", tz="UTC")
+    SC.ran(store, owner, "periodic-proactive", "ok", "checked")
+    hour = 3600
+    slot = (time.time() // hour + 3) * hour + 34 * 60
+    Q.report(store, owner, [{"window": "weekly", "used_pct": 100, "resets_at": slot + 10 * hour}])
+    first = SC.watch(store, slot + 60)
+    assert len(first) == 1
+    for h in range(1, 6):                                          # five more missed runs while the first is open
+        assert SC.watch(store, slot + h * hour + 60) == []
+    store.x("UPDATE jobs SET status='done', updated_at=? WHERE id=?", (slot + 5 * hour + 900, first[0]["job_id"]))
+    assert SC.watch(store, slot + 5 * hour + 960) == []            # it finished during this run's hour: that run is covered
+    assert store.q("SELECT last_status FROM recurring WHERE name='periodic-proactive'")[0]["last_status"].startswith("covered")
+    assert len(SC.watch(store, slot + 6 * hour + 60)) == 1         # the next missed run gets its own

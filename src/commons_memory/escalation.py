@@ -106,10 +106,16 @@ class Escalator:
             if level is None:
                 cands = [a for a in self._active_agents(st) if a["id"] != st["assigned_agent"]]
                 if cands:
+                    prev = self.s.label(st["assigned_agent"])[1] if st["assigned_agent"] else None
+                    why = ("no agent with this expertise was free" if st["unassignable"] else
+                           f"{prev}, who had it, has gone quiet or is paused" if st["stale_assignee"] and prev else
+                           f"nobody claimed it in {int(st['age'] // 60)} minutes")
                     self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (cands[0]["id"], st["id"]))
                     self.s.relate(st["id"], cands[0]["id"], "assigned_to")
-                    self.s.post_task(None, cands[0]["name"], f"Escalated subtask {st['id']} ({st['type']}): "
-                                     f"{st['title']} — claim it with claim_subtask('{st['id']}')", kind="task")
+                    self.s.post_task(None, cands[0]["name"], f"Escalated subtask {st['id']} ({st['type']}): {st['title']}. "
+                                     f"Why you: {why}, and you are the next active agent for {st['type']} work. Claim it "
+                                     f"with claim_subtask('{st['id']}'); it is assigned to you, which pickup() confirms.",
+                                     kind="task", by="the escalation ladder: stuck work reassigned")
                     self._log(st, "reassigned", "reassign", {"to": cands[0]["name"], "unassignable": st["unassignable"]})
                     done.append({"subtask": st["id"], "action": "reassigned", "to": cands[0]["name"]})
                     continue

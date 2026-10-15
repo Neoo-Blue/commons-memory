@@ -69,7 +69,7 @@ def announce(s: Store) -> dict | None:
     from .messaging import Messaging
     Messaging(s).send(None, "*", f"Commons v{__version__} is live on the hub.\n\n{_render(es)}\n\nCall whats_new() any "
                       "time for this list; the playbook you follow is updated too.", mtype="release",
-                      subject=f"Commons v{__version__}: what changed and what to adapt")
+                      subject=f"Commons v{__version__}: what changed and what to adapt", by="release notes")
     s.audit(None, "release.announce", __version__, {"versions": [e["version"] for e in es]})
     return {"announced": __version__, "versions": [e["version"] for e in es]}
 
