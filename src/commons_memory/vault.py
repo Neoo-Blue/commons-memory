@@ -67,17 +67,33 @@ def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
     return auth
 
 
-def deposit(s: Store, agent_id: str, name: str, value: str, service: str, base_urls: list[str], auth: str = "bearer",
-            extra_headers: list[str] | None = None, description: str = "", risk: str = "normal") -> dict:
-    """An agent hands over a key it holds. It can add new ones and update its own, never replace anyone else's."""
+def deposit(s: Store, agent_id: str, name: str, value: str, service: str, base_urls: list[str] | None = None,
+            auth: str = "bearer", extra_headers: list[str] | None = None, description: str = "", risk: str = "normal") -> dict:
+    """An agent hands over a key it holds. It can add new ones and update its own, never replace anyone else's.
+    Hosts can come later (store the key the moment you get it): until then it is never sent anywhere."""
     r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
     if r and r[0]["deposited_by"] != agent_id:
         raise CommonsError(f"{name} is already in the vault (from {s.label(r[0]['deposited_by'])[1] if r[0]['deposited_by'] else 'the admin'}); "
                            "pick another name if this is a different key")
-    out = add(s, name, value, service, base_urls, parse_auth(auth, extra_headers), description, risk)
+    out = add(s, name, value, service, base_urls or [], parse_auth(auth, extra_headers), description, risk, hosts_later=True)
     s.x("UPDATE vault_creds SET deposited_by=? WHERE name=?", (agent_id, name))
     s.audit(agent_id, "vault.deposit", name, {"service": service})
     return out
+
+
+def set_hosts(s: Store, agent_id: str, name: str, base_urls: list[str]) -> dict:
+    """The agent that deposited a key says where it may be sent (it could re-deposit it anyway); the admin owns the rest."""
+    r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
+    if not r:
+        raise CommonsError(f"unknown credential {name!r}")
+    if r[0]["deposited_by"] != agent_id:
+        raise CommonsError(f"only the agent that deposited {name} (or the user, on the dashboard) can change its hosts")
+    urls = [u.rstrip("/") + "/" for u in base_urls or [] if urllib.parse.urlparse(u).scheme in ("http", "https")]
+    if not urls:
+        raise CommonsError("give at least one http(s) base URL the key may be sent to")
+    s.x("UPDATE vault_creds SET base_urls=?, updated_at=? WHERE name=?", (json.dumps(urls), now(), name))
+    s.audit(agent_id, "vault.hosts", name, {"base_urls": urls})
+    return {"name": name, "base_urls": urls}
 
 
 # ------------------------------------------------------------------------------------------------ storage
@@ -135,7 +151,7 @@ def _value(s: Store, name: str) -> str:
 
 
 def add(s: Store, name: str, value: str, service: str, base_urls: list[str], auth: dict, description: str = "",
-        risk: str = "normal") -> dict:
+        risk: str = "normal", hosts_later: bool = False) -> dict:
     """Admin only (CLI on the hub): store a credential. auth: {"header": "X-Plex-Token"} | {"query": "apikey"} |
     {"bearer": true} | {"basic": "username"} (value = password) | {"header": "Authorization", "prefix": "Token "},
     optional "extra_headers"."""
@@ -144,8 +160,8 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     value = (value or "").strip()
     if not value:
         raise CommonsError("empty value (pipe it on stdin)")
-    urls = [u.rstrip("/") + "/" for u in base_urls if urllib.parse.urlparse(u).scheme in ("http", "https")]
-    if not urls:
+    urls = [u.rstrip("/") + "/" for u in base_urls or [] if urllib.parse.urlparse(u).scheme in ("http", "https")]
+    if not urls and not hosts_later:
         raise CommonsError("give at least one http(s) base URL the key may be sent to")
     if not any(k in auth for k in ("header", "query", "bearer", "basic")):
         raise CommonsError("auth needs header, query, bearer or basic")
@@ -155,7 +171,9 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
         "VALUES(?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM vault_creds WHERE name=?),?),?)",
         (name, service, description, json.dumps(urls), json.dumps(auth), risk, _seal(s, name, value), name, now(), now()))
     s.audit(None, "vault.set", name, {"service": service, "base_urls": urls, "risk": risk})
-    return {"name": name, "service": service, "base_urls": urls, "risk": risk, "stored": True}
+    return {"name": name, "service": service, "base_urls": urls, "risk": risk, "stored": True} | (
+        {} if urls else {"next": f"Stored. It can't be sent anywhere until you give the hosts it belongs to: "
+                                  f"vault_hosts(name='{name}', base_urls=['https://api.example.com'])."})
 
 
 SYMBOLS = "-_.!@#%^*+="
@@ -209,7 +227,7 @@ def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
         raise CommonsError("only logins can be revealed; API keys are used through use_credential and never shown")
     if len((justification or "").strip()) < 15:
         raise CommonsError("justify the request: what you need the login for")
-    url = json.loads(cred["base_urls"])[0]
+    url = (json.loads(cred["base_urls"]) or [""])[0]
     own = cred["deposited_by"] == agent_id and now() - (cred["updated_at"] or 0) < 86400
     g = None if own else _grant(s, agent_id, name, "REVEAL", url)
     d = ({"verdict": "allow", "scope": "write", "scores": {}, "via": "creator", "reason": "the agent that created it, within a day"}
@@ -458,7 +476,9 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
     cred = dict(r[0])
     if not _in_scope(cred, url):
         s.audit(agent_id, "vault.refused", credential, {"url": url[:300], "why": "outside its base URLs"})
-        raise CommonsError(f"{credential} may only be sent to {', '.join(json.loads(cred['base_urls']))}")
+        hosts = json.loads(cred["base_urls"])
+        raise CommonsError(f"{credential} may only be sent to {', '.join(hosts)}" if hosts else
+                           f"{credential} has no hosts yet: whoever deposited it sets them with vault_hosts, or the user on the dashboard")
     if len((justification or "").strip()) < 15:
         raise CommonsError("justify the request: what you need this call for (the user's ask or your task)")
     from .redact import redact

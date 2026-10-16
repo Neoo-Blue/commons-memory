@@ -334,16 +334,23 @@ def register_v8(mcp, store, who):
         return _js(V.judge_answer(store, me(agent, api_key), request_id, {k: sc[k] for k in asked}, reason))
 
     @mcp.tool()
-    def vault_deposit(name: str, value: str, service: str, base_urls: list[str], auth: str = "bearer",
+    def vault_deposit(name: str, value: str, service: str, base_urls: list[str] | None = None, auth: str = "bearer",
                       extra_headers: list[str] | None = None, description: str = "", risk: str = "normal",
                       agent: str = "", api_key: str = "") -> str:
         """Hand over an API key, token or password you hold so Commons keeps it (encrypted) and other agents can use it
-        through use_credential without seeing it. base_urls = where it may be sent; auth = bearer | basic:USER |
+        through use_credential without seeing it. Deposit it the moment you get it: base_urls (where it may be sent) can
+        wait, and until they are set with vault_hosts the key is never sent anywhere. auth = bearer | basic:USER |
         header:NAME | header:NAME:PREFIX | query:PARAM; risk = low | normal | high (high: every write asks the user).
         You can add new keys and update your own, not replace another's."""
         from . import vault as V
         return _js(V.deposit(store, me(agent, api_key), name, value, service, base_urls, auth, extra_headers,
                              description, risk))
+
+    @mcp.tool()
+    def vault_hosts(name: str, base_urls: list[str], agent: str = "", api_key: str = "") -> str:
+        """Say where a key you deposited may be sent (its API's base URLs), for a key deposited without them."""
+        from . import vault as V
+        return _js(V.set_hosts(store, me(agent, api_key), name, base_urls))
 
     @mcp.tool()
     def handover_status(agent: str = "", api_key: str = "") -> str:

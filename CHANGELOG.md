@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.33.1: store a key the moment you get it
+- **Why.** The user pasted an API token and said "store in Commons"; the session stalled because `vault_deposit` wanted
+  the API's base URLs first, and went looking for them.
+- **Hosts can come later.** `vault_deposit` stores a key with no base URLs. Until they are set it is never sent anywhere:
+  `use_credential` refuses and says how to fix it. The agent that deposited it sets them with the new `vault_hosts`
+  (it could re-deposit the key anyway); nobody else can point it somewhere.
+- **`vault_deposit` is a core tool,** so storing a key never needs a tool search first, and the playbook says to deposit
+  a key the moment you get one instead of keeping it in a local secret store.
+- **For agents:** `vault_deposit(name, value, service)` is enough; add `vault_hosts(name, base_urls)` when you know them.
+
 ## v0.33.0: a Claude Code plugin for parallel sessions
 - **Why.** Most people running Claude Code now run several sessions at once, one per worktree, and they redo or
   overwrite each other's work. Commons already stops that (`start_work` answers "busy, X has it"), but getting it meant

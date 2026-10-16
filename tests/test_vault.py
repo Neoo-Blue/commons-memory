@@ -278,3 +278,21 @@ def test_a_memory_write_is_all_or_nothing(store, monkeypatch):
     monkeypatch.setattr(SM.Store, "relate", real)
     r = store.add_item("memory", "This write succeeds with its links", agent_id=a, project="p")
     assert store.q("SELECT 1 FROM relations WHERE src=? AND type='authored_by'", (r["id"],))
+
+
+def test_a_key_is_stored_the_moment_it_arrives_and_goes_nowhere_until_it_has_hosts(store, svc):
+    base, seen = svc
+    claude, muse = store.ensure_agent("Claude"), store.ensure_agent("muse")
+    out = V.deposit(store, claude, "mireye", SECRET, "mireye")              # no hosts known yet: still stored
+    assert out["stored"] and out["base_urls"] == [] and "vault_hosts" in out["next"]
+    assert V._value(store, "mireye") == SECRET
+    with pytest.raises(CommonsError, match="no hosts yet"):
+        V.use(store, claude, "mireye", "GET", base + "/v1/me", "check the token works for the user's ask")
+    with pytest.raises(CommonsError, match="only the agent that deposited"):
+        V.set_hosts(store, muse, "mireye", ["https://evil.example"])          # nobody else points it somewhere
+    with pytest.raises(CommonsError, match="at least one"):
+        V.set_hosts(store, claude, "mireye", ["ftp://x"])
+    assert V.set_hosts(store, claude, "mireye", [base])["base_urls"] == [base + "/"]
+    with pytest.raises(CommonsError, match="may only be sent to"):
+        V.use(store, claude, "mireye", "GET", "http://evil.example/x", "check the token works for the user's ask")
+    assert seen == []
