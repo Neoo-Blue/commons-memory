@@ -146,6 +146,8 @@ def test_a_transient_report_error_is_not_retried_as_success(tmp_path, monkeypatc
 def _install(monkeypatch, tmp_path, platform):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(sys, "platform", platform)
+    if platform == "win32":  # shutil.which calls Windows-only _winapi once sys.platform says win32 (Python 3.12+)
+        monkeypatch.setattr("shutil.which", lambda *a, **k: None)
     key = tmp_path / "agent.key"
     key.write_text("cmk_x\n")
     ran = []
