@@ -55,8 +55,9 @@ def _busy(s: Store, agent_id: str, t: float) -> bool:
                     "LIMIT 1", (agent_id, t - 900, t + 60)))
 
 
-def report(s: Store, agent_id: str, windows: list[dict], source: str = "agent") -> dict:
-    """windows: [{window, used_pct (0-100), resets_at (epoch or ISO), period?}]."""
+def report(s: Store, agent_id: str, windows: list[dict], source: str = "agent", replace: bool = False) -> dict:
+    """windows: [{window, used_pct (0-100), resets_at (epoch or ISO), period?}]. replace: this is the source's whole set
+    for the agent (a sync), so its windows missing from it are dropped (a mapping that no longer applies)."""
     from .store import _parse_time
     t, out = now(), []
     busy = int(_busy(s, agent_id, t))
@@ -78,6 +79,9 @@ def report(s: Store, agent_id: str, windows: list[dict], source: str = "agent") 
             (agent_id, name, per, used, ra, source, seen))
         s.x("INSERT INTO quota_log(agent_id,win,used_pct,ts,busy) VALUES(?,?,?,?,?)", (agent_id, name, used, t, busy))
         out.append(name)
+    if replace and out:
+        s.x(f"DELETE FROM agent_quota WHERE agent_id=? AND source=? AND win NOT IN ({','.join('?' * len(out))})",
+            (agent_id, source, *out))
     return {"agent_id": agent_id, "windows": out}
 
 

@@ -125,7 +125,8 @@ def register_v8(mcp, store, who):
                 if store.label(caller)[1] not in allowed:
                     raise CommonsError("only agents in COMMONS_QUOTA_REPORTERS may report quota for other agents")
             target = t["id"]
-        out = Q.report(store, target, windows, source="agent" if target == caller else f"via {store.label(caller)[1]}") \
+        out = Q.report(store, target, windows, source="agent" if target == caller else f"via {store.label(caller)[1]}",
+                       replace=target != caller) \
             if windows else {"agent": store.label(target)[1]}
         if models:
             from .providers import ProviderLayer

@@ -404,3 +404,16 @@ def test_an_hourly_schedule_missed_for_hours_gets_one_takeover_not_one_per_hour(
     assert SC.watch(store, slot + 5 * hour + 960) == []            # it finished during this run's hour: that run is covered
     assert store.q("SELECT last_status FROM recurring WHERE name='periodic-proactive'")[0]["last_status"].startswith("covered")
     assert len(SC.watch(store, slot + 6 * hour + 60)) == 1         # the next missed run gets its own
+
+
+def test_a_sync_drops_windows_that_no_longer_map_to_the_agent(store):
+    bot = store.ensure_agent("grok")
+    far = time.time() + 86400
+    Q.report(store, bot, [{"window": "grok:weekly_all", "used_pct": 100, "resets_at": far},
+                          {"window": "grok:product:grokchat", "used_pct": 9, "resets_at": far}], source="via Claude", replace=True)
+    Q.report(store, bot, [{"window": "weekly", "used_pct": 33, "resets_at": far}], source="agent")   # its own report
+    assert not Q.can_take(store, bot)[0]
+    Q.report(store, bot, [{"window": "grok:product:grokchat", "used_pct": 9, "resets_at": far}], source="via Claude", replace=True)
+    names = {w["window"] for w in Q.windows(store, bot)}
+    assert names == {"grok:product:grokchat", "weekly"}                # the dropped mapping is gone; its own report stays
+    assert Q.can_take(store, bot)[0]

@@ -2,6 +2,14 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.33.2: a synced usage window that no longer applies goes away
+- **Why.** The Grok bot runs on its own plan, but the Mac's grok.com allowance (used up by Grok Build) had been mapped to
+  it too, so Commons treated it as out of quota and handed its scheduled runs to other agents. Removing the mapping did
+  not remove the windows already on the hub.
+- **Fix.** A quota sync now sends each agent's whole set of windows, and the hub drops that source's windows the set no
+  longer has. An agent's own reports are untouched.
+- **For agents:** nothing changes; report your own windows with `quota_report` if your plan is not the one synced for you.
+
 ## v0.33.1: store a key the moment you get it
 - **Why.** The user pasted an API token and said "store in Commons"; the session stalled because `vault_deposit` wanted
   the API's base URLs first, and went looking for them.
