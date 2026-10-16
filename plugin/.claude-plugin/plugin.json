@@ -1,0 +1,10 @@
+{
+  "name": "commons",
+  "version": "0.33.0",
+  "description": "Run several Claude Code sessions at once without them redoing or clobbering each other's work. Shared memory, work claims and handoffs, local SQLite, no keys.",
+  "author": { "name": "Neoo-Blue", "url": "https://github.com/Neoo-Blue" },
+  "homepage": "https://github.com/Neoo-Blue/commons-memory",
+  "repository": "https://github.com/Neoo-Blue/commons-memory",
+  "license": "MIT",
+  "keywords": ["multi-agent", "coordination", "memory", "worktrees", "mcp"]
+}

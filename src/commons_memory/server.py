@@ -92,6 +92,17 @@ def _fmt(obj: Any, fmt: str = "text") -> str:
     return json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
+def agent_name_from_env() -> str | None:
+    """COMMONS_AGENT, with `{dir}` replaced by the project folder's name, so each worktree or checkout running its own
+    Claude Code session is its own agent (`claude-code@{dir}` -> `claude-code@payments-fix`) and start_work can tell
+    them apart."""
+    name = os.environ.get("COMMONS_AGENT")
+    if name and "{dir}" in name:
+        d = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+        name = name.replace("{dir}", os.path.basename(os.path.normpath(d)) or "root")
+    return name
+
+
 def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int = 8765,
                  require_keys: bool | None = None) -> FastMCP:
     store = store or Store()
@@ -121,7 +132,7 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
             return p, True
         if require_keys and write:
             raise CommonsError("this server requires an api_key for writes (register_agent first)")
-        name = agent or os.environ.get("COMMONS_AGENT")
+        name = agent or agent_name_from_env()
         return (store.ensure_agent(name) if name else None), False
 
     # ---------------------------------------------------------------- memory

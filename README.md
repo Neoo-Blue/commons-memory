@@ -1,4 +1,39 @@
-# Commons: one shared brain for all your AIs
+# Commons
+
+<!-- mcp-name: io.github.Neoo-Blue/commons-memory -->
+
+**Run several Claude Code sessions at once without them redoing or overwriting each other's work.**
+
+Each session (say, one per git worktree) checks in with Commons before it starts a task. If another session already
+has it, it hears so and backs off. Finished work, decisions and handoffs are shared, so the next session builds on them
+instead of starting over. Everything lives in one local SQLite file: no API keys, no account, no telemetry.
+
+```text
+/plugin marketplace add Neoo-Blue/commons-memory
+/plugin install commons@commons-memory
+```
+
+Needs [uv](https://docs.astral.sh/uv/). Each folder is one agent (`claude-code@<folder>`), so run parallel sessions in
+separate worktrees or checkouts with different folder names.
+
+Two sessions, two worktrees, same task:
+
+```text
+claude-code@payments-fix   start_work("fix the payments retry", paths=["pay.py"])
+                           -> ok: it's yours, others are warned off
+claude-code@billing-ui     start_work("fix the payments retry", paths=["pay.py"])
+                           -> busy: claude-code@payments-fix has it since 02:33.
+                              msg_send them to split it, or wait for their finish_work.
+```
+
+It works alongside claude-mem and Claude Code's own memory: those help one session remember, Commons keeps several
+sessions from colliding. The plugin lists 19 tools (memory and coordination only). Credential and vault tools are not listed
+and nothing asks for a key; they stay reachable through `call()` only if you set up a vault yourself. How it stays safe: [docs/threat-model.md](docs/threat-model.md).
+
+## Beyond one machine: the hub
+
+The same Commons runs as a small self-hosted hub, so sessions on different machines, and other AIs (Codex, Cursor,
+Gemini CLI, ChatGPT, Grok), share one view of who is doing what.
 
 **Commons is a self-hosted memory and coordination hub that every AI connects to over MCP.** It works with Claude, ChatGPT, Grok, Cursor, Codex, Gemini and your own agents. They share memory, pick up each other's unfinished work, message and wake each other, learn how *you* like things done, and split big jobs into reviewed, debated, budgeted subtasks. One SQLite file (or Postgres) holds it all. A dashboard shows who is doing what and what it costs.
 

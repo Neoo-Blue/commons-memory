@@ -149,3 +149,27 @@ async def test_slow_sync_tool_does_not_block_others(tmp_path):
     await mcp.call_tool("whoami", {})
     assert time.time() - t0 < 2.0  # answered while the long-poll was still waiting
     await slow
+
+
+async def test_lite_profile_and_per_folder_agents(tmp_path, monkeypatch):
+    """The Claude Code plugin runs COMMONS_TOOLS=lite (no credential or infra tools listed) and
+    COMMONS_AGENT=claude-code@{dir}, so two sessions in two worktrees are two agents and start_work warns the second."""
+    from commons_memory.server import agent_name_from_env
+    from commons_memory.toolprofile import LITE
+    st = Store(str(tmp_path / "l.db"), embedder="hash")
+    monkeypatch.setenv("COMMONS_TOOLS", "lite")
+    mcp = build_server(st)
+    listed = {t.name for t in await mcp.list_tools()}
+    assert listed == set(LITE) and not {"credentials", "use_credential", "infra"} & listed
+
+    monkeypatch.setenv("COMMONS_AGENT", "claude-code@{dir}")
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert agent_name_from_env() == f"claude-code@{tmp_path.name}"
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/payments-fix/")
+    assert agent_name_from_env() == "claude-code@payments-fix"
+    first = json.loads(text(await mcp.call_tool("start_work", {"what": "fix the payments retry", "paths": ["pay.py"]})))
+    assert first["status"] == "ok"
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/billing-ui")
+    second = json.loads(text(await mcp.call_tool("start_work", {"what": "fix the payments retry", "paths": ["pay.py"]})))
+    assert second["status"] == "busy" and second["busy"][0]["agent"] == "claude-code@payments-fix"

@@ -33,7 +33,8 @@ LABEL org.opencontainers.image.title="commons-memory" \
       org.opencontainers.image.description="Unified cross-AI memory, orchestration, messaging and shared drive (MCP hub)" \
       org.opencontainers.image.source="https://github.com/Neoo-Blue/commons-memory" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="${VERSION}"
+      org.opencontainers.image.version="${VERSION}" \
+      io.modelcontextprotocol.server.name="io.github.Neoo-Blue/commons-memory"
 RUN sed -i "s|http://deb.debian.org|https://deb.debian.org|g" /etc/apt/sources.list.d/debian.sources \
  && apt-get update && apt-get install -y --no-install-recommends tini git ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \

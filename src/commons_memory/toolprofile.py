@@ -23,6 +23,10 @@ CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "
         "infra",
         "tools", "call"]  # one-time or occasional tools (set_profile, vault_deposit, vault_generate, handover_status,
 # whats_new, status_update, subtask_pause, context_load, ...) stay one call() away; pickup tells agents when they apply
+# `lite`: memory + coordination only, for the Claude Code plugin and anyone who wants no credential or infra tools
+# listed (they stay reachable through call() but nothing advertises them).
+LITE = ["pickup", "start_work", "finish_work", "search", "expand", "why", "remember", "record_decision", "handoff",
+        "resume", "msg_send", "msg_recv", "msg_get", "board", "board_add", "board_update", "whoami", "tools", "call"]
 IDENTITY = ("agent", "api_key")
 
 REQUESTED: contextvars.ContextVar[str | None] = contextvars.ContextVar("commons_tools", default=None)
@@ -87,6 +91,8 @@ def resolve(store) -> set[str] | None:
         return None
     if "core" in names:
         names = (names - {"core"}) | set(CORE)
+    if "lite" in names:
+        names = (names - {"lite"}) | set(LITE)
     return names
 
 

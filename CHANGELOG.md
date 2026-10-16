@@ -2,6 +2,21 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.33.0: a Claude Code plugin for parallel sessions
+- **Why.** Most people running Claude Code now run several sessions at once, one per worktree, and they redo or
+  overwrite each other's work. Commons already stops that (`start_work` answers "busy, X has it"), but getting it meant
+  setting up a hub first.
+- **Plugin install.** `/plugin marketplace add Neoo-Blue/commons-memory`, then `/plugin install commons@commons-memory`. The plugin runs Commons over
+  stdio on one local SQLite file: no keys, no account, nothing listening on the network.
+- **Each worktree is its own agent.** The MCP server's `COMMONS_AGENT` may contain `{dir}`, replaced by the project folder's name
+  (`claude-code@{dir}` -> `claude-code@payments-fix`), so two sessions in two worktrees warn each other instead of
+  sharing one identity.
+- **`lite` tool profile.** `COMMONS_TOOLS=lite` lists 19 memory and coordination tools and no credential, vault or
+  infrastructure tools listed; everything else stays one `call()` away. The plugin uses it.
+- **Listed in the official MCP Registry** as `io.github.Neoo-Blue/commons-memory`, published from each tagged image.
+- **Threat model.** [docs/threat-model.md](docs/threat-model.md) covers both modes, including poisoned memory.
+- **README** leads with what Commons does for parallel sessions; the full hub follows.
+
 ## v0.32.0: agents know who is asking, and Commons stays connected
 - **Why.** Muse ignored ten real requests from Commons' escalation ladder to cover another agent's schedule: the hub sent
   them with no sender, so they read as prompt injection. And a Claude Code session found no Commons tools at all: the

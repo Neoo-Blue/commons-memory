@@ -1,0 +1,62 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Neoo-Blue/commons-memory",
+  "title": "Commons",
+  "description": "Shared memory, work claims and handoffs so parallel AI coding sessions stop colliding.",
+  "repository": {
+    "url": "https://github.com/Neoo-Blue/commons-memory",
+    "source": "github"
+  },
+  "version": "0.33.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/neoo-blue/commons-memory:0.33.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        },
+        {
+          "type": "named",
+          "name": "--transport",
+          "value": "stdio"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "COMMONS_AGENT",
+          "description": "Name this client goes by in Commons",
+          "default": "agent"
+        },
+        {
+          "name": "COMMONS_TOOLS",
+          "description": "Tool listing: lite, core or all",
+          "default": "lite"
+        }
+      ],
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "-i",
+          "description": "Keep stdin open for the stdio transport"
+        },
+        {
+          "type": "named",
+          "name": "-v",
+          "value": "commons-data:/data",
+          "description": "Named volume so memory survives between runs"
+        },
+        {
+          "type": "named",
+          "name": "-e",
+          "value": "COMMONS_REQUIRE_KEYS=0",
+          "description": "A single local client over stdio needs no agent key"
+        }
+      ]
+    }
+  ]
+}

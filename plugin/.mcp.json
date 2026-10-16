@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "commons": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Neoo-Blue/commons-memory@v0.33.0", "commons", "serve"],
+      "env": {
+        "COMMONS_AGENT": "claude-code@{dir}",
+        "COMMONS_TOOLS": "lite"
+      }
+    }
+  }
+}
