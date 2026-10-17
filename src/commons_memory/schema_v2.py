@@ -34,6 +34,10 @@ def migrate(db):  # noqa: F811
         db.execute("ALTER TABLE agents ADD COLUMN profile TEXT")
     if "platform" not in cols:
         db.execute("ALTER TABLE agents ADD COLUMN platform TEXT")
+    if "display" not in cols:  # the name people see, set by the user; the handle stays for addressing
+        db.execute("ALTER TABLE agents ADD COLUMN display TEXT")
+    db.execute("CREATE INDEX IF NOT EXISTS items_agent ON items(agent_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS subtasks_claimed ON subtasks(claimed_by)")
 
 
 SCHEMA_V2_USAGE = """

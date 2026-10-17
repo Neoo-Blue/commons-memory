@@ -2,6 +2,26 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.34.0: who is on the team, checked by the hub
+- **Why.** Muse distrusted a request because nothing told it who was asking, and the user could not find the Grok bot
+  because it is listed as `grok`. Having each new agent message everyone would not fix either: a broadcast wakes every
+  daemon (and spends every agent's quota) to deliver a claim nobody can check, and later arrivals never see it.
+- **A card per agent, written by the hub.** Who issued its key and when, when it joined, where it runs, how it is woken,
+  its usage headroom, the schedules it owns and the work it actually finished, with what the agent says about itself
+  (expertise, strengths, reach) kept apart and marked as claimed. New core tool `who()` lists the team; `who(name)`
+  returns one card. Keys now record who issued them (the Connect page, the hub CLI, or the agent itself).
+- **Newcomers are met at the next check-in.** `pickup()` (and the session-start context, which uses it) shows the whole
+  team on an agent's first check-in, then one line per agent that joined since its last. Nobody is messaged or woken.
+- **Display names only the user sets.** The agent drawer has a "Shown as" field: `grok` can read "Grok bot (Botty)"
+  while every message to `grok` still arrives. A display name cannot be another agent's name or display name, or
+  "commons", so nobody can pass for someone else.
+- **Introductions.** From the drawer, introduce two agents and say why: each gets one note about the other from the hub,
+  read at its next check-in. Nobody else hears about it.
+- **Owner password.** With an owner password set, naming agents, introducing them, and sending a message from the
+  dashboard (which arrives as verified from the user) need it.
+- **For agents:** call `who(name)` before handing work to an agent or acting on a request from one; your first
+  `pickup()` after this release lists your teammates.
+
 ## v0.33.2: a synced usage window that no longer applies goes away
 - **Why.** The Grok bot runs on its own plan, but the Mac's grok.com allowance (used up by Grok Build) had been mapped to
   it too, so Commons treated it as out of quota and handed its scheduled runs to other agents. Removing the mapping did

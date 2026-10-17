@@ -144,7 +144,7 @@ async function fleetData() {
   });
 }
 function agentCard(a) {
-  const meta = [a.platform || a.vendor, a.model].filter(Boolean).join(" · ");
+  const meta = [a.display && a.display !== a.name ? a.name : "", a.platform || a.vendor, a.model].filter(Boolean).join(" · ");
   const claims = arr(a.claims);
   const now = claims.length
     ? claims.map(c => `<div class="ag-claim">${badge(c.type || "step", "warn")}<span class="ag-claim-t">${E(String(c.title || "").slice(0, 90))}</span>${c.lease_left_s != null ? `<span class="ag-sub">${E(Math.max(0, Math.round(c.lease_left_s / 60)))}m lease left</span>` : ""}</div>`).join("")
@@ -153,10 +153,10 @@ function agentCard(a) {
   const wins = a.q ? arr(a.q.windows).slice(0, 3) : [];
   const learned = Object.entries(obj(a.learned));
   const seen = a.last_seen ? K.fmt.ago(a.last_seen) : "";
-  const q = [a.name, meta, a.st.label, a.availability, a.ms.join(" "), claims.map(c => c.title).join(" ")].join(" ");
+  const q = [a.name, a.display, meta, a.st.label, a.availability, a.ms.join(" "), claims.map(c => c.title).join(" ")].join(" ");
   return `<article class="ag-card" tabindex="0" role="button" aria-label="${E("Open " + a.name)}" ${fattr("agents", q)}
     onclick="AG.agent(${J(a.name)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
-    <div class="ag-card-top">${avatar(a.name, a.st.cls, "lg")}<div class="ag-card-id"><div class="ag-card-name">${E(a.name)}</div>${meta || a.availability ? `<div class="ag-sub">${E([meta, a.availability].filter(Boolean).join(" · "))}</div>` : ""}</div>
+    <div class="ag-card-top">${avatar(a.name, a.st.cls, "lg")}<div class="ag-card-id"><div class="ag-card-name">${E(a.display || a.name)}</div>${meta || a.availability ? `<div class="ag-sub">${E([meta, a.availability].filter(Boolean).join(" · "))}</div>` : ""}</div>
       <div class="ag-card-state">${stateTag(a.st)}${seen ? `<span class="ag-sub">${E(seen)}</span>` : ""}</div></div>
     <div class="ag-now">${now}</div>
     <div class="ag-card-facts">
@@ -205,17 +205,33 @@ async function agentBody(name, ctx) {
   if (!d || d.error) throw new Error((d && d.error) || "unknown agent");
   const p = obj(d.presence), st = stateOf(p, [], p.seen), prof = obj(d.profile), u = obj(d.usage), cli = d.cli;
   const sub = ctx && ctx.el.querySelector(".drawer-sub");
-  if (sub) { sub.textContent = [d.platform || d.vendor, d.model].filter(Boolean).join(" · ") || "Agent"; sub.hidden = false; }
+  if (sub) { sub.textContent = [d.display !== d.name ? d.name : "", d.platform || d.vendor, d.model].filter(Boolean).join(" · ") || "Agent"; sub.hidden = false; }
+  const ttl = ctx && ctx.el.querySelector(".drawer-title");
+  if (ttl && d.display) ttl.textContent = d.display;
   const fact = (k, v) => `<div class="ag-fact"><dt>${E(k)}</dt><dd>${v}</dd></div>`;
+  const factWide = (k, v) => `<div class="ag-fact ag-fact-wide"><dt>${E(k)}</dt><dd>${v}</dd></div>`;
   const dots = (v, lo, hi) => `<span class="ag-dots" role="img" aria-label="${E(`${v} of 5, ${lo} to ${hi}`)}">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= Math.round(+v) ? "on" : ""}"></i>`).join("")}</span><span class="ag-sub">${E(+v <= 2 ? lo : +v >= 4 ? hi : "average")}</span>`;
   const exp = Object.entries(obj(prof.expertise)).sort((a, b) => b[1] - a[1]);
   const msgs = arr(obj(pv).messages).filter(m => m.to === name || m.from === name).slice(-5).reverse();
   const recent = arr(d.recent);
   const wins = arr(u.windows);
+  const idn = d.identity, team = arr(d.team);
+  const measured = idn ? Object.entries(obj(idn.measured.by_type)).map(([t, v]) => `${t} ${v.succeeded}/${v.finished}`).join(", ") : "";
+  const identity = `<section class="ag-dr-sec"><h4>Identity</h4><dl class="ag-facts">
+      ${factWide("Shown as", `<span class="ag-idn"><input id="ag-disp" value="${E(d.display || name)}" maxlength="60" aria-label="Display name" onkeydown="if(event.key==='Enter'){event.preventDefault();AG.display(${J(name)},this.nextElementSibling)}"><button type="button" onclick="AG.display(${J(name)},this)">Save</button></span><span class="ag-sub">Agents still reach it as <code>${E(name)}</code>; only you set this name.</span>`)}
+      ${idn ? fact("Key", E(`issued ${K.fmt.ago(idn.key.issued_at) || "earlier"} by ${idn.key.issued_by}`)) : fact("Key", '<span class="ag-sub">no key of its own: not on the team</span>')}
+      ${idn && idn.joined ? fact("Joined", E(new Date(idn.joined).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }))) : ""}
+      ${idn && arr(idn.schedules).length ? fact("Schedules", arr(idn.schedules).map(x => badge(x)).join(" ")) : ""}
+      ${idn ? fact("Finished work", measured ? E(measured) + ' <span class="ag-sub">(succeeded / finished, measured)</span>' : '<span class="ag-sub">nothing measured yet</span>') : ""}
+    </dl>
+    ${idn && team.length ? `<div class="ag-intro"><label class="ag-k" for="ag-intro-to">Introduce to</label><div class="ag-intro-r"><select id="ag-intro-to">${team.map(t => `<option value="${E(t.name)}">${E(t.display)}</option>`).join("")}</select>
+      <input id="ag-intro-why" placeholder="Why they should know each other" aria-label="Why they should know each other" onkeydown="if(event.key==='Enter'){event.preventDefault();AG.introduce(${J(name)},this.nextElementSibling)}"><button type="button" onclick="AG.introduce(${J(name)},this)">Introduce</button></div>
+      <p class="ag-sub">Each gets one note about the other from Commons, read at their next check-in. Nobody else is woken.</p></div>` : ""}</section>`;
   return `<div class="ag-dr">
     <div class="ag-dr-hero">${avatar(name, st.cls, "xl")}<div><div class="ag-dr-state">${stateTag(st)}${p.last_seen ? `<span class="ag-sub">last seen ${E(K.fmt.ago(p.last_seen))}</span>` : ""}</div>
       <div class="ag-dr-badges">${badge(u.can_take_work ? "Can take work" : "Waiting for quota", u.can_take_work ? "ok" : "warn")}${p.wake_mode ? `<span class="badge" title="${E(WAKE[p.wake_mode] || "")}">wake: ${E(p.wake_mode)}</span>` : ""}${d.unread ? badge(d.unread + " unread", "info") : ""}</div></div></div>
     ${p.status ? `<p class="ag-dr-status">${E(p.status)}</p>` : ""}
+    ${identity}
     <section class="ag-dr-sec"><h4>Presence</h4><dl class="ag-facts">
       ${fact("Wake mode", E(WAKE[p.wake_mode] || p.wake_mode || "unknown"))}
       ${fact("Live connections", E(p.live_connections || 0))}
@@ -786,6 +802,21 @@ window.AG = {
     const r = await act("agent/update", { agent }, `Update queued for ${agent}: it runs within 10 minutes`, { rerender: !inDrawer });
     idle(btn);
     if (r && inDrawer) { openAgent(agent); render(); }
+  },
+  async display(name, btn) {
+    const v = ($("#ag-disp") || {}).value || "";
+    busy(btn, "Saving…");
+    const r = await act("agent/display", { name, display: v.trim() }, v.trim() ? `Shown as ${v.trim()}` : `Shown as ${name}`, { rerender: true });
+    idle(btn);
+    if (r) openAgent(name);
+  },
+  async introduce(name, btn) {
+    const to = ($("#ag-intro-to") || {}).value || "", why = (($("#ag-intro-why") || {}).value || "").trim();
+    if (!why) { K.toast("Say why they should know each other", { kind: "err" }); const w = $("#ag-intro-why"); if (w) w.focus(); return; }
+    busy(btn, "Introducing…");
+    const r = await act("agent/introduce", { a: name, b: to, why }, "Introduced: each will see a note at its next check-in", { rerender: false });
+    idle(btn);
+    if (r) openAgent(name);
   },
   async send(to, btn, ta) {
     ta = ta || $("#ag-msg");

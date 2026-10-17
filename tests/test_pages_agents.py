@@ -53,5 +53,5 @@ def test_every_endpoint_exists():
 
 def test_data_is_escaped_in_hot_spots():
     # names and free text reach the markup only through E(); spot-check the riskiest templates
-    for snippet in ("${E(a.name)}", "${E(m.from || \"Commons\")}", "${E(String(txt).slice(0, 600))}", "${E(x.description || \"\")}"):
+    for snippet in ("${E(a.display || a.name)}", "${E(m.from || \"Commons\")}", "${E(String(txt).slice(0, 600))}", "${E(x.description || \"\")}"):
         assert snippet in JS, snippet

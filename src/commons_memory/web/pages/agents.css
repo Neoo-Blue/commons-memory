@@ -511,3 +511,15 @@ a > .ag-i-s:first-child { margin-right: 4px; }
   .ag-dec .ag-row-t .ag-code { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .ag-card, .ag-foot-go, .ag-chart .ag-col { transition: none; } }
+
+.ag-fact-wide { grid-column: 1 / -1; }
+.ag-idn { display: flex; gap: 8px; align-items: center; max-width: 420px; }
+.ag-idn button { flex: none; }
+.ag-idn input { flex: 1; min-width: 0; min-height: 36px; }
+.ag-intro { margin-top: 12px; display: grid; gap: 6px; }
+.ag-intro-r { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) auto; gap: 8px; }
+.ag-intro-r select, .ag-intro-r input { min-height: 36px; min-width: 0; }
+@media (max-width: 640px) {
+  .ag-intro-r { grid-template-columns: 1fr; }
+  .ag-idn input, .ag-intro-r select, .ag-intro-r input, .ag-idn button, .ag-intro-r button { min-height: 44px; }
+}

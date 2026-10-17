@@ -47,7 +47,7 @@ class API:
             last = self.s.q("SELECT kind, summary, created_at FROM items WHERE agent_id=? ORDER BY created_at DESC LIMIT 1",
                             (a["id"],))
             prof = json.loads(a["profile"] or "{}")
-            out.append({"id": a["id"], "name": a["name"], "platform": a["platform"], "vendor": a["vendor"],
+            out.append({"id": a["id"], "name": a["name"], "display": a["display"] or a["name"], "platform": a["platform"], "vendor": a["vendor"],
                         "model": a["model"], "last_seen": iso(a["last_seen"]) if a["last_seen"] else None,
                         "seen": bool(a["last_seen"]), "availability": prof.get("availability"),
                         "expertise": prof.get("expertise", {}), "claims": claims,
@@ -193,7 +193,15 @@ class API:
         recent = self.s.q("SELECT t.id, t.job_id, t.title, t.status, t.updated_at, j.title job FROM subtasks t JOIN jobs j "
                           "ON j.id=t.job_id WHERE t.claimed_by=? OR t.assigned_agent=? ORDER BY t.updated_at DESC LIMIT 10",
                           (a["id"], a["id"]))
-        return {"name": a["name"], "id": a["id"], "platform": a["platform"], "vendor": a["vendor"], "model": a["model"],
+        from . import team as T
+        try:
+            c = T.card(self.s, a["name"])
+            identity = {k: c[k] for k in ("key", "joined", "schedules", "measured", "claimed")}
+        except CommonsError:  # not a teammate (no key of its own, or never active)
+            identity = None
+        return {"name": a["name"], "id": a["id"], "display": a["display"] or a["name"], "identity": identity,
+                "team": [{"name": m["name"], "display": T.shown(m)} for m in T.members(self.s) if m["id"] != a["id"]],
+                "platform": a["platform"], "vendor": a["vendor"], "model": a["model"],
                 "presence": presence(self.s, a["id"]),
                 "profile": {k: prof.get(k) for k in ("expertise", "cost", "speed", "max_concurrent")},
                 "models": [r["model_id"] for r in self.s.q("SELECT model_id FROM agent_models WHERE agent_id=? "
@@ -509,6 +517,12 @@ class API:
         if path == "/api/agent/update":
             from .agentcli import request
             return request(self.s, body.get("agent", ""))
+        if path == "/api/agent/display":
+            from .team import set_display
+            return set_display(self.s, body.get("name", ""), body.get("display", ""))
+        if path == "/api/agent/introduce":
+            from .team import introduce
+            return introduce(self.s, body.get("a", ""), body.get("b", ""), body.get("why", ""))
         if path == "/api/board/answer":
             from . import board as B
             return B.answer(self.s, body["id"], body.get("text") or "", by="user (dashboard)")
@@ -963,7 +977,8 @@ def make_handler(api: API, token: str | None):
 # PIN exists they need the browser the owner unlocked with it
 OWNER_ONLY = ("/api/infra/extract", "/api/refile/start", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
               "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
-              "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry")
+              "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry",
+              "/api/agent/display", "/api/agent/introduce", "/api/msg/send")
 
 
 def _host_allowed(host_hdr: str, s: Store | None = None) -> bool:

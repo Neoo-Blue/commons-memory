@@ -45,7 +45,7 @@ def test_bridge_jobs_split_effort_from_the_model_and_skip_failed_or_running(tmp_
         d = jobs / name
         d.mkdir(parents=True)
         (d / "result.json").write_text(json.dumps(result))
-        (d / "meta.json").write_text(json.dumps(meta or {"started": time.strftime("%Y-%m-%d %H:%M:%S")}))
+        (d / "meta.json").write_text(json.dumps(meta or {"started": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}))
     job("a", {"status": "done", "model": "claude-opus-5-5-medium", "usage": {"input_tokens": 1000, "output_tokens": 200,
                                                                              "thinking_tokens": 50, "cache_read_tokens": 9}})
     job("b", {"status": "done", "model": "grok-4.7-build", "usage": {"input_tokens": 5, "output_tokens": 5}, "cost_usd": 0.42})
@@ -53,7 +53,7 @@ def test_bridge_jobs_split_effort_from_the_model_and_skip_failed_or_running(tmp_
     job("d", {"status": "running", "model": "x", "usage": {"input_tokens": 9, "output_tokens": 9}})
     job("e", {"status": "done", "model": "grok-4.6-build", "usage": {"output_tokens": 150}})   # output only: input is 0, not -150
     job("f", {"status": "done", "model": "claude-opus-5-5-low", "usage": {"input_tokens": 3, "output_tokens": 3}},
-        {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "effort": "high"})        # the model's own effort is what ran
+        {"started": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), "effort": "high"})        # the model's own effort is what ran
     st = {"files": {}, "jobs": {}, "totals": {}, "dirty": []}
     assert L.read_jobs(st, "antigravity", jobs, "antigravity bridge") == 4
     assert st["totals"][f"antigravity|{TODAY}|grok-4.6-build|||antigravity bridge"][1] == 0

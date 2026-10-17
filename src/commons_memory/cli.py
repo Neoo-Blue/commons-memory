@@ -561,7 +561,8 @@ def _main(argv: list[str] | None = None) -> int:
         else:
             sys.stdout.write(out)
     elif args.cmd == "register-agent":
-        print(json.dumps(store.register_agent(args.name, args.vendor, args.model, a2a_url=args.a2a_url), indent=2))
+        print(json.dumps(store.register_agent(args.name, args.vendor, args.model, a2a_url=args.a2a_url,
+                                              issued_by="commons register-agent on the hub"), indent=2))
     elif args.cmd == "secret-exec":
         from .secrets import Broker
         cmd = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -657,7 +658,7 @@ def _main(argv: list[str] | None = None) -> int:
         from .orchestrator import Profiles
         from .skills import install, save_key
         reg = store.register_agent(args.agent, args.vendor or args.platform, args.model,
-                                   capabilities=[c for c in args.strengths.split(",") if c])
+                                   capabilities=[c for c in args.strengths.split(",") if c], issued_by="commons connect")
         exp = {k: float(v) for k, v in (x.split(":") for x in args.expertise.split(",") if ":" in x)}
         Profiles(store).set(reg["id"], expertise=exp or None, strengths=[c for c in args.strengths.split(",") if c],
                             cost=args.cost, speed=args.speed, availability="online",

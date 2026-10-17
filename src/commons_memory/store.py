@@ -234,7 +234,7 @@ class Store:
     # ------------------------------------------------------------------ agents
     def register_agent(self, name: str, vendor: str = "", model: str = "", description: str = "",
                        capabilities: list[str] | None = None, a2a_url: str = "",
-                       issue_key: bool = True) -> dict:
+                       issue_key: bool = True, issued_by: str = "") -> dict:
         existing = self.get_agent(name)
         key = f"cmk_{pysecrets.token_urlsafe(24)}" if issue_key else None
         if existing:
@@ -245,12 +245,15 @@ class Store:
                     a2a_url, _hash_key(key) if key else None, existing["id"]))
             aid = existing["id"]
         else:
+            k = name.strip().casefold()
+            if any(k == str(r["display"]).casefold() for r in self.q("SELECT display FROM agents WHERE display IS NOT NULL")):
+                raise CommonsError(f"{name!r} is another agent's display name: pick another name")
             aid = new_id("agt")
             self.x("INSERT INTO agents(id,name,vendor,model,description,capabilities,key_hash,a2a_url,created_at,last_seen)"
                    " VALUES(?,?,?,?,?,?,?,?,?,?)",
                    (aid, name, vendor, model, description, _j(capabilities or []),
                     _hash_key(key) if key else None, a2a_url, now(), now()))
-        self.audit(aid, "agent.register", aid)
+        self.audit(aid, "agent.register", aid, {"key": bool(key), "by": issued_by} if key else None)
         out = {"id": aid, "name": name}
         if key:
             out["api_key"] = key

@@ -1424,7 +1424,11 @@ class Orchestrator:
             lines += [f"- {s['id']} [{s['type']}] {s['title'][:90]}" for s in subs]
         if inbox:
             lines.append("INBOX:")
-            lines += [f"- {i['id']} [{i['kind']}] from {i['from'] or '-'}: {(i['body'] or '')[:90]}" for i in inbox]
+            lines += [f"- {i['id']} [{i['kind']}] from {i['from'] or 'commons'}: {(i['body'] or '')[:90]}" for i in inbox]
+        from .team import nudge as team_news  # the whole team on a first check-in, then who joined since
+        team = team_news(self.s, agent_id).strip()
+        if team:
+            lines += team.splitlines()
         if ranked:
             lines.append("LEFTOVERS (by priority x your expertise):")
             lines += [f"- {lo['id']} [{lo['task_type']}, p{lo['priority']}] {lo['text'][:90]}" for lo in ranked[:8]]

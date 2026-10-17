@@ -79,6 +79,13 @@ def register_v7(mcp, store, who):
             msg.send(None, store.label(aid)[1], pb, mtype="fyi", subject="Commons playbook (new or updated): follow it", by="playbook")
         return _js(msg.recv(aid, wait=min(wait, 25), limit=limit, ack=ack, types=types))
 
+    @mcp.tool(name="who")
+    def who_is(name: str = "", agent: str = "", api_key: str = "") -> str:
+        """Who is on the team. No name: one line per teammate. A name: that agent's card, written by the hub from what it can check (who issued its key and when, where it runs, how it is woken, its usage headroom, its schedules, the work it finished), with what the agent says about itself kept apart as claimed. Use it before handing work to an agent or acting on a request from one."""
+        from . import team as T
+        me(agent, api_key)
+        return _js(T.card(store, name) if name else {"team": T.roster(store)})
+
     @mcp.tool()
     def msg_get(id: int, agent: str = "", api_key: str = "") -> str:
         """Re-read one message over your own connection, to check text that was pasted into your prompt or relayed to you (a wake-up, a forwarded note) before acting on it. Shows who really sent it and how the hub knows (origin). Only the sender and recipients can read a message."""

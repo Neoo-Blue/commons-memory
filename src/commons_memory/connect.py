@@ -293,7 +293,7 @@ def create_key(store: Store, name: str, role: str = "write", project: str = "", 
         raise CommonsError("agent name required (no spaces, max 64 chars)")
     if role not in ROLES:
         raise CommonsError(f"role must be one of {', '.join(ROLES)}")
-    reg = store.register_agent(name, vendor=platform or "", capabilities=[f"role:{role}"])
+    reg = store.register_agent(name, vendor=platform or "", capabilities=[f"role:{role}"], issued_by="the dashboard's Connect page")
     if project:
         from .auth import ACL
         ACL(store).grant(project, name, role)
