@@ -2,6 +2,15 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.34.1: every session knows the team
+- **Why.** The user asked a Claude Code session to have the Grok bot review Poise; it called Grok Build instead (out of
+  credit), because nothing told it who the Grok bot is. Claude Code's sessions share one agent identity, so only the first
+  session after v0.34.0 saw the roster.
+- **One line every check-in.** When there is nobody new, `pickup()` and the session-start context end with a one-line
+  team list: display name and the handle that reaches each agent.
+- **`who()` takes the name the user says.** `who("grok bot")` finds `grok`, shown as "Grok bot (Botty)".
+- **For agents:** when the user names an agent, `who(name)` gives you its handle for `msg_send`.
+
 ## v0.34.0: who is on the team, checked by the hub
 - **Why.** Muse distrusted a request because nothing told it who was asking, and the user could not find the Grok bot
   because it is listed as `grok`. Having each new agent message everyone would not fix either: a broadcast wakes every

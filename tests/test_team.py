@@ -41,7 +41,9 @@ def test_pickup_shows_the_team_once_then_only_newcomers(store):
     first = o.pickup(claude)["text"]
     assert "YOUR TEAM" in first and "grok" in first and "good at research" in first and "(claimed)" in first
     assert "Claude" not in first.split("YOUR TEAM")[1].split("\n\n")[0].split("\n", 1)[1]   # not itself
-    assert "YOUR TEAM" not in o.pickup(claude)["text"] and "NEW ON THE TEAM" not in o.pickup(claude)["text"]
+    again = o.pickup(claude)["text"]
+    assert "YOUR TEAM" not in again and "NEW ON THE TEAM" not in again
+    assert "TEAM (who(name) for a card): grok" in again           # every later session still learns who is there
     time.sleep(0.01)
     muse = create_key(store, "muse", platform="Muse (Meta)")["id"]
     store.x("UPDATE agents SET last_seen=? WHERE id=?", (time.time(), muse))
@@ -61,6 +63,7 @@ def test_only_the_user_names_an_agent_and_no_name_can_pass_for_another(store):
     with pytest.raises(CommonsError, match="another agent's name"):
         T.set_display(store, "Claude", "Grok bot (botty)")         # another agent's display name
     assert T.card(store, "grok")["display"] == "Grok bot (Botty)"
+    assert T.card(store, "grok bot")["name"] == "grok"             # the name the user says finds the handle to send to
     Messaging(store).send(claude, "grok", "still reaches it by its handle")
     assert Messaging(store).recv(bot)[0]["text"] == "still reaches it by its handle"
     assert "Grok bot (Botty) (`grok`)" in T.line(store, store.get_agent("grok"))

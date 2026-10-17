@@ -42,11 +42,23 @@ def _key(s: Store, a: dict) -> dict:
             "issued_by": "issued before Commons recorded who issues keys"}
 
 
+def resolve(s: Store, name: str) -> dict | None:
+    """A teammate by its handle or by the name the user calls it ("Grok bot" finds `grok`, shown as "Grok bot (Botty)")."""
+    team = members(s)
+    k = (name or "").strip().casefold()
+    for test in (lambda a: k in (a["id"].casefold(), a["name"].casefold(), shown(a).casefold()),
+                 lambda a: shown(a).casefold().startswith(k)):
+        hits = [a for a in team if test(a)]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def card(s: Store, name: str) -> dict:
     from . import quota as Q
     from .messaging import presence
-    a = s.get_agent(name)
-    if not a or a["id"] not in {m["id"] for m in members(s)}:
+    a = resolve(s, name)
+    if not a:
         raise CommonsError(f"no teammate called {name!r}; who() lists the team")
     prof = json.loads(a.get("profile") or "{}")
     ok, until, blocking = Q.can_take(s, a["id"])
@@ -105,8 +117,13 @@ def nudge(s: Store, agent_id: str | None) -> str:
         return ("YOUR TEAM (from Commons, checked by the hub; who(name) for anyone's card):\n"
                 + "\n".join(line(s, a) for a in team) + "\n\n") if team else ""
     new = [a for a in team if a["id"] not in met]
-    return ("NEW ON THE TEAM since you last checked in (from Commons; who(name) for the card):\n"
-            + "\n".join(line(s, a) for a in new) + "\n\n") if new else ""
+    if new:
+        return ("NEW ON THE TEAM since you last checked in (from Commons; who(name) for the card):\n"
+                + "\n".join(line(s, a) for a in new) + "\n\n")
+    # one line every time: an agent with many sessions (Claude Code) shares one identity, so only its first session met
+    # the team; every later one still needs to know who is there and the handle that reaches them
+    return ("TEAM (who(name) for a card): " + ", ".join(shown(a) + (f" `{a['name']}`" if shown(a) != a["name"] else "")
+                                                      for a in team) + "\n\n") if team else ""
 
 
 def taken(s: Store, label: str, except_id: str | None = None) -> bool:
