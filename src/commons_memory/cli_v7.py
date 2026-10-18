@@ -269,8 +269,8 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
             # out of quota: park what this agent holds (with the CLI's last words as the checkpoint) until a reset,
             # and drop these wakes; the hub re-wakes the work after the reset or hands it to an agent with headroom
             try:
+                from .worker import McpClient
                 if remote:
-                    from .worker import McpClient
                     McpClient(args.url.rstrip("/") + "/mcp", args.api_key)._call(
                         "call", {"tool": "quota_exhausted", "args": {"checkpoint": out[-4000:]}})
                 else:
@@ -278,6 +278,23 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                     Orchestrator(store).exhausted(aid, checkpoint=out[-4000:])
                 log(f"{args.agent} hit a usage limit: work parked until its reset")
                 ok = True
+                # whoever asked gets an answer instead of silence: an agent out of usage can't reply itself
+                note = (f"Automatic reply from {args.agent}'s wake service: {args.agent} is out of usage right now, so it "
+                        "couldn't act on your message. Commons parked it until the limit resets, or hands it to an agent "
+                        "with headroom.")
+                for m in msgs:
+                    frm = m.get("from") or ""
+                    if frm in ("", "commons", args.agent) or m.get("to") in ("*", None) or (m.get("meta") or {}).get("summon"):
+                        continue
+                    try:
+                        if remote:
+                            McpClient(args.url.rstrip("/") + "/mcp", args.api_key)._call(
+                                "msg_send", {"to": frm, "body": note, "subject": f"Re: {m.get('subject') or 'your message'}"})
+                        else:
+                            from .messaging import Messaging
+                            Messaging(store).send(aid, frm, note, subject=f"Re: {m.get('subject') or 'your message'}")
+                    except Exception as e:  # noqa: BLE001 - the parking already happened
+                        log(f"could not tell {frm}: {e}")
             except Exception as e:  # noqa: BLE001
                 log(f"could not report the usage limit: {e}")
         if ok:

@@ -273,3 +273,29 @@ def test_friendly_tool_args_and_project_names(store):
     with pytest.raises(CommonsError, match="invalid project name"):
         store.project_id("commons-live?")
     assert store.project_id("commons-live")
+
+
+def test_an_agent_out_of_usage_still_answers_whoever_asked(store, tmp_path):
+    from types import SimpleNamespace
+
+    from commons_memory.cli_v7 import daemon
+    m = Messaging(store)
+    m.send(store.ensure_agent("grok"), "worker2", "Roll call: who are you?", subject="Roll call")
+    fail = tmp_path / "agent.sh"
+    fail.write_text("#!/bin/sh\necho 'Error: 402 Payment Required: weekly limit reached' >&2\nexit 1\n")
+    fail.chmod(0o755)
+    args = SimpleNamespace(agent="worker2", agent_cmd=str(fail), url=None, api_key=None, wait=0, once=True, timeout=30)
+    daemon(args, store, log=lambda *_: None)
+    reply = m.recv(store.get_agent("grok")["id"])
+    assert reply and "out of usage" in reply[0]["text"] and reply[0]["from"] == "worker2"
+
+
+def test_unread_mail_never_piles_up(store):
+    m = Messaging(store)
+    a = store.ensure_agent("sender3")
+    old = m.send(a, "quiet-agent", "a week-old note")["id"]
+    store.x("UPDATE messages SET created_at=? WHERE id=?", (time.time() - 7 * 86400, old))
+    m.send(a, "quiet-agent", "fresh")
+    q = store.get_agent("quiet-agent")["id"]
+    assert m.unread(q) == 1 and [x["text"] for x in m.recv(q)] == ["fresh"]
+    assert any(x["text"] == "a week-old note" for x in m.history(q))       # expired, not deleted

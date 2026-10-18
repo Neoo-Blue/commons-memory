@@ -7,12 +7,12 @@ All settings are environment variables; CLI flags override them where both exist
 |---|---|---|---|
 | `COMMONS_A2A` | `1` | Mount the A2A (agent-to-agent) server next to `/mcp` on the HTTP transport (`0` disables) | server.py |
 | `COMMONS_A2A_TOKEN` | — | Bearer token used by `commons a2a` client commands | cli.py |
-| `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | auth.py, rowacl.py, server_v5.py |
+| `COMMONS_ADMIN_AGENTS` | — | Comma list of agent names with global admin rights (ACLs, trust overrides) | auth.py, join.py, rowacl.py, server_v5.py |
 | `COMMONS_AGENT` | `cli` | Agent identity for stdio/CLI use when no API key is given | capture.py, cli.py, cli_v7.py, server.py |
 | `COMMONS_AGENT_DEFAULT_CAPACITY` | `4` | Concurrent subtasks per agent when its profile sets no `max_concurrent` | orchestrator.py |
 | `COMMONS_AGENT_JUDGE_WAIT` | `90` | Seconds Commons waits for a connected agent to answer a credential judgment (agent:any / agent:NAME in the decision chain) before moving on (default 90) | vault.py |
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
-| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, server.py, setup.py |
+| `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, join.py, server.py, setup.py |
 | `COMMONS_AUDIT_KEY_FILE` | — | Ed25519 key that signs audit exports (default COMMONS_HOME/audit_signing.key, created 0600 on first export) | auditexport.py |
 | `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
@@ -55,7 +55,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, capture.py, cli_v7.py, cli_v8.py, expose.py, setup.py, wakeclient.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, capture.py, cli_v7.py, cli_v8.py, expose.py, join.py, ledger.py, setup.py, wakeclient.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
 | `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
@@ -64,6 +64,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_HOOK_TIMEOUT` | `2` | Seconds a hook waits for the server before queueing offline | capture.py |
 | `COMMONS_HOST` | `127.0.0.1` | Default bind address for `commons serve` | cli.py |
 | `COMMONS_HOST_ROOTS` | — | Colon/comma list of host directories the `hostfs` Drive backend may expose | drive.py |
+| `COMMONS_INBOX_TTL_HOURS` | `48` | Hours an unread message waits in an agent inbox before it expires (it stays in history), so no backlog builds up; default 48 | messaging.py |
 | `COMMONS_KB_CLUSTER` | `auto` | Misc-topic clustering for the knowledge base: `auto`, `semantic`, `tags` | kb.py |
 | `COMMONS_KB_CLUSTER_SIM` | `computed` | Cluster similarity threshold (0.55 with real embeddings, 0.35 with `hash`) | kb.py |
 | `COMMONS_KB_DEBOUNCE` | `10` | Seconds between KB rebuilds of a dirty project | kb.py |
@@ -135,7 +136,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
 | `COMMONS_TYPESAFE_MODEL` | `jev-latest` | TypeSafe model (default jev-latest) | typesafe.py |
 | `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
-| `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, cli_v8.py, wakeclient.py |
+| `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, cli_v8.py, infra_collect.py, wakeclient.py |
 | `COMMONS_VAULT_KEY` | — | Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database | vault.py |
 | `COMMONS_VAULT_KEY_FILE` | — | File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume) | vault.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |

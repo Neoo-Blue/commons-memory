@@ -144,3 +144,4 @@ COMMONS_CLAIM_MINUTES	Minutes after Commons starts (or after `commons approvals 
 COMMONS_SEATS	Set to 0 or off to never start the API seat loop in this process (the api_seats setting turns seats on and off)
 COMMONS_SEAT_PARALLEL	How many steps the API seats run at once (default 2)
 COMMONS_SEAT_POLL	Seconds between API seat checks for ready work (default 5)
+COMMONS_INBOX_TTL_HOURS	Hours an unread message waits in an agent inbox before it expires (it stays in history), so no backlog builds up; default 48

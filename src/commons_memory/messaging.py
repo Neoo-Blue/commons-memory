@@ -46,6 +46,7 @@ MSG_TYPES = ("message", "task", "question", "review", "fyi", "handoff", "release
 EVENTS = ("message", "task", "inbox", "handoff", "review", "escalation", "schedule", "test")
 CHANNEL_KINDS = ("webhook", "ntfy", "pushover", "slack", "discord", "telegram", "email", "command")
 ONLINE_S, IDLE_S, AWAY_S = 90, 900, 7 * 86400
+INBOX_TTL = float(os.environ.get("COMMONS_INBOX_TTL_HOURS", "48")) * 3600  # unread mail older than this expires
 BACKOFF = [2, 8, 30, 120, 600, 1800]
 # events that target one agent and carry mailbox work (v0.9.3 instant wake adds assignment, lease, debate and mentions)
 FETCH_EVENTS = ("message", "task", "review", "handoff", "task_assigned", "lease_expired", "debate_turn", "board_mention",
@@ -331,7 +332,15 @@ class Messaging:
         return out | ({"redacted": found} if found else {})
 
     # ---- receive / ack
+    def expire(self, aid: str | None = None) -> None:
+        """No backlog ever builds up: a message nobody picked up within INBOX_TTL is marked expired (it stays in history)."""
+        cut = now() - INBOX_TTL
+        self.s.x("UPDATE message_deliveries SET status='expired', acked_at=? WHERE acked_at IS NULL"
+                 + (" AND agent_id=?" if aid else "") + " AND msg_id IN (SELECT id FROM messages WHERE created_at<?)",
+                 (now(), aid, cut) if aid else (now(), cut))
+
     def _pending(self, aid: str, limit: int, include_broadcast: bool = True) -> list:
+        self.expire(aid)
         return self.s.q("SELECT m.*, d.attempts, d.delivered_at FROM message_deliveries d JOIN messages m ON m.id=d.msg_id "
                         "WHERE d.agent_id=? AND d.acked_at IS NULL AND d.visible_at<=? ORDER BY m.id LIMIT ?",
                         (aid, now(), limit))
@@ -432,6 +441,7 @@ class Messaging:
         return out
 
     def unread(self, agent: str) -> int:
+        self.expire(self._aid(agent))
         return self.s.q("SELECT COUNT(*) n FROM message_deliveries WHERE agent_id=? AND acked_at IS NULL",
                         (self._aid(agent),))[0]["n"]
 
