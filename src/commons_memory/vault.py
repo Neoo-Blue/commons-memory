@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS vault_grants(id TEXT PRIMARY KEY, agent_id TEXT, cred
 CREATE TABLE IF NOT EXISTS vault_decisions(id TEXT PRIMARY KEY, agent_id TEXT, cred TEXT, method TEXT, url TEXT,
   justification TEXT, scope TEXT, verdict TEXT, scores TEXT, reason TEXT, question_id TEXT, ts REAL);
 CREATE INDEX IF NOT EXISTS vault_grants_a ON vault_grants(agent_id, cred, expires_at);
+CREATE TABLE IF NOT EXISTS vault_uses(id TEXT PRIMARY KEY, cred TEXT, place TEXT, what TEXT, project TEXT,
+  added_by TEXT, created_at REAL, updated_at REAL);
+CREATE INDEX IF NOT EXISTS vault_uses_c ON vault_uses(cred);
+CREATE INDEX IF NOT EXISTS vault_decisions_c ON vault_decisions(cred, ts);
 CREATE TABLE IF NOT EXISTS vault_judgments(id TEXT PRIMARY KEY, judge_agent TEXT, requester TEXT, questions TEXT,
   scores TEXT, reason TEXT, status TEXT, created_at REAL);
 """
@@ -53,7 +57,8 @@ def migrate(db) -> None:
     db.executescript(SCHEMA)
     from .facts import add_columns
     add_columns(db, [("vault_creds", "deposited_by", "TEXT"), ("vault_creds", "username", "TEXT"),
-                     ("vault_creds", "kind", "TEXT"), ("vault_decisions", "pending", "TEXT")])
+                     ("vault_creds", "kind", "TEXT"), ("vault_decisions", "pending", "TEXT"),
+                     ("vault_creds", "purpose", "TEXT"), ("vault_creds", "scope", "TEXT")])
 
 
 def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
@@ -68,17 +73,134 @@ def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
 
 
 def deposit(s: Store, agent_id: str, name: str, value: str, service: str, base_urls: list[str] | None = None,
-            auth: str = "bearer", extra_headers: list[str] | None = None, description: str = "", risk: str = "normal") -> dict:
+            auth: str = "bearer", extra_headers: list[str] | None = None, description: str = "", risk: str = "normal",
+            purpose: str = "", scope: str = "", used_in: list | None = None) -> dict:
     """An agent hands over a key it holds. It can add new ones and update its own, never replace anyone else's.
     Hosts can come later (store the key the moment you get it): until then it is never sent anywhere."""
     r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
     if r and r[0]["deposited_by"] != agent_id:
         raise CommonsError(f"{name} is already in the vault (from {s.label(r[0]['deposited_by'])[1] if r[0]['deposited_by'] else 'the admin'}); "
                            "pick another name if this is a different key")
+    if not r:  # a new key says what it is for and what it can do; an update keeps what it had unless told
+        _need_notes(purpose, scope)
     out = add(s, name, value, service, base_urls or [], parse_auth(auth, extra_headers), description, risk, hosts_later=True)
     s.x("UPDATE vault_creds SET deposited_by=? WHERE name=?", (agent_id, name))
+    describe(s, name, purpose or None, scope or None)
+    for u in used_in or []:
+        u = {"where": u} if isinstance(u, str) else dict(u)
+        note_use(s, agent_id, name, u.get("where") or u.get("place") or "", u.get("what") or "", u.get("project") or "")
+    out["notes"] = notes_of(s, name)
+    if "where it is used" in out["notes"]["missing"]:
+        out["next_notes"] = f"Record every place it is installed or used: vault_note(name='{name}', where=..., what=...)."
     s.audit(agent_id, "vault.deposit", name, {"service": service})
     return out
+
+
+# ------------------------------------------------------------------------------------------------ notes
+# Every key says what it is for (purpose), what it can do at the provider (scope: read-only, DNS edit on one zone, full
+# account admin) and every place it is installed or used (one or many), so it can be rotated or narrowed without fear.
+def _need_notes(purpose: str, scope: str) -> None:
+    if len((purpose or "").strip()) < 8:
+        raise CommonsError("say what the key is for (purpose), e.g. 'Poise server sends sign-in codes through Resend'")
+    if len((scope or "").strip()) < 3:
+        raise CommonsError("say what the key can do at the provider (scope), e.g. 'read-only', 'DNS edit on arafat.wtf', "
+                           "'full account admin'; write 'unknown' if the provider doesn't say")
+
+
+def describe(s: Store, name: str, purpose: str | None = None, scope: str | None = None) -> None:
+    from .redact import redact
+    for col, v in (("purpose", purpose), ("scope", scope)):
+        if v is not None and v.strip():
+            s.x(f"UPDATE vault_creds SET {col}=? WHERE name=?", (redact(v.strip())[0][:500], name))
+
+
+def note_use(s: Store, agent_id: str | None, name: str, where: str, what: str = "", project: str = "") -> dict:
+    """Record a place the key is used (a server, an app, an env var, a scheduled job). Anyone who uses or installs it
+    may add one; the same place twice updates it."""
+    from .redact import redact
+    if not s.q("SELECT 1 FROM vault_creds WHERE name=?", (name,)):
+        raise CommonsError(f"unknown credential {name!r}")
+    where = redact(re.sub(r"\s+", " ", where or "").strip())[0][:200]
+    if len(where) < 3:
+        raise CommonsError("say where it is used: a host, app, service or file, e.g. 'Poise server (LXC 108) .env RESEND_API_KEY'")
+    what, project = redact((what or "").strip())[0][:300], (project or "").strip()[:80]
+    r = s.q("SELECT id FROM vault_uses WHERE cred=? AND lower(place)=?", (name, where.lower()))
+    if r:
+        s.x("UPDATE vault_uses SET what=COALESCE(NULLIF(?,''),what), project=COALESCE(NULLIF(?,''),project), updated_at=? "
+            "WHERE id=?", (what, project, now(), r[0]["id"]))
+        uid = r[0]["id"]
+    else:
+        uid = new_id("vu")
+        s.x("INSERT INTO vault_uses VALUES(?,?,?,?,?,?,?,?)", (uid, name, where, what, project, agent_id, now(), now()))
+    s.audit(agent_id, "vault.use_noted", name, {"where": where})
+    return {"id": uid, "credential": name, "where": where, "what": what, "project": project}
+
+
+def forget_use(s: Store, agent_id: str | None, name: str, use_id: str) -> dict:
+    """Remove a place that no longer uses the key: whoever added it, the key's depositor, or the user (agent_id None)."""
+    r = s.q("SELECT u.cred, u.added_by, c.deposited_by FROM vault_uses u JOIN vault_creds c ON c.name=u.cred "
+            "WHERE u.id=? AND u.cred=?", (use_id, name))
+    if not r:
+        raise CommonsError(f"unknown use {use_id!r}")
+    if agent_id and agent_id not in (r[0]["added_by"], r[0]["deposited_by"]):
+        raise CommonsError("only whoever added it, the key's depositor or the user can remove it")
+    s.x("DELETE FROM vault_uses WHERE id=?", (use_id,))
+    s.audit(agent_id, "vault.use_removed", r[0]["cred"], {"use": use_id})
+    return {"removed": use_id}
+
+
+def note(s: Store, agent_id: str | None, name: str, where: str = "", what: str = "", project: str = "",
+         purpose: str = "", scope: str = "", remove_id: str = "") -> dict:
+    """One door for the notes: add a place it is used, remove one, or (its depositor or the user) set purpose and scope."""
+    r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (name,))
+    if not r:
+        raise CommonsError(f"unknown credential {name!r}")
+    out: dict = {"credential": name}
+    if purpose or scope:
+        if agent_id and r[0]["deposited_by"] != agent_id:
+            raise CommonsError(f"only the agent that deposited {name} (or the user) sets its purpose and scope; "
+                               "you can add where it is used")
+        _need_notes(purpose or "x" * 8, scope or "set")  # only what is being set has to meet the bar
+        describe(s, name, purpose or None, scope or None)
+        out["described"] = True
+    if remove_id:
+        out |= forget_use(s, agent_id, name, remove_id)
+    if where:
+        out["use"] = note_use(s, agent_id, name, where, what, project)
+    return out | {"notes": notes_of(s, name)}
+
+
+def _uses(s: Store, name: str) -> list[dict]:
+    return [{"id": u["id"], "where": u["place"], "what": u["what"] or "", "project": u["project"] or "",
+             "by": s.label(u["added_by"])[1] if u["added_by"] else "the user", "at": iso(u["updated_at"])}
+            for u in s.q("SELECT * FROM vault_uses WHERE cred=? ORDER BY created_at", (name,))]
+
+
+def notes_of(s: Store, name: str) -> dict:
+    """What the hub knows about a key besides its value: purpose, scope, where it is used, and calls made through Commons."""
+    c = s.q("SELECT purpose, scope, description FROM vault_creds WHERE name=?", (name,))
+    if not c:
+        return {}
+    uses = _uses(s, name)
+    since = now() - 30 * 86400
+    calls = s.q("SELECT COUNT(*) n, MAX(ts) last FROM vault_decisions WHERE cred=? AND verdict IN ('allow','user_allowed') "
+                "AND ts>?", (name, since))[0]
+    last = s.q("SELECT agent_id FROM vault_decisions WHERE cred=? AND verdict IN ('allow','user_allowed') AND ts>? "
+               "ORDER BY ts DESC LIMIT 1", (name, since))
+    purpose = c[0]["purpose"] or c[0]["description"] or ""  # a key from before purposes existed: its description says it
+    missing = [k for k, ok in (("purpose", purpose), ("scope", c[0]["scope"]), ("where it is used", uses)) if not ok]
+    return {"purpose": purpose, "scope": c[0]["scope"] or "", "used_in": uses,
+            "calls_30d": {"count": calls["n"], "last": iso(calls["last"]) if calls["last"] else None,
+                          "last_by": s.label(last[0]["agent_id"])[1] if last else None},
+            "missing": missing}
+
+
+def missing_notes(s: Store, agent_id: str) -> list[str]:
+    """This agent's keys that don't yet say what they are for, what they can do, or where they are used (one query: it
+    runs on every check-in)."""
+    return [r["name"] for r in s.q(
+        "SELECT name FROM vault_creds c WHERE deposited_by=? AND (COALESCE(purpose, description, '')='' OR "
+        "COALESCE(scope,'')='' OR NOT EXISTS(SELECT 1 FROM vault_uses u WHERE u.cred=c.name)) ORDER BY name", (agent_id,))]
 
 
 def set_hosts(s: Store, agent_id: str, name: str, base_urls: list[str]) -> dict:
@@ -167,9 +289,12 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
         raise CommonsError("auth needs header, query, bearer or basic")
     if risk not in ("low", "normal", "high", "always"):
         raise CommonsError("risk is low, normal, high or always (always: every use allowed without asking)")
-    s.x("INSERT OR REPLACE INTO vault_creds(name,service,description,base_urls,auth,risk,secret,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM vault_creds WHERE name=?),?),?)",
-        (name, service, description, json.dumps(urls), json.dumps(auth), risk, _seal(s, name, value), name, now(), now()))
+    s.x("INSERT INTO vault_creds(name,service,description,base_urls,auth,risk,secret,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET service=excluded.service, "
+        "description=COALESCE(NULLIF(excluded.description,''),vault_creds.description), "
+        "base_urls=CASE WHEN excluded.base_urls='[]' THEN vault_creds.base_urls ELSE excluded.base_urls END, "
+        "auth=excluded.auth, risk=excluded.risk, secret=excluded.secret, updated_at=excluded.updated_at",
+        (name, service, description, json.dumps(urls), json.dumps(auth), risk, _seal(s, name, value), now(), now()))
     s.audit(None, "vault.set", name, {"service": service, "base_urls": urls, "risk": risk})
     return {"name": name, "service": service, "base_urls": urls, "risk": risk, "stored": True} | (
         {} if urls else {"next": f"Stored. It can't be sent anywhere until you give the hosts it belongs to: "
@@ -193,7 +318,7 @@ def make_password(length: int = 24, symbols: bool = True) -> str:
 
 
 def generate(s: Store, agent_id: str, name: str, service: str, url: str, username: str = "", length: int = 24,
-             symbols: bool = True, purpose: str = "") -> dict:
+             symbols: bool = True, purpose: str = "", scope: str = "", used_in: list | None = None) -> dict:
     """An agent creating an account gets a username and a strong password from the vault, which keeps them. The
     password is returned this once so the agent can finish the sign-up; later it is used through Commons, or read
     again with reveal() (the creator for 24 hours, anyone else only with the decision agent's or the user's yes)."""
@@ -207,6 +332,10 @@ def generate(s: Store, agent_id: str, name: str, service: str, url: str, usernam
     password = make_password(length, symbols)
     add(s, name, password, service, [url], {"basic": username}, f"{service} login: {purpose}"[:300], "high")
     s.x("UPDATE vault_creds SET username=?, kind='login', deposited_by=? WHERE name=?", (username, agent_id, name))
+    describe(s, name, purpose, scope or "the account's own login: everything the account can do")
+    for u in used_in or []:
+        u = {"where": u} if isinstance(u, str) else dict(u)
+        note_use(s, agent_id, name, u.get("where") or "", u.get("what") or "", u.get("project") or "")
     s.x("INSERT INTO vault_decisions(id,agent_id,cred,method,url,justification,scope,verdict,scores,reason,question_id,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (new_id("vdc"), agent_id, name, "GENERATE", url[:1000], purpose[:1000], "write", "generated", "{}",
          "new login created by the vault", None, now()))
@@ -257,6 +386,7 @@ def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
 def remove(s: Store, name: str) -> dict:
     s.x("DELETE FROM vault_creds WHERE name=?", (name,))
     s.x("DELETE FROM vault_grants WHERE cred=?", (name,))
+    s.x("DELETE FROM vault_uses WHERE cred=?", (name,))
     s.audit(None, "vault.remove", name)
     return {"name": name, "removed": True}
 
@@ -264,9 +394,10 @@ def remove(s: Store, name: str) -> dict:
 def listing(s: Store) -> list[dict]:
     return [{"credential": r["name"], "service": r["service"], "description": r["description"],
              "base_urls": json.loads(r["base_urls"]), "risk": r["risk"], "stored": bool(r["secret"]),
-             "kind": r["kind"] or "api_key", **({"username": r["username"]} if r["username"] else {})}
-            for r in s.q("SELECT name, service, description, base_urls, risk, secret, kind, username FROM vault_creds "
-                         "ORDER BY name")]
+             "kind": r["kind"] or "api_key", "from": s.label(r["deposited_by"])[1] if r["deposited_by"] else "the user",
+             **({"username": r["username"]} if r["username"] else {}), **notes_of(s, r["name"])}
+            for r in s.q("SELECT name, service, description, base_urls, risk, secret, kind, username, deposited_by "
+                         "FROM vault_creds ORDER BY name")]
 
 
 # ------------------------------------------------------------------------------------------------ decision agent

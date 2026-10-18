@@ -37,6 +37,8 @@ def set_provider(s: Store, kind: str, key: str = "", base_url: str = "") -> dict
         if not (key or "").strip():
             raise CommonsError(f"{label} needs its API key")
         V.add(s, _cred(kind), key, kind, [base], V.parse_auth(auth, extra), f"{label} API key (entered on Setup)", "high")
+        V.describe(s, _cred(kind), f"Commons' own {label} key: planning, summaries and the decision agent", "as issued by the provider")
+        V.note_use(s, None, _cred(kind), "the Commons hub", f"{label} calls Commons makes itself")
     if kind != "typesafe":
         pl = ProviderLayer(s)
         s.x("DELETE FROM providers WHERE name=?", (kind,))
@@ -95,9 +97,6 @@ def status(s: Store) -> dict:
     chain = settings.get(s, "judge_chain")
     judges = [{"entry": e, "ready": _judge_ready(s, e)} for e in chain]
     creds = V.listing(s)
-    for c in creds:
-        r = s.q("SELECT deposited_by FROM vault_creds WHERE name=?", (c["credential"],))
-        c["from"] = s.label(r[0]["deposited_by"])[1] if r and r[0]["deposited_by"] else "admin"
     agents = []
     for a in s.q("SELECT id, name, last_seen FROM agents WHERE name NOT IN ('cli','user','librarian','commons',"
                  "'dashboard-user','reviewer') ORDER BY name"):

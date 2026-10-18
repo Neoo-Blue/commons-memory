@@ -486,8 +486,9 @@ def link_vault(s: Store) -> int:
     n = 0
     eps = [(r["id"], hp(r["name"])) for r in s.q("SELECT id, name FROM infra_nodes WHERE kind='endpoint'")]
     for c in creds:
-        cid = upsert_node(s, "credential", c["credential"], attrs={"service": c.get("service"), "vault": True},
-                          note=c.get("description") or "", source="vault")
+        cid = upsert_node(s, "credential", c["credential"], attrs={"service": c.get("service"), "vault": True,
+                                                                    "scope": c.get("scope") or "", "used_in": len(c.get("used_in") or [])},
+                          note=c.get("purpose") or c.get("description") or "", source="vault")
         bases = [hp(u) for u in c.get("base_urls") or []]
         targets = set()
         for eid, (eh, ep) in eps:  # same host and port; a base URL with no port means the default web ports
@@ -496,6 +497,13 @@ def link_vault(s: Store) -> int:
         nm = _norm(c["credential"])
         if len(nm) >= 4:
             targets |= {r["id"] for r in s.q("SELECT id, name FROM infra_nodes WHERE kind='service'") if _norm(r["name"]) == nm}
+        for u in c.get("used_in") or []:  # every place its notes name: "Poise server (LXC 108) .env" finds LXC 108
+            place = u.get("where") or ""
+            for q in (place, re.split(r"\s[(\[]|\s\.|,", place)[0].strip()):
+                node = resolve(s, q) if len(q) >= 4 and "://" not in q[:12] or q == place else None
+                if node and node != cid and s.q("SELECT 1 FROM infra_nodes WHERE id=? AND kind<>'credential'", (node,)):
+                    targets.add(node)
+                    break
         for t in targets:
             if upsert_edge(s, t, "uses_credential", cid, source="vault"):
                 n += 1

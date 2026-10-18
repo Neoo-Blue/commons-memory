@@ -150,7 +150,7 @@ def test_basic_auth_header(store, svc, monkeypatch):
 def test_agents_hand_over_keys_but_never_replace_anothers(store, svc):
     base, _ = svc
     a, b = store.ensure_agent("muse"), store.ensure_agent("grok")
-    r = V.deposit(store, a, "seerr", "seerr-key-123456", "seerr", [base], "header:X-Api-Key")
+    r = V.deposit(store, a, "seerr", "seerr-key-123456", "seerr", [base], "header:X-Api-Key", purpose="request lists for the family", scope="admin API of one server")
     assert r["stored"] and V._value(store, "seerr") == "seerr-key-123456"
     V.deposit(store, a, "seerr", "seerr-key-rotated", "seerr", [base], "header:X-Api-Key")      # its own: update ok
     with pytest.raises(CommonsError, match="already in the vault"):
@@ -168,7 +168,7 @@ def test_handover_checklist_tracks_what_commons_still_needs(store, svc):
     assert "HAND-OVER INCOMPLETE" in H.nudge(store, a)
     Orchestrator(store).profiles.set(a, expertise={"research": 0.8}, reach=["LAN via tailnet"])
     store.add_item("memory", "The user's NAS is a Synology DS923+", agent_id=a)
-    V.deposit(store, a, "windy", "windy-key-1234567", "windy", [base], "header:x-windy-api-key")
+    V.deposit(store, a, "windy", "windy-key-1234567", "windy", [base], "header:x-windy-api-key", purpose="webcam map tiles for WARROOM", scope="read webcams", used_in=["WARROOM on LXC 117"])
     for item in ("schedules", "quota", "work", "skills"):
         H.report(store, a, item, "none", "nothing of this kind")
     from commons_memory.capture import Capture
@@ -283,7 +283,7 @@ def test_a_memory_write_is_all_or_nothing(store, monkeypatch):
 def test_a_key_is_stored_the_moment_it_arrives_and_goes_nowhere_until_it_has_hosts(store, svc):
     base, seen = svc
     claude, muse = store.ensure_agent("Claude"), store.ensure_agent("muse")
-    out = V.deposit(store, claude, "mireye", SECRET, "mireye")              # no hosts known yet: still stored
+    out = V.deposit(store, claude, "mireye", SECRET, "mireye", purpose="site analytics for cooli.ai", scope="unknown")  # no hosts yet
     assert out["stored"] and out["base_urls"] == [] and "vault_hosts" in out["next"]
     assert V._value(store, "mireye") == SECRET
     with pytest.raises(CommonsError, match="no hosts yet"):
@@ -296,3 +296,75 @@ def test_a_key_is_stored_the_moment_it_arrives_and_goes_nowhere_until_it_has_hos
     with pytest.raises(CommonsError, match="may only be sent to"):
         V.use(store, claude, "mireye", "GET", "http://evil.example/x", "check the token works for the user's ask")
     assert seen == []
+
+
+def test_every_new_key_says_what_it_is_for_what_it_can_do_and_where_it_is_used(store, svc):
+    from commons_memory import handover as H
+    base, _ = svc
+    claude, muse = store.ensure_agent("Claude"), store.ensure_agent("muse")
+    with pytest.raises(CommonsError, match="purpose"):
+        V.deposit(store, claude, "resend", SECRET, "resend", [base])
+    with pytest.raises(CommonsError, match="scope"):
+        V.deposit(store, claude, "resend", SECRET, "resend", [base], purpose="Poise sends sign-in codes")
+    out = V.deposit(store, claude, "resend", SECRET, "resend", [base], purpose="Poise sends sign-in codes",
+                    scope="send email from cooli.ai only",
+                    used_in=[{"where": "Poise server (LXC 108) .env RESEND_API_KEY", "what": "sign-in codes", "project": "Poise"}])
+    n = out["notes"]
+    assert n["purpose"].startswith("Poise") and n["scope"].startswith("send") and n["missing"] == []
+    assert n["used_in"][0]["where"].startswith("Poise server") and n["used_in"][0]["by"] == "Claude"
+    V.note(store, muse, "resend", where="cooli-leads cron on the NAS", what="outreach mail")         # anyone who uses it adds a place
+    V.note(store, muse, "resend", where="COOLI-LEADS cron on the nas", what="outreach and replies")  # same place: updated
+    uses = V.notes_of(store, "resend")["used_in"]
+    assert len(uses) == 2 and uses[1]["what"] == "outreach and replies"
+    with pytest.raises(CommonsError, match="only the agent that deposited"):
+        V.note(store, muse, "resend", purpose="something else entirely")                           # purpose stays the depositor's
+    with pytest.raises(CommonsError, match="only whoever added it"):
+        V.note(store, store.ensure_agent("grok"), "resend", remove_id=uses[0]["id"])
+    V.note(store, muse, "resend", remove_id=uses[1]["id"])
+    assert [u["where"] for u in V.notes_of(store, "resend")["used_in"]] == ["Poise server (LXC 108) .env RESEND_API_KEY"]
+    row = [c for c in V.listing(store) if c["credential"] == "resend"][0]
+    assert row["scope"] and row["from"] == "Claude" and SECRET not in str(row)
+    V.add(store, "legacy", SECRET, "legacy", [base], {"bearer": True})                               # an old key without notes
+    store.x("UPDATE vault_creds SET deposited_by=? WHERE name='legacy'", (claude,))
+    assert V.missing_notes(store, claude) == ["legacy"]
+    assert "KEY NOTES MISSING: legacy" in H.nudge(store, claude)
+
+
+
+def test_rotating_a_key_keeps_its_notes_and_places_stay_with_their_key(store, svc):
+    base, _ = svc
+    claude = store.ensure_agent("Claude")
+    V.deposit(store, claude, "resend", SECRET, "resend", [base], purpose="Poise sends sign-in codes", scope="send email only",
+              used_in=["Poise server (LXC 108) .env"])
+    V.deposit(store, claude, "other", SECRET, "other", [base], purpose="something else here", scope="read-only",
+              used_in=["the NAS cron"])
+    V.deposit(store, claude, "resend", "rotated-value-123456", "resend", [base])        # rotation: notes untouched
+    n = V.notes_of(store, "resend")
+    assert n["purpose"] == "Poise sends sign-in codes" and n["scope"] == "send email only" and len(n["used_in"]) == 1
+    assert V._value(store, "resend") == "rotated-value-123456"
+    g = V.generate(store, claude, "acct", "site", base, purpose="sign in to the site dashboard")
+    V.add(store, "acct", "new-password-123456", "site", [base], {"basic": g["username"]})  # a login updated by the user
+    row = store.q("SELECT username, kind, deposited_by FROM vault_creds WHERE name='acct'")[0]
+    assert row["username"] == g["username"] and row["kind"] == "login" and row["deposited_by"] == claude
+    other_use = V.notes_of(store, "other")["used_in"][0]["id"]
+    with pytest.raises(CommonsError, match="unknown use"):
+        V.note(store, None, "resend", remove_id=other_use)                              # not this key's place
+    with pytest.raises(CommonsError, match="purpose"):
+        V.note(store, claude, "resend", purpose="x")                                     # edits meet the same bar
+    V.remove(store, "other")
+    assert not store.q("SELECT 1 FROM vault_uses WHERE cred='other'")
+
+
+
+def test_second_review_rotation_keeps_hosts_scope_alone_and_one_query_reminder(store, svc):
+    base, _ = svc
+    claude = store.ensure_agent("Claude")
+    V.deposit(store, claude, "resend", SECRET, "resend", [base], purpose="Poise sends sign-in codes", scope="send email only",
+              used_in=["Poise server (LXC 108) .env"])
+    V.deposit(store, claude, "resend", "rotated-value-123456", "resend")                   # rotation with no hosts given
+    assert json.loads(store.q("SELECT base_urls FROM vault_creds WHERE name='resend'")[0]["base_urls"]) == [base + "/"]
+    V.add(store, "legacy", SECRET, "legacy", [base], {"bearer": True})
+    store.x("UPDATE vault_creds SET deposited_by=? WHERE name='legacy'", (claude,))
+    V.note(store, claude, "legacy", scope="read-only")                                     # scope alone on an old key
+    assert V.notes_of(store, "legacy")["scope"] == "read-only"
+    assert V.missing_notes(store, claude) == ["legacy"]                                    # still no purpose or places

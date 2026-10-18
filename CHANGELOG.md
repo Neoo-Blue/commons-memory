@@ -2,6 +2,23 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.35.0: every key says what it is for, what it can do, and where it lives
+- **Why.** The vault held names, values and allowed hosts, but not why a key exists, how much it can do at the provider,
+  or which servers and apps hold a copy. Without that, nobody can rotate a key, narrow it, or judge a leak.
+- **Purpose and scope, required for new keys.** `vault_deposit` and the dashboard's add form need `purpose` (what the key
+  is for) and `scope` (what it can do at the provider: read-only, DNS edit on one zone, full admin; "unknown" is
+  accepted and visible). Generated logins default to the account's own login. Updates keep what a key already has.
+- **Every place it is used.** `used_in` at deposit, or the new `vault_note(name, where, what, project)` whenever a key is
+  installed somewhere new: one place or many, each with what it does there and who recorded it. The same place twice
+  updates it; a place that no longer uses the key can be removed by whoever added it, the depositor, or the user.
+  Purpose and scope stay the depositor's (and the user's) to change.
+- **Shown everywhere a key is.** `credentials()` and the System page list purpose, scope, places, calls made through
+  Commons in the last 30 days, and what is still missing; the details drawer edits all of it. On the infrastructure map
+  a noted place ("Poise server (LXC 108) .env") links to its machine or service, so "what uses this key" and "what keys
+  does this server hold" both answer.
+- **Older keys get filled in.** An agent whose keys lack notes sees "KEY NOTES MISSING" at check-in until it adds them.
+- **For agents:** deposit with `purpose`, `scope` and `used_in`; call `vault_note` when you install a key somewhere new.
+
 ## v0.34.1: every session knows the team
 - **Why.** The user asked a Claude Code session to have the Grok bot review Poise; it called Grok Build instead (out of
   credit), because nothing told it who the Grok bot is. Claude Code's sessions share one agent identity, so only the first

@@ -266,12 +266,15 @@ def register_v8(mcp, store, who):
 
     @mcp.tool()
     def vault_generate(name: str, service: str, url: str, purpose: str, username: str = "", length: int = 24,
-                       symbols: bool = True, agent: str = "", api_key: str = "") -> str:
+                       symbols: bool = True, scope: str = "", used_in: list[dict] | None = None, agent: str = "",
+                       api_key: str = "") -> str:
         """Creating an account? Get a username and a strong password from the vault, which stores them. The password
         is shown this once: use it to finish the sign-up. url = the site, purpose = what the account is for (the
-        user's ask). Leave username empty to have one generated, or pass the email/handle you'll register with."""
+        user's ask). Leave username empty to have one generated, or pass the email/handle you'll register with.
+        scope = the account's role if it is limited; used_in = where the login will be used (see vault_note)."""
         from . import vault as V
-        return _js(V.generate(store, me(agent, api_key), name, service, url, username, length, symbols, purpose))
+        return _js(V.generate(store, me(agent, api_key), name, service, url, username, length, symbols, purpose, scope,
+                              used_in))
 
     @mcp.tool()
     def vault_reveal(name: str, justification: str, agent: str = "", api_key: str = "") -> str:
@@ -335,17 +338,30 @@ def register_v8(mcp, store, who):
         return _js(V.judge_answer(store, me(agent, api_key), request_id, {k: sc[k] for k in asked}, reason))
 
     @mcp.tool()
-    def vault_deposit(name: str, value: str, service: str, base_urls: list[str] | None = None, auth: str = "bearer",
+    def vault_deposit(name: str, value: str, service: str, purpose: str = "", scope: str = "",
+                      used_in: list[dict] | None = None, base_urls: list[str] | None = None, auth: str = "bearer",
                       extra_headers: list[str] | None = None, description: str = "", risk: str = "normal",
                       agent: str = "", api_key: str = "") -> str:
         """Hand over an API key, token or password you hold so Commons keeps it (encrypted) and other agents can use it
-        through use_credential without seeing it. Deposit it the moment you get it: base_urls (where it may be sent) can
-        wait, and until they are set with vault_hosts the key is never sent anywhere. auth = bearer | basic:USER |
+        through use_credential without seeing it. Deposit it the moment you get it. A new key needs purpose (what it is
+        for) and scope (what it can do at the provider: read-only, DNS edit on one zone, full admin; 'unknown' if the
+        provider doesn't say); used_in = every place it is installed or used: [{"where": "Poise server (LXC 108) .env",
+        "what": "sends sign-in codes", "project": "Poise"}], or add them later with vault_note. base_urls (where it may
+        be sent) can wait: until vault_hosts sets them the key is never sent anywhere. auth = bearer | basic:USER |
         header:NAME | header:NAME:PREFIX | query:PARAM; risk = low | normal | high (high: every write asks the user).
         You can add new keys and update your own, not replace another's."""
         from . import vault as V
         return _js(V.deposit(store, me(agent, api_key), name, value, service, base_urls, auth, extra_headers,
-                             description, risk))
+                             description, risk, purpose, scope, used_in))
+
+    @mcp.tool()
+    def vault_note(name: str, where: str = "", what: str = "", project: str = "", purpose: str = "", scope: str = "",
+                   remove_id: str = "", agent: str = "", api_key: str = "") -> str:
+        """Keep a key's notes current: where = a place it is installed or used (a host, app, service, env var, scheduled
+        job) with what = what it does there; remove_id drops a place that no longer uses it; purpose/scope (the agent
+        that deposited it) say what it is for and what it can do. Add a place whenever you install or start using a key."""
+        from . import vault as V
+        return _js(V.note(store, me(agent, api_key), name, where, what, project, purpose, scope, remove_id))
 
     @mcp.tool()
     def vault_hosts(name: str, base_urls: list[str], agent: str = "", api_key: str = "") -> str:

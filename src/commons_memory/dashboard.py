@@ -508,9 +508,20 @@ class API:
             return settings.put(self.s, body.get("key", ""), body.get("value"))
         if path == "/api/vault/set":
             from . import vault as V
-            return V.add(self.s, body.get("name", ""), body.get("value") or "", body.get("service") or body.get("name", ""),
-                         body.get("base_urls") or [], V.parse_auth(body.get("auth") or "bearer"),
-                         body.get("description") or "", body.get("risk") or "normal")
+            new = not self.s.q("SELECT 1 FROM vault_creds WHERE name=?", (body.get("name", ""),))
+            if new:  # the user's own keys carry the same notes as an agent's
+                V._need_notes(body.get("purpose", ""), body.get("scope", ""))
+            out = V.add(self.s, body.get("name", ""), body.get("value") or "", body.get("service") or body.get("name", ""),
+                        body.get("base_urls") or [], V.parse_auth(body.get("auth") or "bearer"),
+                        body.get("description") or "", body.get("risk") or "normal")
+            V.describe(self.s, out["name"], body.get("purpose") or None, body.get("scope") or None)
+            if (body.get("where") or "").strip():
+                V.note_use(self.s, None, out["name"], body["where"], body.get("what", ""), body.get("project", ""))
+            return out | {"notes": V.notes_of(self.s, out["name"])}
+        if path == "/api/vault/note":
+            from . import vault as V
+            return V.note(self.s, None, body.get("name", ""), body.get("where", ""), body.get("what", ""),
+                          body.get("project", ""), body.get("purpose", ""), body.get("scope", ""), body.get("remove_id", ""))
         if path == "/api/vault/rm":
             from . import vault as V
             return V.remove(self.s, body.get("name", ""))

@@ -18,8 +18,9 @@ ITEMS = {
                "SSH, CLIs, apps])",
     "memories": "remember / import_items with everything you know about the user, their projects and systems (your "
                 "own memory files, notes, past conversations)",
-    "credentials": "vault_deposit(name, value, service, base_urls, auth) for every API key, token and password you "
-                   "hold; it is encrypted and only ever used through the decision agent",
+    "credentials": "vault_deposit(name, value, service, purpose, scope, used_in) for every API key, token and password "
+                   "you hold, saying what it is for, what it can do and everywhere it is used; it is encrypted and only "
+                   "ever used through the decision agent",
     "schedules": "schedule_report for every task you run on a schedule (cron, how it runs, the acceptance bar)",
     "quota": "quota_report with your usage windows (5-hour, weekly), if your client has limits",
     "work": "start_work for anything you are working on now",
@@ -81,7 +82,15 @@ def nudge(s: Store, agent_id: str | None) -> str:
         st = status(s, agent_id)
     except Exception:  # noqa: BLE001 - never break a check-in over this
         return ""
+    try:
+        from .vault import missing_notes
+        bare = missing_notes(s, agent_id)
+    except Exception:  # noqa: BLE001 - no vault yet
+        bare = []
+    keys = (f"KEY NOTES MISSING: {', '.join(bare[:6])}{' and more' if len(bare) > 6 else ''} don't say what they are for, "
+            "what they can do, or where they are used: vault_note(name, purpose=..., scope=..., where=..., what=...).\n\n"
+            if bare else "")
     if st["complete"]:
-        return ""
+        return keys
     return ("HAND-OVER INCOMPLETE: Commons still needs your " + ", ".join(m["item"] for m in st["missing"])
-            + ". Call handover_status() for how.\n\n")
+            + ". Call handover_status() for how.\n\n" + keys)

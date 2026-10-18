@@ -164,8 +164,13 @@ window.suCred = async function () {
   const name = vn.value.trim();
   const val = vv.value;
   const base = vu.value.trim();
+  const fv = id => ((document.getElementById(id) || {}).value || "").trim();
   if (!name || !val || !base) {
     toast("Name, base URL and secret value are required", "err");
+    return;
+  }
+  if (fv("vpu").length < 8 || fv("vsc").length < 3) {
+    toast("Say what the key is for and what it can do (its scope)", "err");
     return;
   }
   const auth = va && va.value === "basic:" ? "basic:" + (vb ? vb.value.trim() : "") : (va ? va.value : "bearer");
@@ -177,6 +182,7 @@ window.suCred = async function () {
       auth,
       risk: vr ? vr.value : "normal",
       description: vd ? vd.value.trim() : "",
+      purpose: fv("vpu"), scope: fv("vsc"), where: fv("vw"), what: fv("vwh"),
       value: val,
     });
     if (res && res.error) {
@@ -298,6 +304,24 @@ window.openRecurringDrawer = function (id, sched) {
   });
 };
 
+window.suVaultNote = async function (name, mode, useId) {
+  const fv = id => ((document.getElementById(id) || {}).value || "").trim();
+  const body = { name };
+  if (mode === "describe") { body.purpose = fv("vn-pu"); body.scope = fv("vn-sc"); }
+  else if (mode === "remove") { body.remove_id = useId; }
+  else {
+    body.where = fv("vn-w"); body.what = fv("vn-wh"); body.project = fv("vn-pr");
+    if (body.where.length < 3) { toast("Say where it is used", "err"); return; }
+  }
+  const r = await postRaw("vault/note", body);
+  if (r && r.error) { toast(r.error, "err"); return; }
+  toast(mode === "remove" ? "Place removed" : "Saved");
+  render();
+  const fresh = await api("setup").catch(() => null);
+  const c = fresh && (fresh.credentials || []).find(x => x.credential === name);
+  if (c) openSecretDrawer(c);
+};
+
 window.openSecretDrawer = function (cred) {
   if (!window.K || !K.drawer) return;
   K.drawer.open({
@@ -314,9 +338,30 @@ window.openSecretDrawer = function (cred) {
           <h4 style="margin:0 0 var(--space-1) 0;font-size:var(--text-sm)">Authorized destinations</h4>
           <div style="font-size:var(--text-xs);color:var(--fg-muted)">${E((cred.base_urls || []).join(", ") || "No restrictions declared")}</div>
         </div>
+        <div>
+          <h4 style="margin:0 0 var(--space-1) 0;font-size:var(--text-sm)">What it's for</h4>
+          <input id="vn-pu" value="${E(cred.purpose || "")}" placeholder="What the key is for" aria-label="What the key is for" style="width:100%">
+          <h4 style="margin:var(--space-3) 0 var(--space-1) 0;font-size:var(--text-sm)">What it can do (scope)</h4>
+          <input id="vn-sc" value="${E(cred.scope || "")}" placeholder="read-only, DNS edit on one zone, full admin…" aria-label="Scope" style="width:100%">
+          <div style="margin-top:var(--space-2);display:flex;justify-content:flex-end"><button type="button" class="btn sm" onclick="suVaultNote(${J(cred.credential)}, 'describe')">Save</button></div>
+        </div>
+        <div>
+          <h4 style="margin:0 0 var(--space-1) 0;font-size:var(--text-sm)">Where it's used (${E((cred.used_in || []).length)})</h4>
+          ${(cred.used_in || []).length ? `<div class="list">${cred.used_in.map(u => `<div class="row"><div class="row-content"><div class="row-title"><b>${E(u.where)}</b>${u.project ? ` <span class="badge">${E(u.project)}</span>` : ""}</div>
+            <div class="row-subtitle">${E(u.what || "")}${u.what ? " · " : ""}added by ${E(u.by)} ${E(K.fmt.ago(u.at) || "")}</div></div>
+            <div class="row-actions"><button type="button" class="btn sm bad" onclick="suVaultNote(${J(cred.credential)}, 'remove', ${J(u.id)})">Remove</button></div></div>`).join("")}</div>`
+            : '<div style="font-size:var(--text-xs);color:var(--fg-muted)">No places recorded yet. Add every server, app or job that holds this key.</div>'}
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--space-2);margin-top:var(--space-2)">
+            <input id="vn-w" placeholder="Where, e.g. Poise server (LXC 108) .env" aria-label="Where it is used">
+            <input id="vn-wh" placeholder="What it does there" aria-label="What it does there">
+            <input id="vn-pr" placeholder="Project (optional)" aria-label="Project">
+          </div>
+          <div style="margin-top:var(--space-2);display:flex;justify-content:flex-end"><button type="button" class="btn sm" onclick="suVaultNote(${J(cred.credential)}, 'add')">Add place</button></div>
+        </div>
+        ${cred.calls_30d && cred.calls_30d.count ? `<div style="font-size:var(--text-xs);color:var(--fg-muted)">${E(cred.calls_30d.count)} calls through Commons in 30 days, last by ${E(cred.calls_30d.last_by || "?")} ${E(K.fmt.ago(cred.calls_30d.last) || "")}</div>` : ""}
         ${cred.description ? `
           <div>
-            <h4 style="margin:0 0 var(--space-1) 0;font-size:var(--text-sm)">Description</h4>
+            <h4 style="margin:0 0 var(--space-1) 0;font-size:var(--text-sm)">Other notes</h4>
             <div style="font-size:var(--text-xs);color:var(--fg-muted)">${E(cred.description)}</div>
           </div>
         ` : ""}
@@ -651,7 +696,11 @@ V["Setup"] = async function () {
                           <span class="badge ${c.risk === "high" ? "bad" : c.risk === "low" ? "info" : "ok"}" style="margin-left:4px">${E(c.risk)} risk</span>
                         </div>
                         <div class="row-subtitle">
-                          ${E(c.service)} · sent only to: ${E((c.base_urls || []).join(", ") || "any")} · from: ${E(c.from || "admin")}
+                          ${E(c.purpose || "Purpose not recorded")}${c.scope ? ` · can: ${E(c.scope)}` : ""}
+                        </div>
+                        <div class="row-subtitle">
+                          ${E(c.service)} · used in ${E((c.used_in || []).length)} place${(c.used_in || []).length === 1 ? "" : "s"} · sent only to: ${E((c.base_urls || []).join(", ") || "nowhere yet")} · from: ${E(c.from || "the user")}
+                          ${(c.missing || []).length ? `<span class="badge warn" style="margin-left:4px">needs ${E(c.missing.join(", "))}</span>` : ""}
                         </div>
                       </div>
                       <div class="row-actions">
@@ -688,7 +737,11 @@ V["Setup"] = async function () {
                     <option value="low">Low risk</option>
                     <option value="high">High risk (every write asks you)</option>
                   </select>
-                  <input id="vd" placeholder="Description of purpose">
+                  <input id="vpu" placeholder="What it's for (required), e.g. Poise sends sign-in codes">
+                  <input id="vsc" placeholder="What it can do (required), e.g. read-only, DNS edit on one zone">
+                  <input id="vw" placeholder="Where it's used, e.g. Poise server (LXC 108) .env">
+                  <input id="vwh" placeholder="What it does there">
+                  <input id="vd" placeholder="Other notes">
                   <input id="vv" type="password" placeholder="Secret value" autocomplete="off">
                 </div>
                 <div style="margin-top:var(--space-3);display:flex;justify-content:flex-end">
