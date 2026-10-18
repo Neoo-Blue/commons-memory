@@ -60,9 +60,10 @@ function stateOf(p, claims, seen) {
   if (s === "online") return { cls: "live", label: "Online", live: true };
   if (s === "idle") return { cls: "idle", label: "Idle", live: true };
   if (s === "sleeping") return { cls: "idle", label: "Asleep", live: false };
+  if (s === "away") return { cls: "idle", label: "Away", live: false, hint: "Checks in on its own; Commons can't wake it, so work waits for its next check-in" };
   return { cls: "offline", label: "Offline", live: false };
 }
-const stateTag = st => `<span class="ag-state"><span class="status-dot ${st.cls}"></span>${E(st.label)}</span>`;
+const stateTag = st => `<span class="ag-state"${st.hint ? ` title="${E(st.hint)}"` : ""}><span class="status-dot ${st.cls}"></span>${E(st.label)}</span>`;
 const WAKE = { instant: "Holds a wake stream open: woken within a second", "long-poll": "Long-polls Commons for work",
   push: "Woken through a webhook, ntfy or command channel", polling: "Finds work only when it next checks in", offline: "Not reachable right now" };
 
@@ -232,6 +233,8 @@ async function agentBody(name, ctx) {
       <div class="ag-dr-badges">${badge(u.can_take_work ? "Can take work" : "Waiting for quota", u.can_take_work ? "ok" : "warn")}${p.wake_mode ? `<span class="badge" title="${E(WAKE[p.wake_mode] || "")}">wake: ${E(p.wake_mode)}</span>` : ""}${d.unread ? badge(d.unread + " unread", "info") : ""}</div></div></div>
     ${p.status ? `<p class="ag-dr-status">${E(p.status)}</p>` : ""}
     ${identity}
+    ${idn && !p.wakeable ? `<div class="ag-wakewarn" role="status">${ico("warn")}<div><b>Commons can't wake ${E(d.display || name)}</b><p class="ag-sub">Work and messages wait until it checks in on its own. Give it one sentence and it installs what lets Commons wake it, keeping its key.</p>
+      <div id="ag-wakefix">${S.wakefix && S.wakefix.name === name ? copyBox(S.wakefix.bot) : `<button type="button" onclick="AG.wakeable(${J(name)},this)">Make it wakeable</button>`}</div></div></div>` : ""}
     <section class="ag-dr-sec"><h4>Presence</h4><dl class="ag-facts">
       ${fact("Wake mode", E(WAKE[p.wake_mode] || p.wake_mode || "unknown"))}
       ${fact("Live connections", E(p.live_connections || 0))}
@@ -290,7 +293,7 @@ V.Presence = async function () {
   }).join("");
   const opts = `<option value="*">Everyone</option>` + board.map(a => `<option value="${E(a.agent)}" ${a.agent === S.to ? "selected" : ""}>${E(a.agent)}</option>`).join("");
   return `<div class="ag-page">${head("Presence", "Who is online, how each agent gets woken when work arrives, and the messages between them.")}
-    ${stats([[c("online"), "online"], [c("idle"), "idle"], [c("sleeping"), "asleep"], [board.filter(a => a.seen === false || a.state === "offline").length, "offline"], [board.filter(a => a.wakeable).length, "wakeable now"]])}
+    ${stats([[c("online"), "online"], [c("idle"), "idle"], [c("sleeping"), "asleep"], [c("away"), "away"], [board.filter(a => a.seen === false || a.state === "offline").length, "offline"], [board.filter(a => a.wakeable).length, "wakeable now"]])}
     ${sec("Presence board", board.length ? `<div class="ag-bar">${searchBox("presence", "Search agents")}</div><div class="ag-list ag-presence" data-fscope="presence"><div class="ag-row ag-row-h" aria-hidden="true"><span></span><span>Agent</span><div class="ag-pr-cols"><span>State</span><span>Wake</span><span>Channels</span><span>Live</span><span>Unread</span></div><span></span></div>${rows}</div>${noMatch("presence")}`
       : empty("Presence", "No agents yet", "Agents appear here once they connect.", [{ label: "Connect an agent", run: () => go("Connect") }]), { n: board.length })}
     <div class="ag-cols">
@@ -567,6 +570,36 @@ function cxPoll() {
     if (s.connected && !was) K.toast(`${s.name} is connected`, { kind: "ok" });
   }, 3000);
 }
+/* ---------- Add an AI: one join link, three ways to use it, live as each AI joins ---------- */
+const JN = window.AGJ = window.AGJ || { j: null, st: null, t: 0 };
+const copyBox = (text, big) => `<div class="ag-codeblock${big ? " big" : ""}"><pre>${E(text)}</pre><button type="button" class="ag-copy${big ? " pri" : ""}" onclick="K.copy(${J(text)})">${ico("copy")}Copy</button></div>`;
+function joinStatusHtml(st) {
+  const js = arr(st && st.joined);
+  if (!js.length) return `<div class="ag-join-wait"><span class="status-dot idle"></span>${st && st.expired ? "This link has expired: make a new one." : "Waiting for an AI to join…"}</div>`;
+  return `<div class="ag-list">${js.map(x => `<div class="ag-row">${avatar(x.name, x.state === "online" ? "live" : "idle")}<div class="ag-row-main"><div class="ag-row-t">${E(x.name)}</div><div class="ag-sub">${E([x.client, x.host].filter(Boolean).join(" on "))} · joined ${E(K.fmt.ago(x.at))}</div></div>
+    ${x.wakeable ? badge("Commons can wake it", "ok") : badge("not wakeable yet", "warn")}</div>`).join("")}</div>`;
+}
+async function joinPoll() {
+  clearTimeout(JN.t);
+  if (!JN.j) return;
+  const st = await api("connect_join?code=" + encodeURIComponent(JN.j.code)).catch(() => null);
+  JN.st = st;
+  const el = $("#ag-join-st");
+  if (el) el.innerHTML = joinStatusHtml(st);
+  if (st && !st.expired && el) JN.t = setTimeout(joinPoll, 3000);
+}
+function joinHtml() {
+  if (!JN.j) return `<div class="ag-join-start"><p>One link connects an AI and makes sure Commons can always wake it. No keys to copy.</p>
+    <button type="button" class="pri big" onclick="AG.join(this)">${ico("plus")}Add an AI</button></div>`;
+  const j = JN.j, until = new Date(j.expires_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `<div class="ag-join">
+    <div class="ag-join-way"><h4>On a computer</h4><p class="ag-sub">Paste into a terminal on that machine. It connects every AI it finds (Claude Code, Codex, Gemini CLI, Cursor…) and installs what wakes each one.</p>${copyBox(j.terminal, true)}</div>
+    <div class="ag-join-way"><h4>A bot or another AI</h4><p class="ag-sub">Send it this sentence. It reads the instructions and joins on its own, telling Commons how to wake it.</p>${copyBox(j.bot)}</div>
+    <div class="ag-join-way"><h4>A chat app</h4><p class="ag-sub">claude.ai, ChatGPT or Grok: add a custom connector with this address, then sign in when it asks.</p>${copyBox(j.connector)}</div>
+    ${j.plain_http ? `<p class="ag-wakewarn">${ico("warn")}<span>This address is plain HTTP: anything on the network path could change the installer. Use it on a network you trust (home LAN, tailnet), or set an https or tailnet hub address under Manual setup.</span></p>` : ""}
+    <p class="ag-sub">The link works until ${E(until)} for up to ${E(j.uses)} AIs, at ${code(j.hub)}. A machine that can't reach that address? Set the hub address under Manual setup, then make a new link. <button type="button" class="ag-link" onclick="AG.join(this)">New link</button> · <button type="button" class="ag-link" onclick="AG.joinClose(this)">Close link</button></p>
+    <div id="ag-join-st" aria-live="polite">${joinStatusHtml(JN.st)}</div></div>`;
+}
 V.Connect = async function () {
   skel("Connect");
   let b, s;
@@ -596,7 +629,10 @@ V.Connect = async function () {
   const setupHtml = setup ? `<div class="ag-steps-opt">${arr(setup.steps).map(st => `<label class="ag-opt"><input type="checkbox" ${(cx.skip || []).includes(st.id) ? "" : "checked"} onchange="cxStep(${J(st.id)},this.checked)"><span>${E(st.label)}</span></label>`).join("")}</div>
       <div class="ag-codeblock big"><pre>${E(setup.base + (cx.skip || []).map(k => " --no-" + k).join(""))}</pre><button type="button" class="ag-copy pri" onclick="AG.cxCopy(${CX.blocks.indexOf(setup)})">${ico("copy")}Copy</button></div>
       <p class="ag-sub">Run it where the AI runs. It saves the key once (hidden prompt, a 0600 file), then does every ticked step and prints what it did.${cx.key ? " Paste the key above when it asks." : ""}</p>` : "";
-  return `<div class="ag-page ag-connect">${head("Connect an agent", "Pick the AI, create its key, then copy one command. This page watches for it to check in.")}
+  if (JN.j) setTimeout(joinPoll, 300);
+  return `<div class="ag-page ag-connect">${head("Connect an AI", "Add an AI in one step. Every AI Commons connects can be woken the moment work arrives.")}
+    <section class="ag-sec">${joinHtml()}</section>
+    <details class="ag-more ag-manual"><summary>${ico("chev")}Manual setup: pick the AI, create its key, copy its config</summary>
     <ol class="ag-stepper">
       ${step(1, "Choose the AI", `<div class="ag-plats" role="group" aria-label="AI">${plats.map(([k, l]) => `<button type="button" class="chip ${k === cx.platform ? "on" : ""}" aria-pressed="${k === cx.platform}" onclick="cxSet('platform',${J(k)})">${E(l)}</button>`).join("")}</div>
         <p class="ag-sub">${E(b.hint || "")}</p>
@@ -609,6 +645,7 @@ V.Connect = async function () {
     </ol>
     ${sec("Troubleshooting", `<div class="ag-list ag-trouble">${arr(b.troubleshooting).map(t => `<label class="ag-row"><input type="checkbox" aria-label="${E("Checked: " + t.symptom)}"><div class="ag-row-main"><div class="ag-row-t">${E(t.symptom)}</div><div class="ag-sub">${E(t.fix)}</div></div></label>`).join("")}</div>
       <p class="ag-note">CLI equivalent: ${code(`commons connect ${cx.platform} --name ${cx.name} --new-key`)} · JSON: ${code(`GET /api/connect?platform=${cx.platform}`)}</p>`)}
+    </details>
   </div>`;
 };
 
@@ -802,6 +839,25 @@ window.AG = {
     const r = await act("agent/update", { agent }, `Update queued for ${agent}: it runs within 10 minutes`, { rerender: !inDrawer });
     idle(btn);
     if (r && inDrawer) { openAgent(agent); render(); }
+  },
+  async join(btn) {
+    busy(btn, "Making a link…");
+    const r = await act("connect/join", { url: (window.cx && cx.url) || "" }, "", { rerender: false });
+    idle(btn);
+    if (r && r.code) { JN.j = r; JN.st = null; render(); }
+  },
+  async joinClose(btn) {
+    if (!JN.j) return;
+    busy(btn, "Closing…");
+    const r = await act("connect/join_close", { code: JN.j.code }, "Link closed: nothing more can join with it", { rerender: false });
+    idle(btn);
+    if (r) { JN.j = null; JN.st = null; render(); }
+  },
+  async wakeable(name, btn) {
+    busy(btn, "Making it…");
+    const r = await act("connect/wake", { name, url: (window.cx && cx.url) || "" }, "", { rerender: false });
+    idle(btn);
+    if (r && r.bot) { S.wakefix = { name, bot: r.bot }; openAgent(name); }
   },
   async display(name, btn) {
     const v = ($("#ag-disp") || {}).value || "";

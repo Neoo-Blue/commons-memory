@@ -45,7 +45,7 @@ from .store import CommonsError, Store
 MSG_TYPES = ("message", "task", "question", "review", "fyi", "handoff", "release")
 EVENTS = ("message", "task", "inbox", "handoff", "review", "escalation", "schedule", "test")
 CHANNEL_KINDS = ("webhook", "ntfy", "pushover", "slack", "discord", "telegram", "email", "command")
-ONLINE_S, IDLE_S = 90, 900
+ONLINE_S, IDLE_S, AWAY_S = 90, 900, 7 * 86400
 BACKOFF = [2, 8, 30, 120, 600, 1800]
 # events that target one agent and carry mailbox work (v0.9.3 instant wake adds assignment, lease, debate and mentions)
 FETCH_EVENTS = ("message", "task", "review", "handoff", "task_assigned", "lease_expired", "debate_turn", "board_mention",
@@ -483,17 +483,20 @@ def presence(s: Store, agent_id: str) -> dict:
         raise CommonsError("unknown agent")
     r = dict(r[0])
     live = HUB.live(agent_id) + len(MCP_SESSIONS.get(agent_id, []))
-    age = now() - (r.get("last_heartbeat") or 0)
+    age = now() - (r.get("last_heartbeat") or 0)  # heartbeats and every call made with the agent's own key (see touch)
+    chans = [c["kind"] for c in s.q("SELECT kind FROM wake_channels WHERE agent_id=? AND enabled=1 AND COALESCE(failures,0)<5",
+                                    (agent_id,))]
+    wakeable = bool(chans) or live > 0 or bool(HUB.streams(agent_id))
     if r.get("sleeping") and not live:  # an agent that said "going to sleep" is asleep until it acts again
         state = "sleeping"
     elif live or age < ONLINE_S:
         state = "online"
-    elif age < IDLE_S:
+    elif age < IDLE_S or wakeable:  # quiet, or quiet but Commons can wake it the moment work arrives
         state = "idle"
+    elif age < AWAY_S:  # checks in on its own and Commons can't wake it: work waits for its next check-in
+        state = "away"
     else:
         state = "offline"
-    chans = [c["kind"] for c in s.q("SELECT kind FROM wake_channels WHERE agent_id=? AND enabled=1", (agent_id,))]
-    wakeable = bool(chans) or live > 0
     seen = bool(r.get("agent_seen"))
     streams = HUB.streams(agent_id)
     if streams:
@@ -502,8 +505,8 @@ def presence(s: Store, agent_id: str) -> dict:
         mode = "long-poll"
     elif chans:
         mode = "push"  # webhook / ntfy / command channel
-    elif age < IDLE_S:
-        mode = "polling"  # seen recently but nothing to push to: finds work only when it next checks
+    elif age < AWAY_S:
+        mode = "polling"  # seen this week but nothing to push to: finds work only when it next checks
     else:
         mode = "offline"
     return {"wake_mode": mode, "streams": streams, "agent": r["name"], "id": agent_id, "state": state, "status": r.get("status_text") or "",
@@ -512,10 +515,17 @@ def presence(s: Store, agent_id: str) -> dict:
             "seen": seen, "last_seen": r.get("agent_seen") or None}
 
 
+def touch(s: Store, agent_id: str) -> None:
+    """A call made with the agent's own key is a sign of life: refresh its heartbeat, nothing else (its client, status
+    and sleep flag stay as it set them). agents.last_seen can't serve: it moves when others message the agent too."""
+    s.x("INSERT INTO agent_presence(agent_id,last_heartbeat,updated_at) VALUES(?,?,?) ON CONFLICT(agent_id) DO UPDATE SET "
+        "last_heartbeat=excluded.last_heartbeat", (agent_id, now(), now()))
+
+
 def board(s: Store) -> list[dict]:
     rows = s.q("SELECT id FROM agents WHERE name NOT IN ('cli') ORDER BY name")
     out = [presence(s, r["id"]) | {"unread": Messaging(s).unread(r["id"])} for r in rows]
-    order = {"online": 0, "idle": 1, "sleeping": 2, "offline": 3}
+    order = {"online": 0, "idle": 1, "sleeping": 2, "away": 3, "offline": 4}
     return sorted(out, key=lambda p: (order[p["state"]], p["agent"]))
 
 

@@ -117,6 +117,15 @@ def test_presence_states(store):
     heartbeat(store, a, sleeping=True)
     assert presence(store, a)["state"] == "sleeping"
     assert any(x["agent"] == "p1" for x in board(store))
+    from commons_memory.messaging import Channels, touch
+    store.x("UPDATE agent_presence SET sleeping=0, last_heartbeat=? WHERE agent_id=?", (time.time() - 2 * 86400, a))
+    assert presence(store, a)["state"] == "away"                      # checks in on its own, can't be woken
+    Channels(store).add("p1", "ntfy", {"topic": "p1-wake"})
+    assert presence(store, a)["state"] == "idle"                      # Commons can wake it: available
+    b = store.ensure_agent("p2")
+    store.x("UPDATE agent_presence SET last_heartbeat=? WHERE agent_id=?", (time.time() - 30 * 86400, b))
+    touch(store, b)                                                   # a call with its own key
+    assert presence(store, b)["state"] == "online"
 
 
 def _client(store):

@@ -124,6 +124,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
             if not a:
                 raise CommonsError("invalid api_key")
             store.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), a["id"]))
+            from .messaging import touch
+            touch(store, a["id"])
             from .auth import PRINCIPAL
             PRINCIPAL.set(a["id"])  # ACLs apply to this call
             return a["id"], True
@@ -133,6 +135,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
             # header-only clients never pass api_key: keep presence fresh so dashboards and the escalation
             # ladder (which only reassigns to recently-seen agents) don't treat them as offline
             store.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), p))
+            from .messaging import touch
+            touch(store, p)
             return p, True
         if require_keys and write:
             raise CommonsError("this server requires an api_key for writes (register_agent first)")

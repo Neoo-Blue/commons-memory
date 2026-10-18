@@ -343,6 +343,8 @@ class Router:
             pr = presence(self.s, a["id"])
             if not pr["ready"] and pr["state"] == "offline":
                 ready_pen, rnote = 0.6, "offline, not wakeable"
+            elif not pr["ready"] and pr["state"] == "away":
+                ready_pen, rnote = 0.4, "away: picks it up at its next check-in"
             elif pr["state"] in ("online", "idle"):
                 ready_pen, rnote = 0.0, pr["state"]
             else:

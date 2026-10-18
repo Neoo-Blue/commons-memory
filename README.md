@@ -60,7 +60,8 @@ Docker: see [docs/docker.md](docs/docker.md). Prefer to read it first? `curl -fs
    - features, all on by default.
 
    Keys are stored encrypted in the vault and never shown again.
-3. **Connect** each AI with one command (`commons setup ...`; the page builds it with a checkbox per step).
+3. **Add an AI** on the Connect page: one terminal line connects every AI on a machine, one sentence connects a bot, one
+   address connects a chat app. No key is copied anywhere, and every AI it connects can be woken the moment work arrives.
 4. Each agent hands over its memories, keys and scheduled tasks; Setup shows who still owes what.
 
 ## 2-minute quickstart
@@ -151,7 +152,21 @@ flowchart LR
 ```
 
 ## Connect any AI
-**One command per AI.** On the machine where the AI runs:
+**Add an AI** on the dashboard's Connect page. It makes a join link (15 minutes, up to 5 AIs) and gives you three ways
+to use it:
+
+- **On a computer:** `curl -fsSL http://HUB:8770/join/<code> | sh`. It installs the commons client, finds every AI CLI
+  on that machine (Claude Code, Codex, Gemini CLI, Cursor, OpenCode and more), gives each its own key, and runs the full
+  setup below for each one. Running it again skips what is already connected.
+- **A bot or another AI:** send it "Join my Commons: read http://HUB:8770/join/<code>/agent and follow it." It joins on
+  its own and names the command that wakes it; Commons runs that through a service that keeps a connection open to the
+  hub, so it is woken behind NAT or a firewall with no port opened.
+- **A chat app** (claude.ai, ChatGPT, Grok): add a custom connector with `http://HUB:8770/mcp` and sign in.
+
+Every AI Commons connects can be woken. An agent that can't (it only checks in on its own) shows "Commons can't wake
+it" in its drawer, with one sentence to send it that installs its wake service and keeps its key.
+
+Prefer to do it by hand? On the machine where the AI runs:
 
 ```bash
 pip install -U commons-memory && commons setup --client claude-code --agent my-agent --url http://HUB:8770
@@ -181,7 +196,7 @@ Captured from a demo hub (`python scripts/demo_seed.py demo.db`): made-up agents
 | ![Overview](docs/screenshots/overview.png)<br>**Overview**: what needs you first (one-tap answers, approvals), then spend, running jobs, the team and activity | ![Jobs cockpit](docs/screenshots/workflow.png)<br>**Jobs**: every job with live filters; a job opens in a drawer with its stage spine, steps, routing and owner actions |
 | ![Agents](docs/screenshots/agents.png)<br>**Agents**: the fleet, what each is doing, its models, quota and tool version; click for the agent drawer | ![On a phone](docs/screenshots/phone.png)<br>**On a phone**: every page works at 390 px, with a bottom bar and sub-tabs |
 | ![Board](docs/screenshots/board.png)<br>**Board** (light theme): what you asked, targets and deliveries, with one-click Done and Undo | ![Usage](docs/screenshots/usage.png)<br>**Usage**: spend and tokens per day by agent, 7 to 30 days |
-| ![Memory](docs/screenshots/memory.png)<br>**Memory**: search first, filter chips, drawers, bulk actions | ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an agent**: pick the AI, create its key, one command, watch it connect |
+| ![Memory](docs/screenshots/memory.png)<br>**Memory**: search first, filter chips, drawers, bulk actions | ![Connect an agent](docs/screenshots/connect.png)<br>**Connect an AI**: one join link; a terminal line, a sentence for a bot, or a connector address, and each AI appears as it joins |
 | ![Knowledge base](docs/screenshots/knowledge.png)<br>**Knowledge**: an auto-built, cited knowledge base per project | ![Graph](docs/screenshots/graph.png)<br>**Graph**: memory, code, sessions and agents in one graph |
 | ![Mission control](docs/screenshots/mission-control.png)<br>**Mission control**: fair-share scheduling and agent load against capacity | ![A project](docs/screenshots/projects.png)<br>**A project**: everything about one product in one place: active work, timeline, diffs, memory and who did what |
 | ![Infrastructure](docs/screenshots/infrastructure.png)<br>**Infrastructure**: where everything runs: capacity and every guest's allocation, then a zoomable map, the graph and a drawer per thing | |

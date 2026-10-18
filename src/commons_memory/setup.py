@@ -65,9 +65,10 @@ def _key(agent: str) -> tuple[str, Path]:
     k = (sys.stdin.read() if not sys.stdin.isatty() else getpass.getpass(f"Commons key for {agent} (input hidden): ")).strip()
     if not k:
         raise SystemExit("no key given (paste the key from the dashboard's Connect page)")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(k + "\n")
-    p.chmod(0o600)
+    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # private from the first byte
+    with os.fdopen(fd, "w") as fh:
+        fh.write(k + "\n")
     return k, p
 
 
@@ -227,6 +228,18 @@ def ensure_mcp(client: str, url: str) -> str:
             "Commons hooks, and the hub answers over HTTP with the same key.")
 
 
+def registered(client: str, url: str) -> bool:
+    """Is this client's MCP config already pointing at this hub?"""
+    base = url.rstrip("/").removesuffix("/mcp")
+    cfg = {"claude-code": Path.home() / ".claude.json", "codex": Path.home() / ".codex" / "config.toml",
+           "goose": Path.home() / ".config" / "goose" / "config.yaml",
+           **{k: Path(os.path.expanduser(v[0])) for k, v in JSON_MCP.items()}}.get(client)
+    try:
+        return bool(cfg and cfg.exists() and base in cfg.read_text())
+    except OSError:
+        return False
+
+
 def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
     """Check every part of this AI's Commons connection; --repair re-runs the setup steps that are broken."""
     import platform
@@ -260,10 +273,7 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
             add("key accepted", me.get("status") == "commons-ok", f"signed in as {me.get('agent')}", "key")
         except Exception as e:  # noqa: BLE001
             add("key accepted", False, str(e)[:120], "key")
-    cfg = {"claude-code": Path.home() / ".claude.json", "codex": Path.home() / ".codex" / "config.toml",
-           "goose": Path.home() / ".config" / "goose" / "config.yaml",
-           **{k: Path(os.path.expanduser(v[0])) for k, v in JSON_MCP.items()}}[client]
-    add("MCP server registered", cfg.exists() and base in cfg.read_text(), str(cfg), "mcp")
+    add("MCP server registered", registered(client, base), client, "mcp")
     from .server import INSTRUCTIONS
     files = [Path(os.path.expanduser(p)) for p in I.TARGETS[client]]
     current = all(f.exists() and INSTRUCTIONS in f.read_text() for f in files)

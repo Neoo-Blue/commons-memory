@@ -28,6 +28,29 @@ def connect_status(self, q):
     return status(self.s, q.get("name", ""))
 
 
+def join_lines(hub: str, code: str) -> dict:
+    """The three ways to use a join code: a terminal line, a sentence for a bot, the connector URL for a chat app."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    hub = hub.rstrip("/").removesuffix("/mcp")
+    u = urlsplit(hub)
+    try:
+        ip = ipaddress.ip_address(u.hostname or "")
+        trusted = ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")  # this machine, or the tailnet
+    except ValueError:
+        trusted = (u.hostname or "").endswith((".ts.net", "localhost"))
+    return {"terminal": f"curl -fsSL {hub}/join/{code} | sh",
+            "bot": f"Join my Commons: read {hub}/join/{code}/agent and follow it.",
+            "connector": f"{hub}/mcp",
+            "plain_http": u.scheme == "http" and not trusted}
+
+
+def connect_join(self, q):
+    """Who has joined with a code, and whether Commons can wake each one."""
+    from .join import status
+    return status(self.s, q.get("code", ""))
+
+
 def post(self, path, body):
     if not path.startswith("/api/connect/"):
         return NotImplemented
@@ -42,13 +65,28 @@ def post(self, path, body):
         k = C.create_key(self.s, body.get("name", ""), body.get("role") or "write", body.get("project") or "",
                          body.get("platform") or "")
         return k | {"bundle": connect(self, body | {"name": k["name"], "url": url}, k["api_key"])}
+    if path == "/api/connect/join":  # one link for the whole machine: no key is shown or copied
+        from .join import create
+        j = create(self.s, body.get("role") or "write", body.get("project") or "", hub=url)
+        return j | join_lines(url, j["code"]) | {"hub": url.rstrip("/").removesuffix("/mcp")}
+    if path == "/api/connect/join_close":
+        from .join import close
+        return close(self.s, body.get("code", ""))
+    if path == "/api/connect/wake":  # an agent Commons can't wake: the sentence that makes it wakeable, keeping its key
+        from .join import create
+        name = body.get("name", "")
+        if not self.s.get_agent(name):
+            raise CommonsError(f"unknown agent {name!r}")
+        j = create(self.s, body.get("role") or "write", ttl=7 * 86400, uses=0, hub=url)  # it keeps its key: nothing to claim
+        hub = url.rstrip("/").removesuffix("/mcp")
+        return j | {"bot": f"Make yourself wakeable by Commons: read {hub}/join/{j['code']}/agent?as={name} and follow it."}
     if path == "/api/connect/render":  # re-render with a key the browser already holds (admin only, never stored)
         return connect(self, body | {"url": url}, body.get("key") or None)
     raise CommonsError("unknown connect action")
 
 
 def install(API) -> None:
-    for f in (connect, connect_status):
+    for f in (connect, connect_status, connect_join):
         setattr(API, f.__name__, f)
     orig = API.post
 

@@ -2,6 +2,26 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.36.0: add an AI in one step, and Commons can always wake it
+- **Why.** Connecting an AI meant picking from 20 platforms, naming it, creating a key, then copying three or four
+  technical blocks, with the commons client already installed. And the Grok bot showed "offline" though it runs all the
+  time: it only checks in when Muse pings it, so Commons had no way to reach it.
+- **Add an AI.** The Connect page makes one join link (15 minutes, up to 5 AIs) with three ways to use it: a terminal
+  line that installs the client and connects every AI CLI on that machine (each with its own key and the full setup:
+  MCP, instructions, hooks, wake service, sync, verify), a sentence for a bot that reads `/join/<code>/agent` and joins
+  on its own, and the connector address for a chat app. The page lists each AI as it joins and whether Commons can wake
+  it. No key is shown or copied. Re-running skips AIs already connected. The old step-by-step setup is under "Manual
+  setup".
+- **Always wakeable.** Joining always installs a wake service: the agent's machine keeps a connection open to the hub
+  and runs the agent's wake command when work or a message arrives, so it works behind NAT, a firewall or the tailnet.
+  A bot without a wake command is refused. An agent Commons can't wake shows it in its drawer, with one sentence that
+  installs its wake service and keeps the key it has (`commons join ... --agent NAME`).
+- **Presence that makes sense.** Every call an agent makes with its own key counts as a sign of life. An agent Commons
+  can wake reads "idle" when quiet; one that checked in this week but can't be woken reads "away" (work waits for its
+  next check-in); "offline" means a week of silence.
+- **For agents:** `commons join HUB CODE` connects a machine; a bot adds `--name` and `--wake-cmd`; an agent that already
+  has a key adds `--agent NAME` with COMMONS_API_KEY to install only its wake service.
+
 ## v0.35.0: every key says what it is for, what it can do, and where it lives
 - **Why.** The vault held names, values and allowed hosts, but not why a key exists, how much it can do at the provider,
   or which servers and apps hold a copy. Without that, nobody can rotate a key, narrow it, or judge a leak.

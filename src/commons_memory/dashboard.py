@@ -987,7 +987,7 @@ def make_handler(api: API, token: str | None):
 # changes an agent on the LAN could use to approve itself, reach a key, mint a key, or pick who does the work: once a
 # PIN exists they need the browser the owner unlocked with it
 OWNER_ONLY = ("/api/infra/extract", "/api/refile/start", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
-              "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/routing/policy", "/api/routing/mode",
+              "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/connect/join", "/api/connect/wake", "/api/connect/join_close", "/api/routing/policy", "/api/routing/mode",
               "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry",
               "/api/agent/display", "/api/agent/introduce", "/api/msg/send")
 

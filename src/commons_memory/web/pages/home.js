@@ -275,7 +275,7 @@ async function agentBody(name) {
   if (!d || d.error) throw new Error((d && d.error) || "Unknown agent");
   const a = S.agents.find(x => x.name === name), t = S.team.find(x => x.agent === name), pr = d.presence || {};
   const busy = !!(a && a.claims && a.claims.length) || (t && t.state === "working");
-  const p = { dot: busy ? "busy" : { online: "live", idle: "idle", sleeping: "idle" }[pr.state] || "offline", seen: pr.last_seen ? ago(pr.last_seen) : a && a.last_seen ? ago(a.last_seen) : "never" };
+  const p = { dot: busy ? "busy" : { online: "live", idle: "idle", sleeping: "idle", away: "idle" }[pr.state] || "offline", seen: pr.last_seen ? ago(pr.last_seen) : a && a.last_seen ? ago(a.last_seen) : "never" };
   const st = { online: "Online", idle: "Idle", offline: "Offline", sleeping: "Asleep" }[pr.state] || cap(pr.state || "unknown");
   const head = `<div class="hm-dhero">${av(name, p.dot, "hm-av-lg")}<div><div class="hm-dhero-t">${E(st)}${t && STATE[t.state] && STATE[t.state][1] ? " " + badge(STATE[t.state][0], STATE[t.state][1]) : ""}</div><div class="hm-mut">${E(WAKE[pr.wake_mode] || "")}</div></div></div>`;
   const claims = arr(a && a.claims).map(c => `<li><span class="hm-li-t">${E(c.title)}</span><span class="hm-mut">${E(c.type)}${c.lease_left_s != null ? ` · lease ${E(c.lease_left_s)}s left` : ""}</span></li>`).join("");

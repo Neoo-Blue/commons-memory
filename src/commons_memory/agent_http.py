@@ -15,7 +15,7 @@ import queue
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -255,7 +255,42 @@ def build_app(store: Store) -> Starlette:
         out = [await asyncio.to_thread(ingest_snapshot, store, x, aid) for x in snaps if isinstance(x, dict) and x.get("entities")]
         return JSONResponse({"ok": True, "merged": out})
 
+    def _hub(req: Request) -> str:
+        from .connect import detect_url
+        return detect_url(req.headers.get("host", "")).rstrip("/").removesuffix("/mcp")
+
+    async def join_script(req: Request):
+        from .join import script
+        try:
+            txt = await asyncio.to_thread(script, store, req.path_params["code"], _hub(req))
+        except CommonsError as e:
+            quoted = str(e).replace("'", "'\\''")
+            return PlainTextResponse(f"echo 'commons: {quoted}' >&2; exit 1\n", status_code=404)
+        return PlainTextResponse(txt, media_type="text/x-shellscript", headers={"Cache-Control": "no-store"})
+
+    async def join_agent(req: Request):
+        from .join import agent_page
+        try:
+            txt = await asyncio.to_thread(agent_page, store, req.path_params["code"], _hub(req), req.query_params.get("as", ""))
+        except CommonsError as e:
+            return PlainTextResponse(str(e) + "\n", status_code=404)
+        return PlainTextResponse(txt, media_type="text/markdown", headers={"Cache-Control": "no-store"})
+
+    async def join_claim(req: Request):
+        from .join import claim
+        b = await body(req)
+        if not isinstance(b, dict):
+            return JSONResponse({"error": "send a JSON object: {name, client, host}"}, status_code=400)
+        try:
+            r = await asyncio.to_thread(claim, store, req.path_params["code"], str(b.get("name") or ""),
+                                        str(b.get("client") or ""), str(b.get("host") or ""))
+        except CommonsError as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
+        return JSONResponse(r, headers={"Cache-Control": "no-store"})
+
     routes = [Route("/hooks/{token}", inhook, methods=["POST"]),
+              Route("/join/{code}", join_script), Route("/join/{code}/agent", join_agent),
+              Route("/join/{code}/claim", join_claim, methods=["POST"]),
               Route("/agent/hook", hook, methods=["POST"]), Route("/agent/infra", infra_in, methods=["POST"]),
               Route("/agent/wake/ack", wack, methods=["POST"]),
               Route("/agent/wake/replay", wreplay)]
@@ -270,7 +305,7 @@ def build_app(store: Store) -> Starlette:
 def mount(inner, agent_app):
     async def app(scope, receive, send):
         p = scope.get("path", "") if scope["type"] in ("http", "websocket") else ""
-        if p.startswith(("/bus/", "/agent/", "/hooks/")):
+        if p.startswith(("/bus/", "/agent/", "/hooks/", "/join/")):
             return await agent_app(scope, receive, send)
         return await inner(scope, receive, send)
     return app

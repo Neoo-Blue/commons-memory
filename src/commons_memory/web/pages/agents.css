@@ -523,3 +523,15 @@ a > .ag-i-s:first-child { margin-right: 4px; }
   .ag-intro-r { grid-template-columns: 1fr; }
   .ag-idn input, .ag-intro-r select, .ag-intro-r input, .ag-idn button, .ag-intro-r button { min-height: 44px; }
 }
+
+.ag-join-start { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 20px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.ag-join-start p { margin: 0; color: var(--fg-muted); }
+.ag-join { display: grid; gap: 16px; padding: 20px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.ag-join-way h4 { margin: 0 0 4px; font-size: var(--text-sm); }
+.ag-join-way .ag-sub { margin: 0 0 8px; }
+.ag-join-wait { display: flex; align-items: center; gap: 8px; color: var(--fg-muted); font-size: var(--text-sm); }
+.ag-manual { margin-top: 8px; }
+.ag-wakewarn { display: flex; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border-radius: var(--radius-md, 8px); background: var(--warn-subtle); border: 1px solid var(--warn-border); }
+.ag-wakewarn > .ag-i { color: var(--warn); flex: none; margin-top: 2px; }
+.ag-wakewarn p { margin: 4px 0 8px; }
+button.big { min-height: 44px; padding: 0 18px; font-size: var(--text-base, 15px); }
