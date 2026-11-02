@@ -141,14 +141,15 @@ def _hook_worker(args):
     os.environ["COMMONS_HOME"] = home
     sent = []
     capture._send = lambda u, b, t: sent.append(b["payload"]["n"])
+    base = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # imports alone differ by platform and extras
     capture._drain("http://hub", capture._queue_path(), 5)
     with open(out, "a") as f:
         f.write("".join(f"{n}\n" for n in sent))
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - base
 
 
 def test_concurrent_hooks_on_a_big_queue_stay_small_and_never_duplicate(q, tmp_path):
-    """The crash: 11 hooks, a big queue, each loading all of it. 40 MB here would be 80+ MB per worker in the old code."""
+    """The crash: 11 hooks, a big queue, each loading all of it. 40 MB here grows each worker by 80+ MB in the old code."""
     n = 2000
     with open(q, "w") as f:
         for i in range(n):
@@ -164,4 +165,4 @@ def test_concurrent_hooks_on_a_big_queue_stay_small_and_never_duplicate(q, tmp_p
     ids = [int(x) for x in out.read_text().split()]
     assert sorted(ids) == list(range(n)), "every event sent exactly once"
     unit = 1 if os.uname().sysname == "Darwin" else 1024
-    assert max(rss) * unit < 60 * 2 ** 20 and size > 35 * 2 ** 20
+    assert max(rss) * unit < 16 * 2 ** 20 and size > 35 * 2 ** 20
