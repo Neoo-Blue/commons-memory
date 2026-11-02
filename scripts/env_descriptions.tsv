@@ -99,6 +99,7 @@ COMMONS_CAPTURE	Global switch for hook auto-capture (0 disables everywhere)
 COMMONS_HOOK_CONTEXT_TOKENS	Token budget of the SessionStart context pack injected by hooks
 COMMONS_HOOK_KEEP_WORKING	Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows
 COMMONS_HOOK_KEEP_WORKING_MAX	Max consecutive keep-working rounds per session before a Stop is allowed (default 5)
+COMMONS_HOOK_QUEUE_MAX_MB	Most megabytes the offline hook queue may hold before new events are dropped (default 50)
 COMMONS_HOOK_RECALL_SIM	Min similarity for prompt-time recall snippets injected by hooks
 COMMONS_HOOK_TIMEOUT	Seconds a hook waits for the server before queueing offline
 COMMONS_RERANK	Second-stage rerank: off, cross-encoder (local fastembed) or llm (role reranker)

@@ -60,6 +60,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING_MAX` | `5` | Max consecutive keep-working rounds per session before a Stop is allowed (default 5) | capture.py |
+| `COMMONS_HOOK_QUEUE_MAX_MB` | `50` | Most megabytes the offline hook queue may hold before new events are dropped (default 50) | capture.py |
 | `COMMONS_HOOK_RECALL_SIM` | `0.6` | Min similarity for prompt-time recall snippets injected by hooks | capture.py |
 | `COMMONS_HOOK_TIMEOUT` | `2` | Seconds a hook waits for the server before queueing offline | capture.py |
 | `COMMONS_HOST` | `127.0.0.1` | Default bind address for `commons serve` | cli.py |

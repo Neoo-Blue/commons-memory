@@ -55,8 +55,9 @@ inject context, so it only records the prompt.
 - Without `COMMONS_URL`, hooks write straight to the local database (`COMMONS_DB`).
 
 Hooks **never block the agent**. They time out after `COMMONS_HOOK_TIMEOUT` (default 2 s), always exit 0, and
-when the server is unreachable they append the event to `~/.commons/hook-queue.jsonl`. The queue drains on the
-next successful call.
+when the server can't be reached they append the event to `~/.commons/hook-queue.jsonl`. Each successful hook then sends
+up to 25 queued events, reading the file a line at a time. One hook holds a batch at a time, corrupt lines and events
+the hub refuses are dropped, and the queue stops growing at `COMMONS_HOOK_QUEUE_MAX_MB` (default 50). A slow reply is not an outage: the server already has that event, so it is not queued.
 
 ## Code changes
 

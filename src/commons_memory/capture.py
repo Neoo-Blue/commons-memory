@@ -482,6 +482,7 @@ def transcript_messages(path: str | None) -> list[tuple[str, str]]:
 
 def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> str:
     """Entry point for ``commons hook``: never raises, never blocks longer than COMMONS_HOOK_TIMEOUT."""
+    started = time.monotonic()
     try:
         payload = json.loads(stdin_text or "{}")
     except ValueError:
@@ -517,7 +518,7 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     url = os.environ.get("COMMONS_URL", "").rstrip("/")
     timeout = float(os.environ.get("COMMONS_HOOK_TIMEOUT", "2"))
     if url:
-        res = _post(url, harness, event, payload, timeout)
+        res = _post(url, harness, event, payload, timeout, started)
     else:
         res = _local(harness, event, payload, store_factory)
     if event == "session_start" and url:
@@ -591,6 +592,11 @@ def _key() -> str:
     return p.read_text().strip() if agent and p.exists() else ""
 
 
+QUEUE_DRAIN_EVENTS = 25  # most events one hook sends for the queue, so a backlog never holds up the agent
+QUEUE_HOOK_BUDGET_S = 4  # harnesses kill a hook at 5 s, so draining stops before that
+QUEUE_CLAIM_STALE_S = 60  # a claim this old belongs to a hook that died
+
+
 def _queue_path():
     from pathlib import Path
     d = Path(os.environ.get("COMMONS_HOME", Path.home() / ".commons"))
@@ -598,33 +604,121 @@ def _queue_path():
     return d / "hook-queue.jsonl"
 
 
-def _post(url, harness, event, payload, timeout):
+def _send(url, body, timeout):
     import urllib.request
+    req = urllib.request.Request(url + "/agent/hook", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {_key()}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def _queue_cap() -> int:
+    return int(float(os.environ.get("COMMONS_HOOK_QUEUE_MAX_MB", "50")) * 2 ** 20)
+
+
+def _enqueue(q, data: bytes) -> None:
+    """One O_APPEND write per event, so hooks running at once cannot interleave lines. A full queue drops the new
+    event: losing a capture is better than a file that grows until reading it takes the machine down."""
+    try:
+        if q.stat().st_size + len(data) > _queue_cap():
+            return
+    except OSError:
+        pass
+    fd = os.open(q, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def _claim_queue(q):
+    """Take a batch by renaming it, so exactly one hook holds it; returns (claimed file, offset to resume from). Order:
+    a batch parked by an earlier drain, one left by a hook killed mid-drain (once it is old enough), then the live
+    queue. Batches stay in their file with the offset in the name, so nothing is ever copied or rewritten."""
+    def take(path, offset):
+        own = q.with_name(f"{q.name}.{offset}.{os.getpid()}.{time.time_ns()}.draining")
+        try:
+            os.utime(path)  # before the rename: a rename keeps the old time and the claim would look abandoned
+            os.replace(path, own)
+        except OSError:
+            return None  # another hook took it first
+        return own, offset
+    for held in q.parent.glob(q.name + ".*.backlog"):
+        got = take(held, int(held.name[len(q.name) + 1:].split(".")[0]))
+        if got:
+            return got
+    for held in q.parent.glob(q.name + ".*.draining"):
+        try:
+            stale = time.time() - held.stat().st_mtime > QUEUE_CLAIM_STALE_S
+        except OSError:
+            continue
+        got = take(held, int(held.name[len(q.name) + 1:].split(".")[0])) if stale else None
+        if got:
+            return got
+    try:
+        return take(q, 0) if q.stat().st_size else None
+    except OSError:
+        return None
+
+
+def _drain(url, q, timeout):
+    """Send a bounded slice of the offline queue, reading it line by line: memory stays flat at any queue size, and the
+    hook stays inside its time limit. Corrupt lines and events the hub refuses are dropped, because keeping them would
+    stop every later drain at the same place. What was not sent stays parked for the next hook."""
+    import urllib.error
+    claimed = _claim_queue(q)
+    if claimed is None:
+        return
+    claim, offset = claimed
+    deadline = time.monotonic() + timeout
+    with open(claim, "rb") as f:
+        f.seek(offset)
+        sent = 0
+        while sent < QUEUE_DRAIN_EVENTS and time.monotonic() < deadline:
+            start = f.tell()
+            ln = f.readline()
+            if not ln:
+                break
+            try:
+                body = json.loads(ln)
+            except ValueError:
+                continue
+            if not isinstance(body, dict):
+                continue
+            try:
+                _send(url, body, max(0.1, deadline - time.monotonic()))
+                sent += 1
+            except TimeoutError:  # the hub has it and is slow (a stop with a diff takes 10 s or more): do not resend
+                sent += 1
+            except urllib.error.HTTPError as e:
+                if e.code in (400, 404, 413, 422):
+                    continue
+                f.seek(start)
+                break
+            except Exception:  # noqa: BLE001 - offline again: the rest waits for the next hook
+                f.seek(start)
+                break
+        pos = f.tell()
+    if pos >= os.path.getsize(claim):
+        os.unlink(claim)
+    else:
+        os.replace(claim, q.with_name(f"{q.name}.{pos}.{os.getpid()}.{time.time_ns()}.backlog"))
+
+
+def _post(url, harness, event, payload, timeout, started=None):
     q = _queue_path()
     body = {"harness": harness, "event": event, "payload": payload, "queued_at": time.time()}
-
-    def send(b, t):
-        req = urllib.request.Request(url + "/agent/hook", data=json.dumps(b).encode(), method="POST",
-                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {_key()}"})
-        with urllib.request.urlopen(req, timeout=t) as r:
-            return json.loads(r.read() or b"{}")
     try:
-        res = send(body, timeout)
+        res = _send(url, body, timeout)
+    except TimeoutError:  # urllib raises this bare only once the request is sent: the hub has it and is just slow
+        return None
     except Exception:  # noqa: BLE001 - offline: queue for later, never block the agent
         if event != "session_start":
-            with open(q, "a") as f:
-                f.write(json.dumps(body) + "\n")
+            _enqueue(q, (json.dumps(body) + "\n").encode())
         return None
-    if q.exists() and q.stat().st_size:  # opportunistic drain of the offline queue
-        pending = q.read_text().splitlines()
-        q.write_text("")
-        for i, ln in enumerate(pending):
-            try:
-                send(json.loads(ln), timeout)
-            except Exception:  # noqa: BLE001
-                with open(q, "a") as f:
-                    f.write("\n".join(pending[i:]) + "\n")
-                break
+    spare = QUEUE_HOOK_BUDGET_S - (time.monotonic() - (started or time.monotonic()))
+    if spare > 0:  # only what the hook has left: a harness kill would lose this hook's own output
+        _drain(url, q, min(timeout, spare))
     return res
 
 
