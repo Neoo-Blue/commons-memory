@@ -749,7 +749,7 @@ def make_handler(api: API, token: str | None):
         def _authed(self, q) -> bool:
             """Shared token (admin), or a per-user dashboard token (`commons dashboard-user add NAME --role
             viewer|admin`). Viewers can read but not POST."""
-            users = dashboard_users(api.s)
+            users = token_users(api.s)
             if not token and not users:
                 if not _host_allowed(self.headers.get("Host", ""), api.s):
                     self.deny = (f"unrecognised Host {self.headers.get('Host')!r}: open the dashboard by IP or add the "
@@ -780,7 +780,7 @@ def make_handler(api: API, token: str | None):
             from .dashboard_v81 import CTX
             CTX.req = {"host": self.headers.get("Host", ""), "bind": str(self.server.server_address[0]),
                        "client": str(self.client_address[0]), "role": self.role,
-                       "has_auth": bool(token or dashboard_users(api.s))}
+                       "has_auth": bool(token or token_users(api.s))}
 
         def _events(self):
             """Server-Sent Events: pushes a 'change' event whenever activity happens (jobs, memories, usage, audit,
@@ -1023,6 +1023,16 @@ def dashboard_users(s: Store) -> list[dict]:
     return [json.loads(r["value"]) for r in s.q("SELECT value FROM meta WHERE key LIKE 'dash_user:%'")]
 
 
+def token_users(s: Store) -> list[dict]:
+    """The per-user tokens the dashboard asks for. Tokens are optional: COMMONS_DASHBOARD_TOKENS=0 turns them off on
+    this hub (they stay stored, so turning them back on needs no new ones). The dashboard then works like a tokenless
+    one: private, LAN and tailnet addresses only, known Host names only, and the owner password on every page that
+    reaches keys, approvals or settings."""
+    if os.environ.get("COMMONS_DASHBOARD_TOKENS", "1").strip().lower() in ("0", "off", "false", "no"):
+        return []
+    return dashboard_users(s)
+
+
 def add_dashboard_user(s: Store, name: str, role: str = "viewer") -> dict:
     import secrets as _sec
     if role not in ("viewer", "admin"):
@@ -1092,10 +1102,10 @@ def _private_host(host: str) -> bool:
 def make_server(store: Store, host: str = "127.0.0.1", port: int = 8766, token: str | None = None,
                 tls_cert: str | None = None, tls_key: str | None = None) -> ThreadingHTTPServer:
     token = token or os.environ.get("COMMONS_DASHBOARD_TOKEN") or None
-    if not token and not dashboard_users(store) and not _private_host(host):
+    if not token and not token_users(store) and not _private_host(host):
         raise CommonsError("refusing to bind dashboard to a public/wildcard host without a token "
                            "(private, LAN and tailnet addresses are allowed; set a token to expose publicly)")
-    if os.environ.get("COMMONS_DASHBOARD_REQUIRE_TOKEN") in ("1", "true", "yes") and not token and not dashboard_users(store):
+    if os.environ.get("COMMONS_DASHBOARD_REQUIRE_TOKEN") in ("1", "true", "yes") and not token and not token_users(store):
         raise CommonsError("COMMONS_DASHBOARD_REQUIRE_TOKEN is set but no dashboard token/users are configured")
     srv = ThreadingHTTPServer((host, port), make_handler(API(store), token))
     srv.daemon_threads = True

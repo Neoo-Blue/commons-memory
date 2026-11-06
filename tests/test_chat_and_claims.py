@@ -204,3 +204,55 @@ def test_a_session_claims_its_task_from_the_first_message_and_closes_it_at_the_e
     finally:
         typesafe.noul = typesafe_noul
         os.environ.pop("TYPESAFE_API_KEY", None)
+
+
+def test_dashboard_tokens_are_optional(store, monkeypatch):
+    """Tokens stay on by default once a dashboard user exists; COMMONS_DASHBOARD_TOKENS=0 turns them off on a hub
+    (the owner's NAS), leaving the private-address, Host and owner-password checks in place."""
+    import urllib.error
+    import urllib.request
+
+    from commons_memory.dashboard import add_dashboard_user, make_server
+    add_dashboard_user(store, "owner", "admin")
+
+    def status(base):
+        try:
+            with urllib.request.urlopen(base + "/", timeout=5) as r:  # the page itself
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+    for env, want in ((None, 401), ("0", 200)):
+        if env is None:
+            monkeypatch.delenv("COMMONS_DASHBOARD_TOKENS", raising=False)
+        else:
+            monkeypatch.setenv("COMMONS_DASHBOARD_TOKENS", env)
+        srv = make_server(store, "127.0.0.1", 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            assert status(f"http://127.0.0.1:{srv.server_address[1]}") == want
+        finally:
+            srv.shutdown()
+    with __import__("pytest").raises(Exception):  # tokens off never means a public, tokenless bind
+        make_server(store, "0.0.0.0", 0)
+
+
+def test_a_moved_step_is_mailed_to_its_new_agent(store):
+    o = Orchestrator(store)
+    j = o.submit("check the camera feeds", dag=[{"key": "a", "type": "research", "title": "Check feeds", "body": "x"}])
+    sid = o.status(j["job_id"])["subtasks"][0]["id"]
+    old, new = store.ensure_agent("quiet-bot"), store.ensure_agent("busy-bot")
+    store.x("UPDATE subtasks SET assigned_agent=?, escalation='notified' WHERE id=?", (old, sid))
+    store.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"woke:{sid}:0:0", old))  # mailed once, long ago
+    o.reassign_step(sid, "busy-bot")
+    mail = Messaging(store).recv(new)
+    assert mail and mail[0]["meta"].get("subtask") == sid
+    assert store.q("SELECT escalation FROM subtasks WHERE id=?", (sid,))[0]["escalation"] is None
+
+
+def test_a_recurring_task_can_be_switched_off_and_on(store):
+    o = Orchestrator(store)
+    o.schedule("weekly-readme-audit", "@weekly", "audit the README")
+    assert o.unschedule("weekly-readme-audit") == {"recurring": "weekly-readme-audit", "enabled": False}
+    assert store.q("SELECT enabled FROM recurring")[0]["enabled"] == 0
+    o.schedule("weekly-readme-audit", "@weekly", "audit the README")
+    assert store.q("SELECT enabled FROM recurring")[0]["enabled"] == 1

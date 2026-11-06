@@ -117,6 +117,18 @@ def register_v2(mcp, store, who):
         return _js(orch.cancel(job_id, reason, me(agent, api_key)))
 
     @mcp.tool()
+    def reassign_step(subtask_id: str, to: str, agent: str = "", api_key: str = "") -> str:
+        """Hand a pending or claimed step to the named agent and keep it there (answers a "Still wanted?" with a new
+        owner). The agent is mailed when the step is ready, and the escalation ladder starts over."""
+        return _js(orch.reassign_step(subtask_id, to, me(agent, api_key)))
+
+    @mcp.tool()
+    def unschedule_recurring(name: str, agent: str = "", api_key: str = "") -> str:
+        """Stop a recurring task (its runs so far stay in history; schedule_recurring with the same name turns it
+        back on, with a new schedule if you like)."""
+        return _js(orch.unschedule(name, me(agent, api_key)))
+
+    @mcp.tool()
     def kill_switch(paused: bool, reason: str = "manual kill switch", agent: str = "", api_key: str = "") -> str:
         """Pause (true) or resume (false) ALL orchestration: no new claims or submissions while paused. Any agent can
         pause; resuming takes an admin, so an agent can't undo the owner's stop."""

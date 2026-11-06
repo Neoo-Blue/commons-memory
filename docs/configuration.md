@@ -35,6 +35,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_DASHBOARD_PORT` | `8766` | Dashboard port used to build approval links when no dashboard URL is set on Setup. If Docker maps the dashboard to another host port, or it sits behind a tunnel, set the dashboard URL on Setup instead | approvals.py |
 | `COMMONS_DASHBOARD_REQUIRE_TOKEN` | — | Require the dashboard token even on localhost/LAN/tailnet binds (`1`) | dashboard.py |
 | `COMMONS_DASHBOARD_TOKEN` | — | Admin token for the web dashboard (required for non-loopback binds) | dashboard.py |
+| `COMMONS_DASHBOARD_TOKENS` | `1` | Per-user dashboard tokens are optional: `0` turns them off on this hub (they stay stored), leaving the private-address, Host and owner-password checks; default `1` (on once a dashboard user exists) | dashboard.py |
 | `COMMONS_DB` | — | Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`) | cli.py, store.py |
 | `COMMONS_DB_KEY` | — | Secret ref for SQLCipher database encryption | dashboard.py, retention.py, store.py |
 | `COMMONS_DRIVE_BACKEND` | `local` | Commons Drive storage: `local`, `s3`, `webdav`, `hostfs`, `sftp`, `smb`, `ftp` | drive.py |

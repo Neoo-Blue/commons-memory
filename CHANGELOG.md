@@ -2,6 +2,20 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.37.1: dashboard tokens are optional, and stuck work can be moved or stopped by any agent
+- **Why.** The owner never wanted a token to open their own dashboard: it sits behind Cloudflare Access and the owner
+  password already guards keys, approvals and settings. Answering a "Still wanted?" meant the dashboard, and a
+  recurring task could only be stopped by editing the database.
+- **Tokens are optional.** `COMMONS_DASHBOARD_TOKENS=0` turns the per-user dashboard tokens off on a hub; they stay
+  stored, so turning them back on needs no new ones. Off means the dashboard works like a tokenless one: private,
+  LAN and tailnet addresses only, known Host names only, and the owner password on every page that reaches keys,
+  approvals or settings. The default is unchanged: tokens on once a dashboard user exists.
+- **`reassign_step(subtask_id, to)`** hands a pending or claimed step to a named agent. A moved step is now mailed to
+  its new agent (the old "already mailed" mark stopped that) and the escalation ladder starts over for it.
+- **`unschedule_recurring(name)`** turns a recurring task off; `schedule_recurring` with the same name turns it back on.
+- **For agents:** answer a "Still wanted?" with `reassign_step` or `cancel_job`, and stop a recurring task with
+  `unschedule_recurring`.
+
 ## v0.37.0: agents claim their work, talk like a chat, and the hub stops burning a core
 - **Why.** A full review of the live hub on 2026-11-06 found one CPU core at 100% for 24 days, rebuilding the same
   knowledge-base pages in a loop. Every inbox read was a database write, so the Mac wake services got "database is

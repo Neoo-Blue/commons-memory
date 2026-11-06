@@ -553,10 +553,13 @@ class Orchestrator:
         with self.s.lock:
             won = self.s.db.execute(
                 "UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, assigned_agent=?, "
-                "excluded_agents=?, not_before=NULL, updated_at=? WHERE id=? AND status=? AND claimed_by IS ?",
-                (a["id"], _j(excl), now(), subtask_id, st["status"], st["claimed_by"])).rowcount
+                "excluded_agents=?, not_before=NULL, escalation=NULL, updated_at=? WHERE id=? AND status=? "
+                "AND claimed_by IS ?", (a["id"], _j(excl), now(), subtask_id, st["status"], st["claimed_by"])).rowcount
         if won != 1:
             raise CommonsError("the step changed meanwhile: reload and try again")
+        # the new agent gets the ready mail (the mark said the step was mailed once, so a moved step was never sent),
+        # and the escalation ladder starts over for it
+        self.s.x("DELETE FROM meta WHERE key LIKE ?", (f"woke:{subtask_id}:%",))
         self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"pin:{subtask_id}", a["id"]))
         self.s.relate(subtask_id, a["id"], "assigned_to")
         self._drop_claim(st, f"moved to {a['name']}")
@@ -1441,6 +1444,15 @@ class Orchestrator:
                         "policy": policy, "carried_leftovers": ncarried,
                         "next_run": iso(nxt.timestamp())})
         return out
+
+    def unschedule(self, name: str, agent_id: str | None = None) -> dict:
+        """Turn a recurring task off (there was no way to, short of editing the database)."""
+        r = self.s.q("SELECT id, enabled FROM recurring WHERE name=? OR id=?", (name, name))
+        if not r:
+            raise CommonsError(f"no recurring task {name!r}; list_recurring() shows them")
+        self.s.x("UPDATE recurring SET enabled=0 WHERE id=?", (r[0]["id"],))
+        self.s.audit(agent_id, "recurring.unschedule", r[0]["id"], {"name": name, "was_enabled": bool(r[0]["enabled"])})
+        return {"recurring": name, "enabled": False}
 
     def list_recurring(self) -> list[dict]:
         return [dict(r) | {"next_run": iso(r["next_run"]), "last_run": iso(r["last_run"])}
