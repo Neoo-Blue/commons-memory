@@ -368,3 +368,28 @@ def test_second_review_rotation_keeps_hosts_scope_alone_and_one_query_reminder(s
     V.note(store, claude, "legacy", scope="read-only")                                     # scope alone on an old key
     assert V.notes_of(store, "legacy")["scope"] == "read-only"
     assert V.missing_notes(store, claude) == ["legacy"]                                    # still no purpose or places
+
+
+def test_a_multiline_key_is_refused_and_never_echoed(store, svc, monkeypatch):
+    """2026-11-06: a service-account JSON went into a Bearer header; http.client's 'Invalid header value' error quoted
+    it, and the whole private key reached the agent's transcript and the hub's captured tool output."""
+    base, seen = svc
+    mark = "PRIVATE" + " KEY-----"  # built, so secret scanners don't take the fixture for a real key
+    pem = f"-----BEGIN {mark}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END {mark}\n"
+    sa = json.dumps({"type": "service_account", "private_key": pem, "client_email": "x@y.iam.gserviceaccount.com"},
+                    indent=2)
+    V.add(store, "gsa", sa, "google", [base], {"bearer": True})
+    _judge(monkeypatch, legit=0.9)
+    with pytest.raises(CommonsError) as e:
+        V.use(store, store.ensure_agent("claude"), "gsa", "GET", base + "/sites", "list the sites the user asked about")
+    assert "MIIEvQ" not in str(e.value) and "line breaks" in str(e.value) and not seen
+
+
+def test_truncated_or_json_escaped_private_keys_are_redacted():
+    from commons_memory.redact import redact
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7" * 3
+    mark = "PRIVATE" + " KEY-----"  # built, so secret scanners don't take the fixture for a real key
+    cut = "Invalid header value b'Bearer {\"private_key\": \"-----BEGIN " + mark + "\\n" + body + "\\n" + body[:40]
+    for text in (cut, "-----BEGIN RSA " + mark + "\n" + body + "\n-----END RSA " + mark):
+        clean, kinds = redact(text)
+        assert "MIIEvQ" not in clean and "private_key" in kinds

@@ -86,9 +86,11 @@ def tick(s: Store, jobs: tuple[str, ...] | None = None, force: bool = False, log
     o = Orchestrator(s)
     run("recurring", o.run_due)
     def reap():
+        from .messaging import Messaging
         from .secrets import Broker
         r = o.reap()
         n = Broker(s).reap_expired()
+        Messaging(s).expire()  # unread mail past its TTL, here rather than on every recv
         return (r or []) + ([{"dynamic_leases_revoked": n}] if n else [])
     run("reap", reap)
 
@@ -205,11 +207,12 @@ _started: dict[str, threading.Thread] = {}
 
 
 def start_background(s: Store, mode: str | None = None) -> threading.Thread | None:
-    mode = mode or os.environ.get("COMMONS_BACKGROUND", "light")
+    mode = (mode or os.environ.get("COMMONS_BACKGROUND", "light")).strip().lower()
     key = _dbkey(s)  # one loop per database: `serve --dashboard` builds two Store objects on the same file
-    if mode in ("0", "off", "none") or key in _started:
+    if mode in ("0", "off", "none", "false", "no") or key in _started:
         return _started.get(key)
-    jobs = tuple(INTERVALS) if mode == "full" else LIGHT
+    # "1" reads as "on": the NAS hub ran with it for weeks and never escalated, fired a recurring job, pruned or backed up
+    jobs = tuple(INTERVALS) if mode in ("full", "1", "on", "true", "yes", "all") else LIGHT
     stop = threading.Event()
 
     def loop():

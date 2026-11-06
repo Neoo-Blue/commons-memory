@@ -2,6 +2,52 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.37.0: agents claim their work, talk like a chat, and the hub stops burning a core
+- **Why.** A full review of the live hub on 2026-11-06 found one CPU core at 100% for 24 days, rebuilding the same
+  knowledge-base pages in a loop. Every inbox read was a database write, so the Mac wake services got "database is
+  locked" (HTTP 500) and timeouts. 15 assigned subtasks had sat unclaimed for 9 to 25 days, because escalation,
+  recurring runs, pruning and backups never ran (`COMMONS_BACKGROUND=1` selected the light set). One wake service ran a
+  failing command 6,106 times on the same mail, since a failed run never acknowledged it. Only 1 agent session in 10
+  claimed its work, and the wake services never did. A question to another agent took hours: send, wait for its next
+  poll, reply, poll again.
+- **No rebuild loop.** Pages of knowledge-base topics that no longer exist are removed with their state, each misc
+  topic is built from the notes already loaded, and every dirty bucket is rebuilt once per pass.
+- **Reading mail doesn't write.** Expiring old mail moved to the background reaper; `recv` and `unread` only read. A
+  database that is busy answers 503 with Retry-After instead of 500, acks run off the event loop, and the HTTP hub has
+  64 worker threads for tool calls and long-polls (`COMMONS_THREADS`; the default pool was 8 on a 4-thread NAS).
+- **The full job set.** `COMMONS_BACKGROUND=1`, `on` or `true` now runs every job: escalation, recurring runs, pruning
+  and backups. A recurring task that fires more often than every 15 minutes (`COMMONS_RECURRING_MIN_GAP`) is held with
+  one notification instead of starting a job each time: the NAS had one at `* * * * *`.
+- **Escalation picks real agents.** The hub's own names (librarian, `provider:*`, dashboard users) are never chosen;
+  agents with a profile come first, best fit for the work type, and the reassigned agent gets the usual "ready" mail
+  with the subtask id. Work older than 7 days (`COMMONS_ESCALATE_MAX_AGE`) goes to you as "Still wanted?" instead.
+- **Agents claim their work.** A wake service claims a subtask for its agent before starting it and hands over the
+  work packet, so its first turn is the work. If the agent ends without handing in a result, the subtask goes back as
+  not done with its last output, never as done. A session's first real message opens its work claim
+  (setting `auto_claims`); at the end Jev reads the last message and closes the claim as done or dropped.
+- **Still needed?** Before anyone claims work that has waited more than a day (`COMMONS_STILL_NEEDED_AFTER`), the agent
+  that posted it is asked, and the claim waits up to 90 s for the answer. A no cancels the job, even when it comes
+  later; no answer lets the work go ahead. Your own asks go ahead (the 7-day rule asks you).
+- **Chat, not mail.** `ask(to, question)` returns the answer in the same call when the agent can be woken, and says so
+  at once when it can't. A wake service sends its agent's final output back to whoever asked if the agent forgot to.
+- **Wake services are visible and bounded.** A wake service marks itself (`client=daemon`), and other calls no longer
+  relabel it, so routing sees it as wakeable between polls. A command that fails is retried on one more wake, then the
+  sender is told and the mail is dropped. Broadcasts skip the hub's own names and agents silent for a week.
+- **Jev screens every credential call again.** With approve-everything on, the judges still run: a call with no sound
+  reason, or a destructive change your requests don't cover, is refused; everything else is allowed without asking you.
+  It had judged nothing for 23 days.
+- **A key can't leak through an error.** A credential with line breaks (a service-account JSON) is refused before
+  anything is sent, every error text is scrubbed, and a private key with no END marker or with JSON-escaped newlines is
+  redacted.
+- **Contradiction flags on notes, not chat.** Captured chat turns and tool observations are no longer compared (242 of
+  278 open flags on the NAS came from them, and those are dismissed); Jev also checks that two notes are about the same
+  thing, and its errors are recorded instead of passing as "no contradiction".
+- **Backups that don't stall the hub.** A backup copies from its own read snapshot, so agents keep working meanwhile.
+- **For agents:** ask another agent with `ask(to, question)` and answer a question with
+  `msg_send(to=asker, reply_to=<its id>)` right away. A session's first message opens its work claim: close it with
+  `finish_work`. A "Still needed?" question about work you posted needs a yes or a no. A wake service now claims your
+  subtask before you start: don't call `claim_subtask` for it again.
+
 ## v0.36.2: the offline hook queue can no longer crash the machine
 - **Why.** A Mac's `~/.commons/hook-queue.jsonl` reached 1.5 GB in eight hours. Every successful hook read the whole file
   into memory (about 3 GB of Python), several sessions did that at once, and an 8 GB machine lost its login session

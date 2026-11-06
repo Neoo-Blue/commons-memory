@@ -792,6 +792,9 @@ class Orchestrator:
                 if self.profiles.load(agent_id) >= cap:
                     return None
             st = cands[0]
+        if not self._still_needed(agent_id, st):  # may wait on the poster's answer: never while holding the store lock
+            return None
+        with self.s.lock:
             job = self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0]
             if self._over_budget(job):
                 self.s.x("UPDATE jobs SET status='budget_exceeded', updated_at=? WHERE id=?", (now(), job["id"]))
@@ -809,6 +812,38 @@ class Orchestrator:
         if snap:
             self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"qsnap:{st['id']}", json.dumps(snap)))
         return self.packet(st["id"], agent_id)
+
+    def _still_needed(self, agent_id: str, st: dict) -> bool:
+        """Before anyone starts on work that has waited more than a day, the agent that posted it is asked, chat style,
+        whether it is still needed. A no cancels the job; no answer in time (or a poster that can't be woken) lets the
+        work go ahead, and a no that comes later still stops it. The user's own asks go ahead: the 7-day rule asks them."""
+        job = self.s.q("SELECT id, title, submitted_by, created_at, status FROM jobs WHERE id=?", (st["job_id"],))
+        if not job:
+            return True
+        job = dict(job[0])
+        age = now() - (job["created_at"] or now())
+        poster = job["submitted_by"]
+        if age < float(os.environ.get("COMMONS_STILL_NEEDED_AFTER", "86400")) or not poster or poster == agent_id:
+            return True
+        from .messaging import Messaging, is_system, still_wanted
+        name = self.s.label(poster)[1]
+        if is_system(name) or is_system(self.s.label(agent_id)[1]) or not self.s.q("SELECT 1 FROM agents WHERE id=?", (poster,)):
+            return True  # the user's own asks, and the hub's own seats and distributor (its background thread can't wait)
+        key = f"still_needed:{job['id']}"
+        seen = self.s.q("SELECT value FROM meta WHERE key=?", (key,))
+        if seen and now() - float(json.loads(seen[0]["value"]).get("at") or 0) < 86400:
+            return True  # asked within the day: not again for every step of the same job
+        r = Messaging(self.s).ask(
+            agent_id, name, f"Still needed? \"{job['title'][:150]}\" (job {job['id']}), which you posted "
+            f"{age / 86400:.0f} day(s) ago, is about to be picked up by {self.s.label(agent_id)[1]}. Reply yes to go ahead, "
+            "or no to cancel it.", wait=float(os.environ.get("COMMONS_STILL_NEEDED_WAIT", "90")),
+            subject=f"Still needed? {job['title'][:60]}", meta={"still_needed": job["id"]})
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps({"at": now(), "by": agent_id,
+                                                                            "answer": (r.get("answer") or "")[:300]})))
+        if r.get("answer") and still_wanted(r["answer"]) is False and \
+                self.s.q("SELECT 1 FROM jobs WHERE id=? AND status='running'", (job["id"],)):
+            self.cancel(job["id"], f"{name}, who posted it, said it is no longer needed", poster)
+        return bool(self.s.q("SELECT 1 FROM jobs WHERE id=? AND status='running'", (job["id"],)))
 
     def packet(self, subtask_id: str, agent_id: str | None = None, max_tokens: int = 1500) -> dict:
         """Everything an agent needs to execute a subtask: brief, dep results, feedback, preferences, context."""
@@ -1357,7 +1392,20 @@ class Orchestrator:
         rows = self.s.q("SELECT * FROM recurring WHERE enabled=1 AND COALESCE(external,0)=0 AND (next_run<=? OR name=? "
                         "OR id=?)", (t, force, force))
         out = []
+        gap = float(os.environ.get("COMMONS_RECURRING_MIN_GAP", "900"))
         for r in rows:
+            a = next_cron(r["cron"], datetime.fromtimestamp(t))
+            if force not in (r["name"], r["id"]) and next_cron(r["cron"], a).timestamp() - a.timestamp() < gap:
+                # Each run is a whole job that wakes agents. A test schedule left at '* * * * *' would have submitted one
+                # a minute the day the hub's recurring job came on: hold it and tell the user once.
+                key = f"recurring_too_often:{r['id']}:{r['cron']}"
+                if not self.s.q("SELECT 1 FROM meta WHERE key=?", (key,)):
+                    self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(t)))
+                    from .escalation import notify
+                    notify(self.s, f"Recurring task '{r['name']}' is on hold: it fires more often than every "
+                           f"{int(gap // 60)} minutes", f"cron '{r['cron']}' would start a new job each time. Give it a "
+                           "slower schedule with schedule_recurring, or run it by hand with run_recurring.", target=r["id"])
+                continue
             # missed-slot accounting (catch-up policy)
             slots, cur = [], r["next_run"] or t
             if force not in (r["name"], r["id"]):

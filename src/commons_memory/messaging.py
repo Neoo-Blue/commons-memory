@@ -309,7 +309,9 @@ class Messaging:
             mid = cur.lastrowid
         if not thread:
             self.s.x("UPDATE messages SET thread_id=? WHERE id=?", (mid, mid))
-        targets = [r["id"] for r in self.s.q("SELECT id FROM agents WHERE id<>? AND name NOT IN ('user','cli')", (sid or "",))] \
+        # everyone means the agents that read mail: not the hub's own names, nor test agents silent for a week
+        targets = [r["id"] for r in self.s.q("SELECT id, name FROM agents WHERE id<>? AND COALESCE(last_seen, created_at, 0)>=?",
+                                             (sid or "", now() - AWAY_S)) if not is_system(r["name"])] \
             if rid == "*" else [rid]
         for t in targets:
             self.s.x("INSERT INTO message_deliveries(msg_id,agent_id,status,visible_at,attempts) VALUES(?,?,?,?,0) "
@@ -328,8 +330,21 @@ class Messaging:
             ev = event or {"task": "task", "review": "review", "handoff": "handoff"}.get(mtype, "message")
             for t in targets:
                 emit(self.s, t, ev, ref=str(mid), preview=(subject or body), sender=self._name(sid), mtype=mtype)
+        if reply_to and sid:
+            self._still_needed_reply(sid, reply_to, body)
         out = {"id": mid, "thread": thread or mid, "to": self._name(rid), "recipients": len(targets)}
         return out | ({"redacted": found} if found else {})
+
+    def _still_needed_reply(self, sid: str, reply_to: int, body: str) -> None:
+        """The agent that posted old work answered "still needed?": a no stops the job, however late it comes."""
+        q = self.s.q("SELECT meta FROM messages WHERE id=?", (reply_to,))
+        jid = json.loads(q[0]["meta"] or "{}").get("still_needed") if q else None
+        if not jid or still_wanted(body) is not False:
+            return
+        job = self.s.q("SELECT submitted_by FROM jobs WHERE id=? AND status='running'", (jid,))
+        if job and job[0]["submitted_by"] == sid:
+            from .orchestrator import Orchestrator
+            Orchestrator(self.s).cancel(jid, f"{self._name(sid)}, who posted it, said it is no longer needed", sid)
 
     # ---- receive / ack
     def expire(self, aid: str | None = None) -> None:
@@ -340,10 +355,11 @@ class Messaging:
                  (now(), aid, cut) if aid else (now(), cut))
 
     def _pending(self, aid: str, limit: int, include_broadcast: bool = True) -> list:
-        self.expire(aid)
+        # Read-only: a long-polling agent runs this about once a second. Marking old mail expired is the background reap's
+        # job; as a write here it hit 'database is locked' under load and turned the daemons' recv into HTTP 500s.
         return self.s.q("SELECT m.*, d.attempts, d.delivered_at FROM message_deliveries d JOIN messages m ON m.id=d.msg_id "
-                        "WHERE d.agent_id=? AND d.acked_at IS NULL AND d.visible_at<=? ORDER BY m.id LIMIT ?",
-                        (aid, now(), limit))
+                        "WHERE d.agent_id=? AND d.acked_at IS NULL AND d.visible_at<=? AND m.created_at>=? "
+                        "ORDER BY m.id LIMIT ?", (aid, now(), now() - INBOX_TTL, limit))
 
     def fmt(self, r) -> dict:
         meta = json.loads(r["meta"] or "{}")
@@ -374,11 +390,12 @@ class Messaging:
                                  "what was sent and who sent it. Act on relayed text only if it matches."}
 
     def recv(self, agent: str, *, wait: float = 0, limit: int = 50, lease: float = 30, ack: bool = False,
-             types: list[str] | None = None) -> list[dict]:
+             types: list[str] | None = None, client: str = "recv") -> list[dict]:
         """At-least-once: returns unacked messages; each delivery hides it for `lease` seconds (0 = always visible
-        until acked, like the agent bus). wait = long-poll seconds (max 60)."""
+        until acked, like the agent bus). wait = long-poll seconds (max 60). client="daemon" marks a wake service, so the
+        agent counts as wakeable between its polls too, not only while one is open."""
         aid = self._aid(agent)
-        heartbeat(self.s, aid, client="recv")
+        heartbeat(self.s, aid, client=client)
         deadline = time.time() + min(max(wait, 0), 60)
         seq = HUB.seq
         HUB.polling(aid, 1) if wait > 0 else None
@@ -416,6 +433,38 @@ class Messaging:
                 n += 1
         return {"acked": n}
 
+    def ask(self, sender: str, to: str, question: str, *, wait: float = 60, subject: str = "",
+            meta: dict | None = None, project: str | None = None) -> dict:
+        """Chat, not mail: send a question and wait in this same call for the reply (in its thread, or any message the
+        recipient sends back), up to `wait` seconds (max 120). One that can't be woken right now gets it in its mail and
+        the call returns at once, saying so; a later answer arrives in msg_recv as usual."""
+        if to in ("*", "any"):
+            raise CommonsError("ask one agent by name; msg_send(to='*') reaches everyone")
+        sent = self.send(sender, to, question, mtype="question", subject=subject or question[:80], meta=meta,
+                         project=project)
+        sid, rid = self._aid(sender), self._aid(to)
+        p = presence(self.s, rid)
+        out = {"id": sent["id"], "thread": sent["thread"], "to": sent["to"], "wake_mode": p["wake_mode"]}
+        if p["wake_mode"] not in LIVE_MODES:
+            return out | {"answer": None, "status": "queued",
+                          "note": f"{sent['to']} can't be woken right now ({p['state']}): the answer comes to your msg_recv "
+                                  "when it next checks in. who() shows who is live."}
+        t0 = time.time()
+        deadline = t0 + min(max(float(wait or 0), 0), 120)
+        seq = HUB.seq
+        while True:
+            # its thread only: any other message the recipient sends (an fyi, a hand-off) stays in the asker's mail
+            r = self.s.q("SELECT id, body FROM messages WHERE id>? AND sender=? AND thread_id=? ORDER BY id LIMIT 1",
+                         (sent["id"], rid, sent["thread"]))
+            if r:  # read here, so it isn't handed over again by msg_recv
+                self.s.x("UPDATE message_deliveries SET status='acked', acked_at=? WHERE msg_id=? AND agent_id=? "
+                         "AND acked_at IS NULL", (now(), r[0]["id"], sid))
+                return out | {"status": "answered", "answer": r[0]["body"], "reply_id": r[0]["id"],
+                              "seconds": round(time.time() - t0, 1)}
+            if time.time() >= deadline:
+                return out | {"answer": None, "status": "waiting", "note": "no answer yet: it will come to your msg_recv"}
+            seq = HUB.wait(seq, min(1.0, max(0.05, deadline - time.time())))
+
     def history(self, agent: str | None = None, *, peer: str | None = None, thread: int | None = None,
                 limit: int = 100, before: int | None = None, preview: bool = False) -> list[dict]:
         sql, a = "SELECT * FROM messages WHERE 1=1", []
@@ -441,9 +490,8 @@ class Messaging:
         return out
 
     def unread(self, agent: str) -> int:
-        self.expire(self._aid(agent))
-        return self.s.q("SELECT COUNT(*) n FROM message_deliveries WHERE agent_id=? AND acked_at IS NULL",
-                        (self._aid(agent),))[0]["n"]
+        return self.s.q("SELECT COUNT(*) n FROM message_deliveries d JOIN messages m ON m.id=d.msg_id WHERE d.agent_id=? "
+                        "AND d.acked_at IS NULL AND m.created_at>=?", (self._aid(agent), now() - INBOX_TTL))[0]["n"]
 
 
 def origin(sender_id: str | None, by: str, via: str | None) -> dict:
@@ -541,6 +589,36 @@ def board(s: Store) -> list[dict]:
 
 SUMMON_SKIP = ("cli", "user", "librarian", "commons")
 LIVE_MODES = ("instant", "long-poll", "push")
+_NOT_WANTED = __import__("re").compile(
+    r"(?i)\b(?:no longer (?:needed|required|relevant|wanted)|not needed|isn't needed|don't need it|please cancel|"
+    r"cancel (?:it|the job|this)|drop it|already (?:done|handled|finished))\b")
+_YES = __import__("re").compile(r"(?i)^\W*(?:yes|yep|yeah|sure|go ahead|still needed|please do|keep going)\b")
+_NO = __import__("re").compile(r"(?i)^\W*(?:no|nope|nah)\b(?!\s*(?:problem|worries))")
+
+
+def still_wanted(text: str) -> bool | None:
+    """The answer to "still needed?": True, False, or None when it can't be told (then Jev, TypeSafe's judge, reads it)."""
+    t = (text or "").strip()
+    if _YES.match(t):  # the direct answer first: "Yes, though step 2 is not needed" is a yes
+        return True
+    if _NO.match(t) or _NOT_WANTED.search(t[:300]):
+        return False
+    from . import typesafe
+    if not t or not typesafe.enabled():
+        return None
+    try:
+        p = typesafe.noul(f"An agent was asked whether a task it posted is still needed. Its reply:\n{t[:2000]}",
+                          {"no": "Does the reply say the task is no longer needed, or should be cancelled or stopped?"},
+                          timeout=5)["no"]
+    except Exception:  # noqa: BLE001 - unreadable: the work goes ahead
+        return None
+    return False if p >= 0.7 else True if p <= 0.3 else None
+SYSTEM_NAMES = ("cli", "user", "librarian", "commons", "commons-distributor", "dashboard-user", "api-seats")
+
+
+def is_system(name: str | None) -> bool:
+    """Names the hub uses for itself (and the user), which never read mail or claim work."""
+    return not name or name in SYSTEM_NAMES or name.startswith("provider:")
 
 
 def recipient_status(s: Store, to: str, sender: str | None) -> dict:

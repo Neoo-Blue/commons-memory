@@ -196,6 +196,7 @@ class Capture:
                 except Exception:  # noqa: BLE001 - a failed check must not block the prompt
                     ctx = ""
                 ctx += self.recall(text, project, skey=skey)
+            ctx += self._session_claim(agent_id, skey, text, project, payload.get("cwd"))
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
                 self.verbatim(agent_id, project, skey, harness, "user", text)
@@ -219,6 +220,9 @@ class Capture:
                 self.verbatim(agent_id, project, skey, harness, "assistant", reply)
         out = {"ok": True} | self.flush(agent_id, pid, skey, harness, strip_private(payload.get("transcript_tail", "")),
                                         final=event != "stop", reason=event)
+        if event == "session_end":  # the session's own claim closes with it, carrying its last word as the result
+            got = payload.get("replies") if isinstance(payload.get("replies"), list) else []
+            self._close_session_claim(agent_id, skey, (got[-1] if got else "") or "session ended")
         if isinstance(payload.get("git"), dict):
             out["changes"] = self.changes(agent_id, skey, payload["git"])
         if event == "stop" and payload.get("keep_working"):
@@ -227,6 +231,48 @@ class Capture:
             if reason:
                 out["block"] = reason
         return out
+
+    def _session_claim(self, agent_id: str, skey: str, text: str, project: str | None, cwd: str | None) -> str:
+        """The first real message of a session opens its work claim, so the board shows who is on what without each
+        agent remembering start_work (on the NAS 1 session in 10 did, and the daemons never). Busy or done work is
+        left to the duplicate warning above: no claim is opened over another agent's."""
+        from . import settings
+        from . import work as W
+        t = (text or "").strip()
+        if not settings.get(self.s, "auto_claims") or len(t.split()) < 4 or t.startswith(("/", "<")) or \
+                self.s.q("SELECT 1 FROM meta WHERE key=?", (f"session_claim:{skey}",)):
+            return ""
+        try:
+            r = W.start(self.s, agent_id, " ".join(t.split())[:300], project, [cwd] if cwd else None)
+        except Exception:  # noqa: BLE001 - never block a prompt over this
+            return ""
+        if r.get("status") != "ok" or not r.get("claim_id"):
+            return ""
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"session_claim:{skey}", r["claim_id"]))
+        return (f"Commons opened work claim {r['claim_id']} for this task from your message, so other agents see it is "
+                f"taken. Close it with finish_work(claim_id='{r['claim_id']}', result=...) when done; no start_work "
+                "needed for it.\n\n")
+
+    def _close_session_claim(self, agent_id: str, skey: str, result: str) -> None:
+        """Done only when the session's last word says the work was done (Jev reads it); otherwise dropped, so an
+        "I couldn't do this" never shows up later as DONE BEFORE and turns the next agent away."""
+        from . import typesafe
+        from . import work as W
+        r = self.s.q("SELECT value FROM meta WHERE key=?", (f"session_claim:{skey}",))
+        if not r or not self.s.q("SELECT 1 FROM work_claims WHERE id=? AND status='active'", (r[0]["value"],)):
+            return
+        text, done = strip_private(result)[:2000], False
+        if typesafe.enabled() and text.strip():
+            try:
+                done = typesafe.noul(f"An AI agent's last message at the end of a work session:\n{text}", {"done": (
+                    "Does this message say the requested work was completed, rather than refused, blocked, unfinished "
+                    "or only discussed?")}, timeout=5)["done"] >= 0.6
+            except Exception:  # noqa: BLE001 - unreadable: not counted as done
+                done = False
+        try:
+            W.finish(self.s, agent_id, r[0]["value"], text, status="done" if done else "dropped")
+        except Exception:  # noqa: BLE001
+            pass
 
     def changes(self, agent_id: str, skey: str, git: dict) -> dict:
         """The hook saw code changes in the agent's working copy: keep them with the subtask it holds, else its open

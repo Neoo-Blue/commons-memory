@@ -222,8 +222,15 @@ def backup(s: Store, out_dir: str | None = None, keep: int | None = None, encryp
         import sqlite3
         path = str(d / f"commons-{stamp}.db")
         dst = sqlite3.connect(path)
-        with s.lock:
-            s.db.backup(dst)
+        if s.path == ":memory:" or os.environ.get("COMMONS_DB_KEY"):
+            with s.lock:
+                s.db.backup(dst)
+        else:  # its own read snapshot (WAL): agents keep reading and writing while a ~1 GB hub is copied
+            src = sqlite3.connect(Path(s.path).resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                src.backup(dst)
+            finally:
+                src.close()
         dst.close()
     key = _key()
     if (encrypt is None and key) or encrypt:

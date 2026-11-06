@@ -50,6 +50,11 @@ def build_app(store: Store) -> Starlette:
                 return JSONResponse({"ok": False, "error": str(e)}, 400)
             except (ValueError, KeyError) as e:
                 return JSONResponse({"ok": False, "error": f"bad request: {e}"}, 400)
+            except Exception as e:  # noqa: BLE001 - 'database is locked' and the like: busy, not broken
+                if type(e).__name__ != "OperationalError":
+                    raise
+                return JSONResponse({"ok": False, "error": "the hub is busy, retry shortly"}, 503,
+                                    headers={"Retry-After": "2"})
         return h
 
     async def body(req):
@@ -78,7 +83,8 @@ def build_app(store: Store) -> Starlette:
         native = req.url.path.startswith("/agent/")
         msgs = await asyncio.to_thread(m.recv, aid, wait=float(q.get("wait", 0)), limit=int(q.get("limit", 50)),
                                        lease=float(q.get("lease", 30 if native else 0)), ack=q.get("ack", "0") in ("1", "true"),
-                                       types=q.get("types").split(",") if q.get("types") else None)
+                                       types=q.get("types").split(",") if q.get("types") else None,
+                                       client="daemon" if q.get("client") == "daemon" else "recv")
         if not native:  # bus wire format
             msgs = [{"id": x["id"], "from": x["from"], "to": x["to"], "text": x["text"], "ts": x["ts"],
                      "type": x["type"], "thread": x["thread"]} for x in msgs]
@@ -92,7 +98,7 @@ def build_app(store: Store) -> Starlette:
         ids = b.get("ids") or []
         if isinstance(ids, str):
             ids = ids.split(",")
-        return JSONResponse({"ok": True} | m.ack(aid, ids))
+        return JSONResponse({"ok": True} | await asyncio.to_thread(m.ack, aid, ids))  # a write: never on the event loop
 
     @guard
     async def history(req: Request):

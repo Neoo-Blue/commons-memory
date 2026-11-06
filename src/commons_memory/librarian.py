@@ -275,26 +275,35 @@ class Librarian:
         from concurrent.futures import ThreadPoolExecutor
         thr = float(os.environ.get("COMMONS_CONTRADICTION_THRESHOLD", "0.85"))
         kinds = ("memory", "fact", "decision")
-        new = [i for i in items if i["kind"] in kinds and '"subtask"' not in (i.get("tags") or "")]
+        # Notes, not transcripts: captured chat turns ("review still running", "pushing now") read as contradicting
+        # each other all day. On the NAS 242 of 278 open conflicts were such pairs, and none was ever resolved.
+        def durable(tags):
+            return not any(t in (tags or "") for t in ('"subtask"', '"conversation"', '"observation"'))
+        self._dismiss_capture_conflicts()
+        new = [i for i in items if i["kind"] in kinds and durable(i.get("tags"))]
         q = ("Do note A and note B contradict each other, so that both cannot be true at the same time about the "
              "same thing?")
-        found = []
+        same = ("Are note A and note B about the same specific thing (the same system, setting, price, date, plan or "
+                "decision), rather than different parts of one project?")
+        found, errors = [], []
         for it in new[:int(os.environ.get("COMMONS_CONTRADICTION_MAX", "50"))]:
             ids, _, _ = self.s.rank(f"{it.get('title') or ''} {it['content']}"[:500], kinds=list(kinds), limit=6,
                                     project=self.s.project_name(it["project_id"]) if it["project_id"] else None)
             ids = [i for i in ids if i != it["id"]][:3]
             if not ids:
                 continue
-            rows = {r["id"]: r for r in self.s.q(f"SELECT id, content, created_at FROM items WHERE id IN ({','.join('?' * len(ids))}) "
-                                                 "AND superseded_by IS NULL", ids)}
-            near = [rows[i] for i in ids if i in rows and not self.s.q(
+            rows = {r["id"]: r for r in self.s.q(f"SELECT id, content, created_at, tags FROM items WHERE id IN "
+                                                 f"({','.join('?' * len(ids))}) AND superseded_by IS NULL", ids)}
+            near = [rows[i] for i in ids if i in rows and durable(rows[i]["tags"]) and not self.s.q(
                 "SELECT 1 FROM relations WHERE type='contradicts' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
                 (it["id"], i, i, it["id"]))]
 
             def ask(r, it=it):
                 try:
-                    return typesafe.noul(f"Note A: {r['content'][:2000]}\nNote B: {it['content'][:2000]}", {"c": q}).get("c", 0)
-                except Exception:  # noqa: BLE001 - a TypeSafe outage only skips this pass
+                    a = typesafe.noul(f"Note A: {r['content'][:2000]}\nNote B: {it['content'][:2000]}", {"c": q, "same": same})
+                    return a.get("c", 0) if a.get("same", 1) >= 0.6 else 0.0
+                except Exception as e:  # noqa: BLE001 - a TypeSafe outage only skips this pass, but it is recorded
+                    errors.append(str(e)[:160])
                     return 0.0
             with ThreadPoolExecutor(3) as ex:
                 for r, p in zip(near, ex.map(ask, near)):
@@ -306,7 +315,25 @@ class Librarian:
                         self.s.relate(new_["id"], old["id"], "contradicts", agent_id=self.agent_id)
                         self._log(run_id, "contradiction", new_["id"], None, {"with": old["id"], "p": round(p, 3)}, False)
                         found.append(new_["id"])
+        if errors:  # it used to fail silently: an expired TypeSafe key looked exactly like "no contradictions"
+            self.s.audit(None, "librarian.typesafe.error", "", {"failed": len(errors), "last": errors[-1]})
         return found
+
+    def _dismiss_capture_conflicts(self) -> int:
+        """Open text conflicts that involve a captured chat turn or tool observation were never real: drop them."""
+        cap = "(t.tags LIKE '%\"conversation\"%' OR t.tags LIKE '%\"observation\"%')"
+        rows = self.s.q(f"SELECT c.id, c.a, c.b FROM conflicts c WHERE c.status='open' AND c.subject='text' AND EXISTS("
+                        f"SELECT 1 FROM items t WHERE t.id IN (c.a, c.b) AND {cap})")
+        for r in rows:
+            self.s.x("UPDATE conflicts SET status='dismissed' WHERE id=?", (r["id"],))
+            self.s.x("DELETE FROM relations WHERE type='contradicts' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
+                     (r["a"], r["b"], r["b"], r["a"]))
+            for i in (r["a"], r["b"]):
+                if not self.s.q("SELECT 1 FROM conflicts WHERE status='open' AND (a=? OR b=?)", (i, i)):
+                    self.s.x("UPDATE items SET conflict=0 WHERE id=?", (i,))
+        if rows:
+            self.s.audit(None, "librarian.conflicts_dismissed", "", {"n": len(rows), "why": "captured chat or tool output"})
+        return len(rows)
 
     def _skills(self, run_id) -> int:
         n = 0

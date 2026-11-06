@@ -3,7 +3,10 @@ import os
 import re
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")),
+    # The END marker is often cut off (an error message truncated mid-key), and a key inside JSON has literal \n escapes:
+    # both left the body of a service-account key in captured tool output on 2026-11-06.
+    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+                               r"|(?:(?:\\n|\s)+[A-Za-z0-9+/=]{16,})*)")),  # no END: only the base64 lines, not prose
     ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b")),
     ("slack_token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),

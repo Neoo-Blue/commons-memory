@@ -68,12 +68,17 @@ class Escalator:
         rows = self.s.q("SELECT * FROM agents WHERE last_seen>=? AND name NOT IN ('user','cli','commons-distributor')",
                         (now() - ACTIVE_WINDOW,))
         out = []
+        from .messaging import is_system
         for a in rows:
             prof = json.loads(dict(a).get("profile") or "{}")
-            if a["id"] in excl or prof.get("availability") in ("offline", "unavailable", "paused"):
+            # The hub's own names (librarian, provider:anthropic, dashboard users) are "seen" all the time and never
+            # claim anything: on the NAS they were the most recently seen, so they would have been picked first.
+            if is_system(a["name"]) or a["id"] in excl or prof.get("availability") in ("offline", "unavailable", "paused"):
                 continue
             out.append(dict(a))
-        return sorted(out, key=lambda a: -(a["last_seen"] or 0))
+        # agents that declared what they do first, best fit for this kind of work, then recency
+        return sorted(out, key=lambda a: (not a.get("profile"), -round(self.o.profiles.score(a, st["type"]), 2),
+                                          -(a["last_seen"] or 0)))
 
     def stuck(self) -> list[dict]:
         rows = [dict(r) for r in self.s.q(
@@ -99,9 +104,19 @@ class Escalator:
         if self.o.paused():
             return []
         done = []
+        max_age = float(os.environ.get("COMMONS_ESCALATE_MAX_AGE", str(7 * 86400)))
         for st in self.stuck():
             level = st.get("escalation")
             if level == "notified":
+                continue
+            days = (now() - (st["created_at"] or now())) / 86400
+            if level is None and days * 86400 > max_age:  # weeks-old work may not be wanted any more: the user decides
+                notify(self.s, f"Still wanted? {st['title'][:80]}",
+                       f"Subtask {st['id']} ({st['type']}) in job {st['job_id']} has waited {days:.0f} days and nobody "
+                       "claimed it. Commons won't hand work this old to another agent on its own: cancel the job, or "
+                       "assign it again if it is still wanted.", target=st["id"])
+                self._log(st, "notified", "notify", {"age_days": round(days, 1), "too_old": True})
+                done.append({"subtask": st["id"], "action": "asked_user", "age_days": round(days, 1)})
                 continue
             if level is None:
                 cands = [a for a in self._active_agents(st) if a["id"] != st["assigned_agent"]]
@@ -112,11 +127,12 @@ class Escalator:
                            f"nobody claimed it in {int(st['age'] // 60)} minutes")
                     self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (cands[0]["id"], st["id"]))
                     self.s.relate(st["id"], cands[0]["id"], "assigned_to")
-                    self.s.post_task(None, cands[0]["name"], f"Escalated subtask {st['id']} ({st['type']}): {st['title']}. "
-                                     f"Why you: {why}, and you are the next active agent for {st['type']} work. Claim it "
-                                     f"with claim_subtask('{st['id']}'); it is assigned to you, which pickup() confirms.",
-                                     kind="task", by="the escalation ladder: stuck work reassigned")
-                    self._log(st, "reassigned", "reassign", {"to": cands[0]["name"], "unassignable": st["unassignable"]})
+                    # the usual "ready" mail (subtask id, routed model): a daemon claims it for its agent. The old mark
+                    # said it had been mailed once, which is why the first assignee's lapsed mail was never resent.
+                    self.s.x("DELETE FROM meta WHERE key LIKE ?", (f"woke:{st['id']}:%",))
+                    self.o._wake_ready(st["job_id"])
+                    self._log(st, "reassigned", "reassign", {"to": cands[0]["name"], "why": why,
+                                                             "unassignable": st["unassignable"]})
                     done.append({"subtask": st["id"], "action": "reassigned", "to": cands[0]["name"]})
                     continue
                 level = "reassigned"  # nobody to reassign to: fall through

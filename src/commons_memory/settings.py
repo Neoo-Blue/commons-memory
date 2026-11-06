@@ -35,6 +35,8 @@ DEFAULTS = {
     "capture_diffs": (True, "Keep each agent's code changes (git diff, secrets redacted) with its work, in the job "
                             "workspace"),
     "dup_warnings": (True, "Warn agents when someone else is doing, or already did, the same work"),
+    "auto_claims": (True, "Open a work claim from the first message of each agent session and close it when the "
+                          "session ends, so everyone sees who is on what without agents having to remember"),
     "quota_routing": (True, "Route work only to agents with usage headroom, keeping your reserve"),
     "reserve_pct": (20, "Share of each usage window kept for you, %"),
     "schedule_takeover": (True, "Another agent covers a scheduled run its owner missed"),

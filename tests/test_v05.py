@@ -194,7 +194,9 @@ def test_unassignable_escalates_reassign_llm_notify(tmp_path):
     j = o.submit("find x", dag=dag)
     r = Escalator(s, after=999).run()
     assert r and r[0]["action"] == "reassigned" and r[0]["to"] == "helper"
-    assert s.inbox(helper)  # told about it
+    from commons_memory.messaging import Messaging
+    mail = Messaging(s).recv(helper)  # told about it: the usual ready mail, so a daemon can claim it for its agent
+    assert mail and mail[0]["meta"].get("subtask")
     # nobody active -> distributor model executes it
     s2 = make_store(tmp_path, "esc2.db")
     pl = ProviderLayer(s2)
@@ -225,6 +227,20 @@ def test_recurring_catchup_policies(tmp_path, policy, expected):
     r = o.run_due()[0]
     assert r["missed"] >= 4 and len(r["jobs"]) == expected and r["policy"] == policy
     assert r["next_run"] and s.q("SELECT next_run FROM recurring")[0]["next_run"] > time.time()
+
+
+def test_a_recurring_task_that_fires_every_minute_is_held(tmp_path):
+    """The NAS hub had 'weekly-readme-audit' at '* * * * *': the day its recurring job came on, that is a new job (and
+    woken agents) every minute. It is held with one notification; a run by name still works."""
+    from commons_memory.orchestrator import Orchestrator
+    s = make_store(tmp_path, "rc-fast.db")
+    o = Orchestrator(s)
+    o.schedule("weekly-readme-audit", "* * * * *", "audit the README")
+    s.x("UPDATE recurring SET next_run=?", (time.time() - 3600,))
+    assert o.run_due() == [] and o.run_due() == []
+    assert len(s.q("SELECT 1 FROM notifications WHERE title LIKE '%weekly-readme-audit%'")) == 1
+    assert not s.q("SELECT 1 FROM jobs")
+    assert o.run_due(force="weekly-readme-audit")[0]["job_id"]
 
 
 # ------------------------------------------------------------------ retention

@@ -197,3 +197,20 @@ def test_mcp_kb_and_graph_tools(store, tmp_path):
         assert "added" in json.loads(t(await mcp.call_tool("graph_rebuild", {})))
         assert t(await mcp.call_tool("graph_view", {"scope": "workflow", "id": "cross_review"})).startswith("graph LR")
     asyncio.run(go())
+
+
+def test_kb_gone_misc_topic_does_not_rebuild_forever(store, tmp_path):
+    """Live hub, 2026-11-06: dirty rows for misc topics that no longer exist sent every refresh back into a full misc
+    rebuild (once per stale row), pinning a core for 24 days. One pass must clean them up and then go quiet."""
+    populate(store, tmp_path)
+    kb = KB(store)
+    kb.build_all()
+    store.x("INSERT OR REPLACE INTO kb_pages VALUES(?,?,?,?,?,?)", ("misc/gone", "overview", "Overview", "x", "[]", 0))
+    for b in ("misc/gone", "misc/gone-too", "no-such-project"):
+        store.x("INSERT OR REPLACE INTO kb_state VALUES(?,?,?,?)", (b, 1, 0, 0))
+    built = kb.refresh_dirty()
+    assert built.count("misc") == 1                      # two stale topic rows, one misc pass
+    assert not store.q("SELECT 1 FROM kb_state WHERE dirty=1")
+    assert not store.q("SELECT 1 FROM kb_pages WHERE bucket='misc/gone'")
+    assert any(b.startswith("misc/") for b in built)     # live topics are still built
+    assert kb.refresh_dirty() == []                      # and nothing is left to loop on

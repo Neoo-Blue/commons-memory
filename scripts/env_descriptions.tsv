@@ -6,7 +6,7 @@ COMMONS_AGENT	Agent identity for stdio/CLI use when no API key is given
 COMMONS_AGENT_DEFAULT_CAPACITY	Concurrent subtasks per agent when its profile sets no `max_concurrent`
 COMMONS_ALLOW_ANON_READS	HTTP: allow read-only calls without a key (`1`); writes always need a key
 COMMONS_API_KEY	Agent API key for stdio/CLI/worker calls
-COMMONS_BACKGROUND	In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off
+COMMONS_BACKGROUND	In-process maintenance: `light` (KB refresh, librarian, reaper), `full` or `1`/`on` (every job: escalation, recurring runs, pruning, backups), `0` off
 COMMONS_BACKUP	Nightly SQLite backup from the background loop (`1` on)
 COMMONS_BACKUP_DIR	Backup directory (default `~/.commons/backups`)
 COMMONS_BACKUP_KEEP	Number of backups to keep
@@ -146,3 +146,8 @@ COMMONS_SEATS	Set to 0 or off to never start the API seat loop in this process (
 COMMONS_SEAT_PARALLEL	How many steps the API seats run at once (default 2)
 COMMONS_SEAT_POLL	Seconds between API seat checks for ready work (default 5)
 COMMONS_INBOX_TTL_HOURS	Hours an unread message waits in an agent inbox before it expires (it stays in history), so no backlog builds up; default 48
+COMMONS_ESCALATE_MAX_AGE	Seconds after which unclaimed work is no longer handed to another agent on its own: the user gets a "still wanted?" notification instead; default 604800 (7 days)
+COMMONS_RECURRING_MIN_GAP	A recurring task whose cron fires more often than this many seconds is held (with one notification) instead of starting a job each time; default 900
+COMMONS_STILL_NEEDED_AFTER	Seconds a job may wait before a claim on it first asks the agent that posted it whether it is still needed; default 86400
+COMMONS_STILL_NEEDED_WAIT	Seconds a claim waits for the poster's answer to "still needed?" (a later no still cancels the job); default 90
+COMMONS_THREADS	Worker threads for sync tool calls and long-polls on the HTTP hub (the default executor is only cpus+4); default 64

@@ -17,7 +17,7 @@ import contextvars
 import json
 import os
 
-CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "msg_get", "who", "summon", "resume", "search", "expand", "why",
+CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "ask", "msg_get", "who", "summon", "resume", "search", "expand", "why",
         "remember", "record_decision", "observe_preference", "submit_task", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
         "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "credentials", "use_credential", "vault_deposit", "skill", "skill_help",
         "infra",
@@ -26,7 +26,7 @@ CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "
 # `lite`: memory + coordination only, for the Claude Code plugin and anyone who wants no credential or infra tools
 # listed (they stay reachable through call() but nothing advertises them).
 LITE = ["pickup", "start_work", "finish_work", "search", "expand", "why", "remember", "record_decision", "handoff",
-        "resume", "msg_send", "msg_recv", "msg_get", "board", "board_add", "board_update", "whoami", "tools", "call"]
+        "resume", "msg_send", "ask", "msg_recv", "msg_get", "board", "board_add", "board_update", "whoami", "tools", "call"]
 IDENTITY = ("agent", "api_key")
 
 REQUESTED: contextvars.ContextVar[str | None] = contextvars.ContextVar("commons_tools", default=None)

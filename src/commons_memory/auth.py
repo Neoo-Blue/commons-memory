@@ -191,7 +191,7 @@ def _touch(store, principal: str) -> None:
     _last_touch[principal] = t
     try:
         from .messaging import heartbeat
-        heartbeat(store, principal, client="http")
+        heartbeat(store, principal)  # a sign of life only: relabelling the client "http" hid every daemon from routing
     except Exception:  # noqa: BLE001
         pass
 

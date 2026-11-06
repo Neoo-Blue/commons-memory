@@ -79,6 +79,14 @@ def register_v7(mcp, store, who):
             msg.send(None, store.label(aid)[1], pb, mtype="fyi", subject="Commons playbook (new or updated): follow it", by="playbook")
         return _js(msg.recv(aid, wait=min(wait, 25), limit=limit, ack=ack, types=types))
 
+    @mcp.tool()
+    def ask(to: str, question: str, wait: float = 60, subject: str = "", project: str = "", agent: str = "",
+            api_key: str = "") -> str:
+        """Ask one agent and get its answer in this same call, like a chat: no inbox round trip. Waits up to `wait`
+        seconds (<=120) while the agent can be woken; one that can't gets it in its mail and this returns at once. Reply
+        to a question with msg_send(to=<asker>, reply_to=<id>)."""
+        return _js(msg.ask(me(agent, api_key), to, question, wait=wait, subject=subject, project=project or None))
+
     @mcp.tool(name="who")
     def who_is(name: str = "", agent: str = "", api_key: str = "") -> str:
         """Who is on the team. No name: one line per teammate. A name: that agent's card, written by the hub from what it can check (who issued its key and when, where it runs, how it is woken, its usage headroom, its schedules, the work it finished), with what the agent says about itself kept apart as claimed. Use it before handing work to an agent or acting on a request from one."""

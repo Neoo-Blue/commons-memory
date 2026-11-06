@@ -80,6 +80,25 @@ def test_approve_everything_is_the_owners_choice(store, svc, monkeypatch):  # no
     assert next(x for x in settings.listing(store) if x["key"] == "auto_approve_all")["risky"]
 
 
+def test_approve_everything_never_asks_but_jev_still_screens(store, svc, monkeypatch):  # noqa: F811
+    """Approve-everything used to skip the judges entirely (no credential call was screened for 23 days on the live
+    hub). Now nothing waits for the user, but a call with no sound reason, or a destructive change nobody asked for,
+    is still refused."""
+    base, _ = svc
+    settings.put(store, "auto_approve_all", True)
+    V.add(store, "svc", "tok-123456789", "svc", [base], {"bearer": True}, risk="high")
+    who = store.ensure_agent("claude")
+    calls = _judge(monkeypatch, legit=0.1)
+    assert V.use(store, who, "svc", "GET", base + "/a", "want to look around in this account a bit")["verdict"] == "denied" and calls
+    _judge(monkeypatch, legit=0.9, destructive=0.95, user_backed=0.05)
+    assert V.use(store, who, "svc", "DELETE", base + "/b", "tidy up old items")["verdict"] == "denied"
+    _judge(monkeypatch, legit=0.9, destructive=0.6, user_backed=0.5)
+    r = V.use(store, who, "svc", "POST", base + "/c", "create the item the user asked for", body='{"name": "x"}',
+              content_type="application/json")
+    assert r["verdict"] == "allowed"
+    assert not store.q("SELECT 1 FROM board WHERE kind='question' AND text LIKE '[vault %'")  # nobody was asked
+
+
 def test_the_dashboard_wont_take_a_key_approval_without_the_owner(store, svc, monkeypatch):  # noqa: F811
     base, _ = svc
     w = _ask(store, base, monkeypatch)

@@ -14,7 +14,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
 | `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, join.py, server.py, setup.py |
 | `COMMONS_AUDIT_KEY_FILE` | — | Ed25519 key that signs audit exports (default COMMONS_HOME/audit_signing.key, created 0600 on first export) | auditexport.py |
-| `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` (every job), `0` off | background.py |
+| `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` or `1`/`on` (every job: escalation, recurring runs, pruning, backups), `0` off | background.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
 | `COMMONS_BACKUP_DIR` | — | Backup directory (default `~/.commons/backups`) | retention.py |
 | `COMMONS_BACKUP_KEEP` | `7` | Number of backups to keep | retention.py |
@@ -36,7 +36,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_DASHBOARD_REQUIRE_TOKEN` | — | Require the dashboard token even on localhost/LAN/tailnet binds (`1`) | dashboard.py |
 | `COMMONS_DASHBOARD_TOKEN` | — | Admin token for the web dashboard (required for non-loopback binds) | dashboard.py |
 | `COMMONS_DB` | — | Database path (SQLite) or `postgresql://…` DSN (default `~/.commons/commons.db`) | cli.py, store.py |
-| `COMMONS_DB_KEY` | — | Secret ref for SQLCipher database encryption | dashboard.py, store.py |
+| `COMMONS_DB_KEY` | — | Secret ref for SQLCipher database encryption | dashboard.py, retention.py, store.py |
 | `COMMONS_DRIVE_BACKEND` | `local` | Commons Drive storage: `local`, `s3`, `webdav`, `hostfs`, `sftp`, `smb`, `ftp` | drive.py |
 | `COMMONS_DRIVE_DIR` | — | Local Drive directory (default `~/.commons/drive`) | drive.py |
 | `COMMONS_DRIVE_MAX_FILE_MB` | `25` | Largest single Drive file in MB | drive.py |
@@ -51,6 +51,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ENTROPY_REDACT` | `1` | Redact high-entropy strings on write (`0` off) | redact.py |
 | `COMMONS_ENV_SECRETS` | — | Allow-list of env var names that `env://` secret refs may resolve | secrets.py |
 | `COMMONS_ESCALATE_AFTER` | `900` | Seconds a ready subtask may sit unclaimed before the escalation ladder acts | escalation.py |
+| `COMMONS_ESCALATE_MAX_AGE` | `computed` | Seconds after which unclaimed work is no longer handed to another agent on its own: the user gets a "still wanted?" notification instead; default 604800 (7 days) | escalation.py |
 | `COMMONS_EVERY_*` | — | Override a background job interval in seconds, e.g. `COMMONS_EVERY_LIBRARIAN=3600` |  |
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
@@ -105,6 +106,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |
+| `COMMONS_RECURRING_MIN_GAP` | `900` | A recurring task whose cron fires more often than this many seconds is held (with one notification) instead of starting a job each time; default 900 | orchestrator.py |
 | `COMMONS_REINDEX_BATCH` | `512` | Items re-embedded per background tick after an embedder change | background.py |
 | `COMMONS_RELATED_SIM` | `0.6` | Similarity (0-1) at which start_work lists a memory, doc or decision as connected to the work (default 0.6) | work.py |
 | `COMMONS_REQUIRE_KEYS` | `1` | HTTP: require an agent key/OAuth token on every request (`0` = local dev only) | cli.py, expose.py, server.py |
@@ -130,6 +132,9 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_SQLITE_READERS` | `0` | Set to 1 to give each worker thread its own SQLite read connection (parallel reads under WAL). Default 0: reads share the writer connection; on an oversubscribed 8-core Mac the per-thread readers measured slower, so it stays opt-in until measured on your host | store.py |
 | `COMMONS_SQLITE_VEC` | — | Set to 1 (with the `[vec]` extra, included in the Docker image) to run vector search inside SQLite with sqlite-vec instead of a numpy matrix held in memory: about 74% less memory at 50k memories, but the vector scan is roughly 20x slower (90-110 ms vs 5 ms at 50k). For small machines; off by default | store.py |
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
+| `COMMONS_STILL_NEEDED_AFTER` | `86400` | Seconds a job may wait before a claim on it first asks the agent that posted it whether it is still needed; default 86400 | orchestrator.py |
+| `COMMONS_STILL_NEEDED_WAIT` | `90` | Seconds a claim waits for the poster's answer to "still needed?" (a later no still cancels the job); default 90 | orchestrator.py |
+| `COMMONS_THREADS` | `64` | Worker threads for sync tool calls and long-polls on the HTTP hub (the default executor is only cpus+4); default 64 | server.py |
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |
 | `COMMONS_TOOLS` | — | Which tools MCP clients list: `core` (default, ~20 routine tools plus `tools`/`call` to reach the rest), `all`, or `core,name,...`. Per-agent: `commons agent tools NAME PROFILE`; per-connection: `?tools=` on the MCP URL | cli_v7.py, toolprofile.py |

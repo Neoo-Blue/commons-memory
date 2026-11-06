@@ -215,8 +215,8 @@ class KB:
         return dict(out)
 
     # ---------------------------------------------------------------- build
-    def build(self, bucket: str) -> dict:
-        items = self._items(bucket)
+    def build(self, bucket: str, items: list[dict] | None = None) -> dict:
+        items = self._items(bucket) if items is None else items
         pid = None if bucket.startswith("misc") else self.s.project_id(bucket)
         pages = {}
         for sec in SECTIONS:
@@ -232,9 +232,17 @@ class KB:
                               "DO UPDATE SET dirty=0, built_at=excluded.built_at", (bucket, now(), now()))
         built = [bucket]
         if bucket == "misc":
-            for topic in self.misc_topics(items):
+            byid = {i["id"]: i for i in items}
+            for topic, ids in self.misc_topics(items).items():  # each topic from this pass's notes, not a re-read
                 if topic != "general":
-                    built += self.build(f"misc/{topic}")["buckets"]
+                    built += self.build(f"misc/{topic}", [byid[i] for i in ids if i in byid])["buckets"]
+            # Topics come and go as notes are clustered again. A gone topic's page and dirty row must go too: a dirty
+            # row nothing rebuilds sent every refresh back here, and that loop pinned a NAS core for 24 days.
+            keep = built[1:]
+            ph = ",".join("?" * len(keep)) or "''"
+            with self.s.lock:
+                for tbl in ("kb_pages", "kb_state"):
+                    self.s.db.execute(f"DELETE FROM {tbl} WHERE bucket LIKE 'misc/%' AND bucket NOT IN ({ph})", keep)
         return {"buckets": built, "items": len(items)}
 
     def _llm(self, bucket, sec, content, cites):
@@ -269,14 +277,18 @@ class KB:
         return {"built": built}
 
     def refresh_dirty(self, force: bool = False) -> list[str]:
-        out = []
+        todo: list[str] = []
         for r in self.s.q("SELECT * FROM kb_state WHERE dirty=1"):
-            if force or due(r):
-                b = r["bucket"]
-                if b.startswith("misc/"):
-                    b = "misc"
-                if b == "misc" or self.s.q("SELECT 1 FROM projects WHERE name=?", (b,)):
-                    out += self.build(b)["buckets"]
+            if not (force or due(r)):
+                continue
+            b = "misc" if r["bucket"].startswith("misc/") else r["bucket"]
+            if b != "misc" and not self.s.q("SELECT 1 FROM projects WHERE name=?", (b,)):
+                self.s.x("DELETE FROM kb_state WHERE bucket=?", (b,))  # the project is gone: nothing will ever clean it
+            elif b not in todo:
+                todo.append(b)
+        out = []
+        for b in todo:  # once each: every misc/<topic> row is rebuilt by one misc pass
+            out += self.build(b)["buckets"]
         return out
 
     def _ensure(self, bucket: str) -> bool:

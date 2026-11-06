@@ -427,14 +427,37 @@ def judge(s: Store, agent_id: str, cred: dict, method: str, url: str, justificat
 
 def decide(s: Store, agent_id: str, state: str, scope: str, risk: str = "normal", audit_ref: str = "") -> dict:
     """The decision chain on any described action (credential use, an upstream MCP tool call): the first judge that
-    answers decides, risky writes go to the user, and the user is always the last stop."""
+    answers decides, risky writes go to the user, and the user is always the last stop.
+
+    Setup's approve-everything means the user is never asked: what would have gone to them is allowed. The judges still
+    screen every call, so a call with no sound reason, or a destructive change nobody asked for, is still refused."""
+    from . import settings
+    auto = bool(settings.get(s, "auto_approve_all"))
+    r = _decide(s, agent_id, state, scope, risk, audit_ref, auto)
+    if not auto or r["verdict"] != "ask_user":
+        return r
+    sc = r.get("scores") or {}
+    if not sc:  # nobody screened it (an expired TypeSafe key looks just like this): say so once a day
+        day = f"vault_unscreened:{int(now() // 86400)}"
+        if not s.q("SELECT 1 FROM meta WHERE key=?", (day,)):
+            s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (day, audit_ref or "?"))
+            from .escalation import notify
+            notify(s, "Credential calls are going through unscreened", "Approve-everything is on and no judge in your "
+                   "decision chain answered (is the TypeSafe key still valid?), so key uses are allowed without a "
+                   "check. Setup > Decision chain shows each judge.", target="vault")
+    if scope == "write" and sc.get("destructive", 0) >= 0.9 and sc.get("user_backed", 1) < 0.2:
+        return r | {"verdict": "deny", "reason": "a destructive change the user's requests don't cover: approve-everything "
+                    "doesn't reach that. Quote the user's own words asking for it, or ask them first"}
+    return r | {"verdict": "allow", "via": r.get("via") or "user",
+                "reason": "approve-everything is on (your choice on the Setup page)" + ("; the judge found nothing wrong"
+                                                                                        if sc else "; no judge answered")}
+
+
+def _decide(s: Store, agent_id: str, state: str, scope: str, risk: str, audit_ref: str, auto: bool) -> dict:
     cred = {"name": audit_ref, "risk": risk}
     qs = QUESTIONS if scope == "write" else {"legit": QUESTIONS["legit"]}
     scores, via = None, None
     from . import settings, typesafe
-    if settings.get(s, "auto_approve_all"):  # the user's choice on Setup, at their own risk; still logged and scoped
-        return {"verdict": "allow", "scope": scope, "scores": {}, "via": "user",
-                "reason": "approve-everything is on (your choice on the Setup page)"}
     from .providers import ProviderLayer
     llm_prompt = (state + "\n\nFor each question give the probability (0-1) that the answer is yes, as JSON with these "
                   "keys only:\n" + json.dumps(qs))
@@ -444,6 +467,8 @@ def decide(s: Store, agent_id: str, state: str, scope: str, risk: str = "normal"
                     "reason": "your decision chain hands this to you"}
         try:
             if judge_.startswith("agent:"):
+                if auto:  # nobody will be asked anyway: don't hold the call up to 90 s waiting on a peer
+                    continue
                 for judge_id in _agent_judges(s, judge_, agent_id)[:2]:  # a live agent other than the one asking
                     scores = ask_agent(s, judge_id, agent_id, state, qs)
                     if scores is not None:
@@ -570,6 +595,9 @@ def _grant(s: Store, agent_id: str, cred: str, method: str, url: str) -> dict | 
 def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_type: str = "", timeout: float = 30) -> dict:
     """Make the HTTP call with the key attached; return the status and a scrubbed body."""
     value, auth = _value(s, cred["name"]), json.loads(cred["auth"])
+    if "\n" in value or "\r" in value:  # http.client quotes a bad header value in its error: that leaked a whole key
+        raise CommonsError(f"{cred['name']} has line breaks, so it can't be sent as a key; nothing was sent. A "
+                           "service-account JSON file needs a signed token exchange, done by the service that owns it")
     headers = {"Accept": "application/json", "User-Agent": "commons-vault"} | (auth.get("extra_headers") or {})
     if auth.get("query"):
         url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode({auth["query"]: value})
@@ -588,8 +616,9 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
             status, raw = r.status, r.read(400_000)
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read(20_000)
-    except (urllib.error.URLError, OSError) as e:
-        return {"status": 0, "error": str(getattr(e, "reason", e)).replace(value, "[credential]")[:300]}
+    except Exception as e:  # noqa: BLE001 - any failure, but its text must never carry the key
+        from .redact import redact
+        return {"status": 0, "error": redact(str(getattr(e, "reason", e)).replace(value, "[credential]"))[0][:300]}
     from .redact import redact
     text = raw.decode("utf-8", "replace").replace(value, "[credential]")
     return {"status": status, "body": redact(text)[0][:60_000], "truncated": len(raw) >= 400_000}
