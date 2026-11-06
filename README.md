@@ -329,5 +329,6 @@ History: [CHANGELOG.md](CHANGELOG.md).
 git clone https://github.com/Neoo-Blue/commons-memory && cd commons-memory
 uv venv && uv pip install -e ".[dev,all]" && uv run pytest -q
 python scripts/gen_env_reference.py      # after adding a COMMONS_* setting
+scripts/release-local.sh v0.37.1         # after pushing a tag: build on your own box, publish the GitHub release
 ```
 MIT licensed.
