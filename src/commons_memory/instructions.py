@@ -10,6 +10,7 @@ playbook on its first pickup / turn / msg_recv, and again whenever it changes.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -48,7 +49,7 @@ SKILL_DESC = ("Commons, the shared memory, task and credential hub for all of th
 
 
 def master(url: str | None = None, agent: str | None = None) -> str:
-    from .server import INSTRUCTIONS
+    from .playbook import INSTRUCTIONS
     where = (f" at {url}" if url else "") + (f" as agent `{agent}`" if agent else "")
     return ("## Commons: the shared memory, task and credential hub\n"
             f"This AI is connected to Commons{where}. Authenticate with the key in your MCP settings; never print or "
@@ -67,33 +68,72 @@ def _render(path: str, text: str) -> str:
     return f"{BEGIN}\n{text}\n{END}"
 
 
+@contextlib.contextmanager
+def _locked():
+    """One writer of the instruction files at a time on this machine (hooks of several sessions start together)."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: no flock; the atomic replace still keeps every reader safe
+        yield
+        return
+    lock = Path(os.environ.get("COMMONS_HOME", Path.home() / ".commons")) / "instructions.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _read(path: Path) -> str:
+    """The file as it is, its line endings (CRLF too) untouched."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def _write(path: Path, text: str) -> None:
+    """Atomic: a temp file beside the real file (a symlinked CLAUDE.md stays a symlink), then os.replace, so a session
+    reading it at that moment sees the old file or the new one, never an empty or partial one."""
+    real = path.resolve()
+    real.parent.mkdir(parents=True, exist_ok=True)
+    tmp = real.with_name(f".{real.name}.{os.getpid()}.commons-tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    with contextlib.suppress(OSError):
+        shutil.copymode(real, tmp)
+    os.replace(tmp, real)
+
+
 def _apply(path: Path, block: str | None, whole: bool, begin: str = BEGIN, end: str = END) -> str:
     """block=None removes. whole=True: the file is ours entirely (skill, .mdc). begin/end mark the block (the playbook
-    by default)."""
-    old = path.read_text() if path.exists() else ""
-    if whole:
+    by default), each on a line of its own. Locked, atomic, and in the file's own line endings."""
+    with _locked():
+        old = _read(path) if path.exists() else ""
+        if whole:
+            if block is None:
+                if path.exists():
+                    path.unlink()
+                    return "removed"
+                return "absent"
+            _write(path, block)
+            return "updated" if old else "installed"
+        nl = "\r\n" if "\r\n" in old else "\n"
+        pat = re.compile(rf"^{re.escape(begin)}[ \t]*\r?\n.*?^{re.escape(end)}[ \t]*(?=\r?$)", re.S | re.M)
         if block is None:
-            if path.exists():
-                path.unlink()
-                return "removed"
-            return "absent"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(block)
-        return "updated" if old else "installed"
-    pat = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.S)
-    if block is None:
-        if not pat.search(old):
-            return "absent"
-        path.write_text(pat.sub("", old).rstrip() + "\n")
-        return "removed"
-    if old and not path.with_name(path.name + ".bak-commons").exists():
-        shutil.copy2(path, path.with_name(path.name + ".bak-commons"))
-    new = pat.sub(lambda _m: block, old) if pat.search(old) else (old.rstrip() + "\n\n" + block + "\n" if old else block + "\n")
-    if new == old:
-        return "unchanged"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new)
-    return "updated" if pat.search(old) else "installed"
+            if not pat.search(old):
+                return "absent"
+            _write(path, pat.sub("", old).rstrip() + nl)
+            return "removed"
+        block = block.replace("\r\n", "\n").replace("\n", nl)
+        if old and not path.with_name(path.name + ".bak-commons").exists():
+            shutil.copy2(path, path.with_name(path.name + ".bak-commons"))
+        new = pat.sub(lambda _m: block, old, count=1) if pat.search(old) else (
+            old.rstrip() + nl + nl + block + nl if old else block + nl)
+        if new == old:
+            return "unchanged"
+        _write(path, new)
+        return "updated" if pat.search(old) else "installed"
 
 
 def install(harness: str = "all", url: str | None = None, agent: str | None = None, uninstall: bool = False) -> list[dict]:
@@ -120,17 +160,17 @@ def install(harness: str = "all", url: str | None = None, agent: str | None = No
 
 
 def canon_core(text: str | None) -> list[str]:
-    """Write the Canon core block (text, at most 20 lines) into each always-loaded file that carries the Commons
-    playbook (appended once, then updated in place), so sub-agents, peers and the woken Claude start with it too; None
-    removes it. Nothing outside the block's markers changes, and no value can close the block early. Returns the files
-    changed."""
+    """Write the Canon core block (text, at most 20 lines: canoncache.block, what the owner set) into each
+    always-loaded file that carries the Commons playbook (appended once, then updated in place), so sub-agents, peers
+    and the woken Claude start with it too; None removes it. Nothing outside the block's markers changes, and no value
+    can forge a marker: < and > in the text become ‹ and ›. Returns the files changed."""
     block = None if text is None else "\n".join(
-        [CANON_BEGIN] + [x.replace("<!--", "") for x in text.splitlines()[:20]] + [CANON_END])
+        [CANON_BEGIN] + [x.replace("<", "‹").replace(">", "›") for x in text.splitlines()[:20]] + [CANON_END])
     out = []
     for p in CANON_FILES:
         path = Path(os.path.expanduser(p))
         try:
-            if block is not None and BEGIN not in path.read_text():
+            if block is not None and BEGIN not in _read(path):
                 continue
         except OSError:
             continue
@@ -142,7 +182,7 @@ def canon_core(text: str | None) -> list[str]:
 def refresh() -> list[str]:
     """Bring every already-installed Commons block up to date with the current playbook (never installs new ones).
     The session-start hook calls it, so an AI's always-loaded instructions don't go stale after an upgrade."""
-    from .server import INSTRUCTIONS
+    from .playbook import INSTRUCTIONS
     out, seen = [], set()
     for h, paths in TARGETS.items():
         for p in paths:
@@ -150,7 +190,7 @@ def refresh() -> list[str]:
             if path in seen or not path.exists():
                 continue
             seen.add(path)
-            text = path.read_text()
+            text = _read(path)
             if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(WHOLE)):
                 continue
             head = re.search(r"connected to Commons( at (\S+))?( as agent `([^`]+)`)?", text)

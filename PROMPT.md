@@ -69,7 +69,8 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
    company and vendor:<name>, on one timeline whatever your project.
    BRIEF: before work on a product, and after any compaction, read canon(product) and git fetch.
    WRITE FIRST: record_decision(what, why, sets=[{subject, predicate, value}], supersedes=[ids]) before you
-   announce a decision, and supersede the related notes it returns. Cite ids; never restate values in prose.
+   announce a decision, and supersede the related notes it returns. A Canon fact is corrected with sets or
+   fact_set, never superseded. Cite ids; never restate values in prose.
    ASK BY ITEM: one line per item, only for money, public promises or legal text, reversing a recorded decision,
    or irreversible steps. A range approval like "1-2 ok" never counts for those.
    FINISH: grep for the old value and walk work:<key>.places.
@@ -80,7 +81,7 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
    do_not_merge, focus, rules) change only by record_decision(sets=...) quoting the owner; fact_set refuses them,
    and their conflicts wait for the owner. Set any other fact with evidence.
 Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
-Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them.
+Your client lists the core tools; tools(query) finds the other ~150 and call(tool, args) runs any of them.
 ```
 
 ## Minimal version (tight custom-instruction boxes)

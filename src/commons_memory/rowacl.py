@@ -51,6 +51,10 @@ def restrict(s: Store, principal: str | None, ref: str, agents: list[str], perm:
         raise CommonsError("perm is read or write")
     if not _exists(s, ref):
         raise CommonsError(f"unknown id {ref}")
+    from .canon import is_canon
+    rows = s.q("SELECT kind, subject FROM items WHERE id=?", (ref,))
+    if any(r["kind"] == "fact" and is_canon(r["subject"]) for r in rows):
+        raise CommonsError(f"{ref} is a Canon fact: Canon is one timeline every agent reads, so it can't be restricted")
     if not (_admin(s, principal) or _author(s, ref) == principal):
         raise CommonsError("only the record's author or an admin can restrict it")
     ids = []

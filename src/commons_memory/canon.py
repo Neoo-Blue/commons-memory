@@ -2,16 +2,21 @@
 
 Four subjects sit on ONE global timeline, whatever project the writer is in (facts.py): product:<key> (what a customer
 may be told), work:<key> (internal state), company, and vendor:<name>. A new value supersedes the old one and the
-history stays. Owner-only predicates (company.owner_only, default OWNER_ONLY) change only through
-record_decision(sets=...) or the Pulse relay (agent "pulse", carrying the owner's Pulse Studio edits); any agent may
-set the others, with evidence. Copies (kits, caches, peer briefs, llms.txt, phone prompts) are rendered from Canon and
-never write back. canon() renders it, changes() lists what moved, pickup() opens with it, turn() adds what changed.
+history stays. Owner-only predicates (company.owner_only, default OWNER_ONLY; company.owner_only and
+company.precedence always) change only through record_decision(sets=...) quoting the owner (the Pulse relay records
+the owner's Pulse Studio edits that way too); any agent may set the others, with evidence. Predicates have one form
+(lowercase, a-z 0-9 _), values say something, and a Canon fact is never deleted, restricted, filed in a project or
+retired by a note: it is corrected by a newer value, or ended by fact_invalidate. Copies (kits, caches, peer briefs,
+llms.txt, phone prompts) are rendered from Canon and never write back. canon() renders it, changes() lists what moved,
+pickup() opens with it, turn() adds what changed.
 """
 from __future__ import annotations
 
 import json
+import logging
+import re
 
-from .ids import iso, now
+from .ids import iso, new_id, now
 from .store import CommonsError, _parse_time
 
 PRODUCT = ("offer", "prices", "setup_fee", "trial", "refund", "partner_terms", "platforms", "features", "promises",
@@ -24,9 +29,12 @@ OWNER_ONLY = ("product.prices", "product.setup_fee", "product.trial", "product.r
 PRECEDENCE = ("1 the owner's words in the current conversation; 2 Canon; 3 the system of record in its domain (Stripe "
               "for charged prices, origin/main for what shipped): a disagreement with Canon is drift to report, never "
               "a silent pick; 4 live pages, Pulse kits and guides; 5 repo docs; 6 notes, memory files, handoffs and chat")
-RELAY = "pulse"             # the Pulse relay, carrying the owner's Pulse Studio edits
+ALWAYS_OWNER = ("company.owner_only", "company.precedence")  # owner-only whatever the stored list says
 TRANSIENT = ("this_week",)  # Pulse's own weekly note: on the global timeline, but not part of the record or its changes
+PREDICATE = re.compile(r"[a-z][a-z0-9_]*")
 WEEK = 7 * 86400
+LAG = 30.0  # a write commits after its created_at (embedding, lock waits): news() holds its watermark this far back
+SKEW = 60.0  # a client clock this far ahead still counts as now
 
 
 def kind_of(subject) -> str | None:
@@ -53,19 +61,57 @@ def parse(v):
     return v
 
 
+def _num(v):
+    """Numbers in one form (19.0 is 19), all the way down."""
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, list):
+        return [_num(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _num(x) for k, x in v.items()}
+    return v
+
+
 def dump(v) -> str:
-    """One stored form per value, so equal values compare equal."""
+    """One stored form per value (the order as given, for display)."""
     v = parse(v)
-    return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+    return v if isinstance(v, str) else json.dumps(_num(v), ensure_ascii=False)
+
+
+def same(a, b) -> bool:
+    """Equal values whatever their form: JSON text or a list, keys in any order, 19 or 19.0."""
+    def key(v):
+        return json.dumps(_num(parse(v)), sort_keys=True, ensure_ascii=False)
+    return key(a) == key(b)
+
+
+def blank(v) -> bool:
+    """A value that says nothing: none, text that strips to nothing, an empty object. An empty list says something
+    (Canon holds that nothing is listed)."""
+    v = parse(v)
+    return v is None or (isinstance(v, str) and not v.strip()) or v == {}
+
+
+def predicate_of(subject, predicate) -> str:
+    """A Canon predicate in its one form (stripped, lowercase), or CommonsError when it has any other character, so
+    'Prices', 'prices ' and a zero-width variant never stand beside 'prices'. Other subjects keep theirs as given."""
+    if not is_canon(subject):
+        return predicate
+    p = str(predicate or "").strip().casefold()
+    if not PREDICATE.fullmatch(p):
+        raise CommonsError(f"{subject}: a Canon predicate is lowercase letters, digits and _ (like setup_fee), "
+                           f"not {predicate!r}")
+    return p
 
 
 def show(v) -> str:
+    """A value on one line (whitespace runs, newlines included, become one space: no value forges a line)."""
     v = parse(v)
     if isinstance(v, list):
         return "; ".join(show(x) for x in v)
     if isinstance(v, dict):
-        return "; ".join(f"{k} = {show(x)}" for k, x in v.items())
-    return "" if v is None else str(v)
+        return "; ".join(f"{' '.join(str(k).split())} = {show(x)}" for k, x in v.items())
+    return "" if v is None else " ".join(str(v).split())
 
 
 def _clip(t: str, n: int) -> str:
@@ -83,13 +129,24 @@ def _name(s, agent_id) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- reading
+def _canon_rows(s) -> str:
+    """WHERE for Canon facts that have a predicate. On SQLite as ranges on items_fact (subject, predicate): LIKE ignores
+    case there, so it can't use that index, and kind='fact' alone reads every fact ever written (+kind keeps the
+    planner off items_kind). Postgres keeps LIKE (a range would follow the collation's order). is_canon() still
+    checks each row."""
+    kinds = ("company", "product", "work", "vendor")
+    if getattr(s, "dialect", "sqlite") == "sqlite":
+        subj = " OR ".join(["subject='company'"] + [f"(subject>='{k}:' AND subject<'{k};')" for k in kinds])
+        return f"+kind='fact' AND ({subj}) AND predicate IS NOT NULL AND predicate<>''"
+    subj = " OR ".join(["subject='company'"] + [f"subject LIKE '{k}:%'" for k in kinds])
+    return f"kind='fact' AND ({subj}) AND predicate IS NOT NULL AND predicate<>''"
+
+
 def _data(s) -> dict[str, dict]:
     """{subject: {predicate: value}} of the current Canon facts (a later row wins)."""
     rows = [dict(r) for r in s.q(
-        "SELECT id, subject, predicate, value FROM items WHERE kind='fact' AND superseded_by IS NULL AND "
-        "(valid_to IS NULL OR valid_to>?) AND (subject='company' OR subject LIKE 'company:%' OR subject LIKE "
-        "'product:%' OR subject LIKE 'work:%' OR subject LIKE 'vendor:%') ORDER BY COALESCE(valid_from, created_at)",
-        (now(),))]
+        f"SELECT id, subject, predicate, value FROM items WHERE {_canon_rows(s)} AND superseded_by IS NULL AND "
+        "(valid_to IS NULL OR valid_to>?) ORDER BY COALESCE(valid_from, created_at)", (now(),))]
     hidden = s.hidden_ids([r["id"] for r in rows])
     out: dict[str, dict] = {}
     for r in rows:
@@ -103,7 +160,8 @@ def _keys(data) -> list[str]:
 
 
 def owner_only(s, data: dict | None = None) -> list[str]:
-    """company.owner_only when the owner set it, else the default list."""
+    """company.owner_only when the owner set it, else the default list; company.owner_only and company.precedence
+    always, so no narrowing of the list ever lets an agent rewrite it."""
     if data is None:
         r = s.q("SELECT value FROM items WHERE kind='fact' AND subject='company' AND predicate='owner_only' AND "
                 "superseded_by IS NULL AND (valid_to IS NULL OR valid_to>?) ORDER BY COALESCE(valid_from, created_at) "
@@ -111,7 +169,8 @@ def owner_only(s, data: dict | None = None) -> list[str]:
         v = parse(r[0]["value"]) if r else None
     else:
         v = data.get("company", {}).get("owner_only")
-    return [str(x) for x in v] if isinstance(v, list) else list(OWNER_ONLY)
+    oo = [str(x) for x in v] if isinstance(v, list) else list(OWNER_ONLY)
+    return oo + [x for x in ALWAYS_OWNER if x not in oo]
 
 
 _CONFLICTS = ("SELECT c.id, c.a, c.b, c.subject, c.predicate, a.kind AS ka, a.subject AS sa, a.predicate AS pa, "
@@ -153,25 +212,27 @@ def _repo_key(data, repo) -> str | None:
 
 # ---------------------------------------------------------------------------------------------- rendering
 def _order(d: dict, first) -> list[str]:
-    return [k for k in first if k in d] + sorted(k for k in d if k not in first)
+    return [k for k in first if k in d] + sorted((k for k in d if k not in first), key=str)
 
 
 def core(data, oo) -> str:
-    """The company core, at most 20 lines: precedence and the owner-only list always, then the company facts."""
+    """The company core, at most 20 lines: precedence and the owner-only list always, then the company facts, each
+    clipped to 240 characters (one long value never crowds out the rest)."""
     c = data.get("company", {})
     lines = ["COMPANY CORE (Canon, the current truth: it outranks notes, docs and pages)",
              f"- precedence: {show(c.get('precedence') or PRECEDENCE)}",
-             f"- owner-only, changed only by record_decision(sets=...) or the Pulse relay: {', '.join(oo) or 'none'}"]
-    lines += [f"- {p}: {show(c[p])}" for p in ("focus", "agents") if c.get(p) not in (None, "")]
+             f"- owner-only, changed only by record_decision(sets=...) quoting the owner: {', '.join(oo) or 'none'}"]
+    facts = [f"- {p}: {show(c[p])}" for p in ("focus", "agents") if c.get(p) not in (None, "")]
     rules = c.get("standing_rules")
     if isinstance(rules, list):
-        lines += ["- standing rules:"] + [f"  - {show(x)}" for x in rules]
+        facts += ["- standing rules:"] + [f"  - {show(x)}" for x in rules]
     elif rules:
-        lines.append(f"- standing rules: {show(rules)}")
-    lines += [f"- {p}: {show(v)}" for p, v in sorted(c.items())
+        facts.append(f"- standing rules: {show(rules)}")
+    facts += [f"- {p}: {show(v)}" for p, v in sorted(c.items(), key=lambda kv: str(kv[0]))
               if p not in ("precedence", "owner_only", "focus", "agents", "standing_rules")]
-    lines += [f"- {sub}.{p}: {show(v)}" for sub in sorted(data) if sub.startswith("company:")
-              for p, v in sorted(data[sub].items())]
+    facts += [f"- {sub}.{p}: {show(v)}" for sub in sorted(data) if sub.startswith("company:")
+              for p, v in sorted(data[sub].items(), key=lambda kv: str(kv[0]))]
+    lines += [_clip(x, 240) for x in facts]
     if len(lines) > 20:
         lines = lines[:19] + ["- ... the rest: fact_get('company')"]
     return "\n".join(lines)
@@ -209,39 +270,66 @@ def _since(v) -> float:
         raise CommonsError(f"since: an ISO time, epoch ms or 7d/12h, not {v!r}") from None
 
 
+def _meta(r) -> dict:
+    try:
+        m = json.loads(r["meta"] or "{}")
+    except (ValueError, TypeError):
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
 def changes(s, since=None, keys: list[str] | None = None, until: float | None = None) -> list[dict]:
-    """Canon changes after `since` (default: the last 7 days), oldest first: {at, subject, predicate, old, new, by,
-    decision}. keys narrows the products (company and vendors always come); a value set again unchanged is no change."""
-    rows = [dict(r) for r in s.q("SELECT id, subject, predicate, value, agent_id, meta, created_at FROM items WHERE "
-                                 "kind='fact' AND created_at>? AND created_at<=? ORDER BY created_at",
-                                 (_since(since), until or now()))]
-    hidden = s.hidden_ids([r["id"] for r in rows])
+    """Canon changes after `since` (default: the last 7 days), oldest first: {id, at, subject, predicate, old, new, by,
+    decision}; an ended value (fact_invalidate) is old -> None. keys narrows the products (company and vendors always
+    come). No change: a value set again unchanged (in any form), and a backfill (a row that was not current when it
+    was written)."""
+    lo, hi = _since(since), until or now()
+    cols = "id, subject, predicate, value, agent_id, meta, created_at, valid_to, superseded_by"
+    rows = [dict(r) for r in s.q(f"SELECT {cols} FROM items WHERE kind='fact' AND created_at>? AND created_at<=? "
+                                 "ORDER BY created_at", (lo, hi))]
+    ended = [dict(r) for r in s.q(f"SELECT {cols} FROM items WHERE kind='fact' AND superseded_by='invalidated' AND "
+                                  "updated_at>?", (lo,))]  # when it ended is in meta (updated_at may move later)
+    hidden = s.hidden_ids([r["id"] for r in rows + ended])
+
+    def wanted(r) -> bool:
+        k = kind_of(r["subject"])
+        return bool(k and r["predicate"] and r["predicate"] not in TRANSIENT and r["id"] not in hidden and (
+            keys is None or k not in ("product", "work") or r["subject"].split(":", 1)[1] in keys))
     out = []
     for r in rows:
-        k = kind_of(r["subject"])
-        if not k or r["predicate"] in TRANSIENT or r["id"] in hidden or (
-                keys is not None and k in ("product", "work") and r["subject"].split(":", 1)[1] not in keys):
-            continue
+        if not wanted(r) or (r["valid_to"] is not None and r["valid_to"] <= r["created_at"] and
+                             r["superseded_by"] != "invalidated"):
+            continue  # a backfill slots in before a later value: it was never the current one
         old = s.q("SELECT i.value FROM relations x JOIN items i ON i.id=x.dst WHERE x.src=? AND x.type='supersedes' "
                   "ORDER BY COALESCE(i.valid_from, i.created_at) DESC LIMIT 1", (r["id"],))
         old = old[0]["value"] if old else None
-        if old is not None and dump(old) == dump(r["value"]):
+        if old is not None and same(old, r["value"]):
             continue
-        out.append({"at": iso(r["created_at"]), "subject": r["subject"], "predicate": r["predicate"],
-                    "old": parse(old), "new": parse(r["value"]), "by": _name(s, r["agent_id"]) or None,
-                    "decision": json.loads(r["meta"] or "{}").get("decision")})
-    return out
+        out.append((r["created_at"], {"id": r["id"], "at": iso(r["created_at"]), "subject": r["subject"],
+                                      "predicate": r["predicate"], "old": parse(old), "new": parse(r["value"]),
+                                      "by": _name(s, r["agent_id"]) or None, "decision": _meta(r).get("decision")}))
+    for r in ended:
+        e = _meta(r).get("ended")
+        if not wanted(r) or not isinstance(e, dict) or not isinstance(e.get("at"), (int, float)) or \
+                not lo < e["at"] <= hi:
+            continue
+        out.append((e["at"], {"id": r["id"], "at": iso(e["at"]), "subject": r["subject"], "predicate": r["predicate"],
+                              "old": parse(r["value"]), "new": None, "by": _name(s, e.get("by")) or None,
+                              "decision": None}))
+    return [c for _, c in sorted(out, key=lambda x: x[0])]
 
 
 def canon(s, product: str | None = None, repo: str | None = None) -> dict:
-    """The contract's canon(): core, products, card, changes (7 days), open_conflicts, generated_at; plus vendors, and
-    `product` (the key it resolved, None when the repo matches no work:<key>.repos) when product or repo is given."""
+    """The contract's canon(): core, products, card, changes (7 days), open_conflicts, generated_at; plus company (its
+    facts), owner_only (the list in force), vendors, and `product` (the key it resolved, None when the repo matches no
+    work:<key>.repos) when product or repo is given."""
     data = _data(s)
     oo = owner_only(s, data)
     prods = _products(data)
     key = (product or "").strip().lower().removeprefix("product:") or (_repo_key(data, repo) if repo else None)
     out = {"core": core(data, oo),
            "products": {key: prods.get(key, {"product": {}, "work": {}})} if key else prods,
+           "company": data.get("company", {}), "owner_only": oo,
            "vendors": {sub.split(":", 1)[1]: v for sub, v in data.items() if kind_of(sub) == "vendor"},
            "card": card(key, prods.get(key)) if key else "\n".join(one_liner(k, e) for k, e in prods.items()),
            "changes": changes(s, keys=[key] if key else None), "open_conflicts": open_conflicts(s, oo)[0],
@@ -295,43 +383,67 @@ def facts_section(s, agent_id: str, project: str | None = None, cards: int = 3) 
 
 def _line(c: dict) -> str:
     old = "(none)" if c["old"] is None else _clip(show(c["old"]), 80)
-    return (f"{c['at'][:16]} {c['subject']}.{c['predicate']}: {old} -> {_clip(show(c['new']), 120)} "
-            f"(by {c['by'] or '?'}{', ' + c['decision'] if c['decision'] else ''})")
+    new = "(ended)" if c["new"] is None else _clip(show(c["new"]), 120)
+    return (f"{c['at'][:16]} {c['subject']}.{c['predicate']}: {old} -> {new} "
+            f"(by {c['by'] or '?'}{', ' + c['decision'] if c.get('decision') else ''})")
+
+
+def before(at: str) -> str:
+    """A since= that still lists the change stamped `at` (changes() lists what came after since; times are seconds)."""
+    return iso(_parse_time(at) - 1)
+
+
+def _event(c: dict) -> str:
+    return f"{c.get('id')}|{'ended' if c.get('new') is None else 'set'}"
 
 
 def news(s, agent_id: str, limit: int = 10) -> str:
     """Canon changes since this agent's last turn, each shown once (turn() appends them). The first turn shows the
-    last 7 days."""
+    last 7 days. The watermark stays LAG seconds behind now, so a write that commits after it was stamped is still
+    seen, and the changes of that window already shown are kept by id and not shown again."""
     key = f"canon_seen:{agent_id}"
     r = s.q("SELECT value FROM meta WHERE key=?", (key,))
-    t = now()
-    ch = changes(s, float(r[0]["value"]) if r else None, until=t)
-    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(t)))
+    try:
+        prev = json.loads(r[0]["value"]) if r else {}
+    except (ValueError, TypeError):
+        prev = {}
+    prev = prev if isinstance(prev, dict) else {"t": prev} if isinstance(prev, (int, float)) else {}
+    t, seen = now(), set(prev.get("ids") or [])
+    every = changes(s, prev.get("t"), until=t)
+    ch = [c for c in every if _event(c) not in seen]
+    recent = sorted({_event(c) for c in every if _parse_time(c["at"]) >= t - LAG - 1})
+    s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps({"t": t - LAG, "ids": recent})))
     if not ch:
         return ""
     lines = ["CANON CHANGES since your last turn (cite ids, don't restate values; canon(product) for the card):"]
     lines += [f"- {_line(c)}" for c in ch[-limit:]]
     if len(ch) > limit:
-        lines.append(f"- and {len(ch) - limit} earlier ones: changes(since='{ch[0]['at']}')")
+        lines.append(f"- and {len(ch) - limit} earlier ones: changes(since='{before(ch[0]['at'])}')")
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------------------------- writing
-def guard(s, agent_id, subject, predicate, evidence=None) -> None:
-    """An agent writing Canon: owner-only predicates are refused, and when `evidence` is checked (not None), every other
-    predicate needs some. agent_id None is the local owner (CLI); the Pulse relay carries the owner's own edits."""
+def guard(s, agent_id, subject, predicate, evidence=None) -> str:
+    """An agent writing Canon (fact_set, fact_invalidate): returns the predicate in its one form. Owner-only predicates
+    are refused, whatever the agent is called: the owner's words arrive as record_decision(sets=...), the Pulse
+    relay's included. When `evidence` is checked (not None) every other predicate needs some, but Pulse's transient
+    this_week. agent_id None is the local owner (CLI)."""
     kind = kind_of(subject)
-    if not kind or not agent_id or _name(s, agent_id).lower() == RELAY:
-        return
+    if not kind:
+        return predicate
+    predicate = predicate_of(subject, predicate)
+    if not agent_id:
+        return predicate
     if f"{kind}.{predicate}" in owner_only(s):
         raise CommonsError(
             f"{subject}.{predicate} is owner-only (company.owner_only): only the owner changes it. Ask the owner, one "
             f"line for this item, then record their words: record_decision(what, why=<the owner's words>, "
             f"sets=[{{\"subject\": \"{subject}\", \"predicate\": \"{predicate}\", \"value\": ...}}], supersedes=[ids "
-            "of notes it retires]). The owner's Pulse Studio edits arrive through the Pulse relay.")
-    if evidence is not None and not str(evidence).strip():
+            "of notes it retires]). The Pulse relay records the owner's Pulse Studio edits the same way.")
+    if evidence is not None and predicate not in TRANSIENT and not str(evidence).strip():
         raise CommonsError(f"{subject} is Canon: pass evidence (a commit, release, URL or item id showing that "
                            f"{predicate} is true now)")
+    return predicate
 
 
 def check_resolve(s, conflict_id: str, keep_id: str) -> None:
@@ -352,31 +464,57 @@ def check_resolve(s, conflict_id: str, keep_id: str) -> None:
 
 
 def check_decision(s, sets, supersedes) -> list[dict]:
-    """Validate record_decision's sets and supersedes before anything is written."""
+    """Validate record_decision's sets and supersedes before anything is written. A set's value must say something
+    ([] does: nothing is listed); a Canon fact is never superseded by a decision: its sets correct it."""
     out = []
     for x in sets or []:
         if not isinstance(x, dict) or not str(x.get("subject") or "").strip() or \
-                not str(x.get("predicate") or "").strip() or x.get("value") in (None, ""):
-            raise CommonsError('each sets item is {"subject": "product:santa", "predicate": "prices", "value": [...]}')
-        out.append({"subject": str(x["subject"]).strip(), "predicate": str(x["predicate"]).strip(), "value": x["value"]})
+                not str(x.get("predicate") or "").strip() or blank(x.get("value")):
+            raise CommonsError('each sets item is {"subject": "product:santa", "predicate": "prices", "value": [...]}, '
+                               'with a value that says something ([] for none)')
+        sub = str(x["subject"]).strip()
+        out.append({"subject": sub, "predicate": predicate_of(sub, str(x["predicate"]).strip()), "value": x["value"]})
     for i in supersedes or []:
-        r = s.q("SELECT project_id FROM items WHERE id=?", (i,))
+        r = s.q("SELECT project_id, kind, subject FROM items WHERE id=?", (i,))
         if not r:
             raise CommonsError(f"supersedes: no item {i}")
+        if r[0]["kind"] == "fact" and is_canon(r[0]["subject"]):
+            raise CommonsError(f"supersedes: {i} is a Canon fact ({r[0]['subject']}); correct Canon with sets=[...]")
         s.check_project(r[0]["project_id"], "write")
         s._row_write(i)
     return out
 
 
-def _settle(s, rows, agent_id, decision) -> None:
-    """Mark conflicts resolved by a decision; an item stays flagged only while another conflict on it is open."""
+def check_delete(row) -> None:
+    """Canon keeps its history: no Canon fact, and no decision that set one, is ever deleted (the forget tool, the
+    dashboard, any caller)."""
+    if row["kind"] == "fact" and is_canon(row["subject"]):
+        raise CommonsError("Canon facts keep their history: correct one with fact_set(..., evidence=...), or for an "
+                           "owner-only fact record_decision(sets=[...])")
+    if row["kind"] == "decision" and any(isinstance(x, dict) and is_canon(x.get("subject"))
+                                         for x in _meta(row).get("sets") or []):
+        raise CommonsError("this decision set Canon facts, which cite it (why() explains them by it): it stays. Record "
+                           "a new decision with sets=[...] to change them")
+
+
+def _settle(s, rows, agent_id, by) -> None:
+    """Mark conflicts resolved by a decision or a corrected Canon fact (`by`); an item stays flagged only while another
+    conflict on it is open."""
     for c in rows:
         s.x("UPDATE conflicts SET status='resolved' WHERE id=?", (c["id"],))
     for i in {x for c in rows for x in (c["a"], c["b"])}:
         if not s.q("SELECT 1 FROM conflicts WHERE status='open' AND (a=? OR b=?)", (i, i)):
             s.x("UPDATE items SET conflict=0 WHERE id=?", (i,))
     if rows:
-        s.audit(agent_id, "conflict.resolve", decision, {"by_decision": decision, "conflicts": [c["id"] for c in rows]})
+        s.audit(agent_id, "conflict.resolve", by, {"by": by, "conflicts": [c["id"] for c in rows]})
+
+
+def settle_set(s, subject, predicate, closed: list[str], agent_id, by) -> None:
+    """A new current value (Canon, or one a decision set) settles the open conflicts on its subject.predicate and on
+    the values it closed."""
+    ph = ",".join("?" * len(closed)) or "NULL"
+    _settle(s, s.q(f"SELECT id, a, b FROM conflicts WHERE status='open' AND ((subject=? AND predicate=?) OR "
+                   f"a IN ({ph}) OR b IN ({ph}))", [subject, predicate] + closed + closed), agent_id, by)
 
 
 def _parts(v) -> list[str]:
@@ -391,7 +529,7 @@ def _stale(s, done: list[dict], exclude: set) -> list[str]:
     from .work import related
     out: list[str] = []
     for d in done:
-        if d["old"] is None or dump(d["old"]) == dump(d["value"]):
+        if d["old"] is None or same(d["old"], d["value"]):
             continue
         new = show(d["value"]).lower()
         parts = [p for p in _parts(d["old"]) if len(p) >= 4 and p.lower() not in new]
@@ -403,7 +541,8 @@ def _stale(s, done: list[dict], exclude: set) -> list[str]:
         for i in dict.fromkeys(hits):
             r = s.q("SELECT kind, subject, predicate, content, tags FROM items WHERE id=? AND superseded_by IS NULL", (i,))
             if not r or i in exclude or i in out or '"conversation"' in (r[0]["tags"] or "") or (
-                    r[0]["kind"] == "fact" and r[0]["subject"] == d["subject"] and r[0]["predicate"] == d["predicate"]):
+                    r[0]["kind"] == "fact" and (is_canon(r[0]["subject"]) or (  # Canon is corrected, never superseded
+                        r[0]["subject"] == d["subject"] and r[0]["predicate"] == d["predicate"]))):
                 continue
             if any(p.lower() in (r[0]["content"] or "").lower() for p in parts):
                 out.append(i)
@@ -411,20 +550,15 @@ def _stale(s, done: list[dict], exclude: set) -> list[str]:
 
 
 def apply_decision(s, decision: str, sets: list[dict], supersedes, agent_id, project) -> dict:
-    """record_decision's sets and supersedes: each set becomes the current fact (closing the old value, history kept)
-    and settles open conflicts on it; each superseded item is retired by the decision. related = notes that still
-    state an old value, for the caller to supersede."""
+    """record_decision's sets and supersedes, as check_decision passed them: each set becomes the current fact (closing
+    the old value, history kept; Facts.set settles the open conflicts on it); each superseded note is retired by the
+    decision. related() then finds the notes that still state an old value."""
     from .facts import Facts
     f, done = Facts(s), []
     for x in sets:
         r = f.set(x["subject"], x["predicate"], x["value"], project=project, agent_id=agent_id, decision=decision)
         done.append({"id": r["id"], "subject": x["subject"], "predicate": x["predicate"], "value": parse(dump(x["value"])),
                      "old": parse(r.get("old"))})
-        closed = r.get("closed") or []  # conflicts on this fact, or on the values it closed, are settled by it
-        ph = ",".join("?" * len(closed)) or "NULL"
-        _settle(s, s.q(f"SELECT id, a, b FROM conflicts WHERE status='open' AND ((subject=? AND predicate=?) OR "
-                       f"a IN ({ph}) OR b IN ({ph}))", [x["subject"], x["predicate"]] + closed + closed),
-                agent_id, decision)
     gone, t = [], now()
     for i in dict.fromkeys(supersedes or []):
         if i != decision and s.q("SELECT 1 FROM items WHERE id=? AND superseded_by IS NULL", (i,)):
@@ -436,38 +570,60 @@ def apply_decision(s, decision: str, sets: list[dict], supersedes, agent_id, pro
         ph = ",".join("?" * len(gone))
         _settle(s, s.q(f"SELECT id, a, b FROM conflicts WHERE status='open' AND (a IN ({ph}) OR b IN ({ph}))",
                        gone + gone), agent_id, decision)
-    return {"set": done, "superseded": gone,
-            "related": _stale(s, done, {decision, *gone, *(d["id"] for d in done)})}
+    return {"set": done, "superseded": gone}
+
+
+def related(s, decision: str, out: dict) -> list[str]:
+    """Notes that still state a value the decision replaced, for the caller to supersede (run after the commit: it
+    searches)."""
+    done = out.get("set") or []
+    return _stale(s, done, {decision, *(out.get("superseded") or []), *(d["id"] for d in done)})
 
 
 def migrate(s) -> dict:
     """v0.38, once per database: Canon facts leave their projects for the one global timeline (Pulse wrote
     product:<key>.this_week in project 'pulse'), and where two projects each held a current value of the same
-    subject.predicate, the newest stays current and closes the others."""
+    subject.predicate, the newest stays current and closes the others. Two different values of an owner-only fact
+    were never the owner's choice: each closed one gets an open conflict with the kept one, for the owner. A fact with
+    no predicate is no Canon fact and stays where it is. The audit row (canon.migrate) lists every moved id with its
+    old project, so the move can be undone."""
     if s.q("SELECT 1 FROM meta WHERE key='canon_global'"):
         return {}
-    rows = [dict(r) for r in s.q("SELECT id, subject, predicate, project_id, valid_from, valid_to, superseded_by, "
-                                 "created_at FROM items WHERE kind='fact' AND subject IS NOT NULL")]
-    rows = [r for r in rows if is_canon(r["subject"])]
-    moved, closed, cur = [r for r in rows if r["project_id"]], [], {}
+    rows = [dict(r) for r in s.q("SELECT id, subject, predicate, value, project_id, valid_from, valid_to, "
+                                 "superseded_by, created_at FROM items WHERE kind='fact' AND subject IS NOT NULL")]
+    rows = [r for r in rows if is_canon(r["subject"]) and r["predicate"]]
+    moved, closed, opened, cur = [[r["id"], r["project_id"]] for r in rows if r["project_id"]], [], [], {}
     for r in rows:
         if r["superseded_by"] is None and r["valid_to"] is None:
             cur.setdefault((r["subject"], r["predicate"]), []).append(r)
+    oo = set(owner_only(s))
+
+    def when(r) -> float:
+        return r["valid_from"] or r["created_at"] or 0.0
     with s.tx():
-        for r in moved:
-            s.x("UPDATE items SET project_id=NULL WHERE id=?", (r["id"],))
-            s.x("DELETE FROM relations WHERE src=? AND type='in_project'", (r["id"],))
-        for group in cur.values():
-            group.sort(key=lambda r: r["valid_from"] or r["created_at"])
+        for i, _ in moved:
+            s.x("UPDATE items SET project_id=NULL WHERE id=?", (i,))
+            s.x("DELETE FROM relations WHERE src=? AND type='in_project'", (i,))
+        for (sub, pred), group in cur.items():
+            group.sort(key=when)
             keep = group[-1]
-            at = keep["valid_from"] or keep["created_at"]
+            at = when(keep) or now()
             for o in group[:-1]:
                 s.x("UPDATE items SET valid_to=?, superseded_by=? WHERE id=?", (at, keep["id"], o["id"]))
                 s.relate(keep["id"], o["id"], "supersedes", {"at": at})
                 closed.append(o["id"])
+                if f"{kind_of(sub)}.{pred}" in oo and not same(o["value"], keep["value"]):
+                    opened.append(new_id("cfl"))
+                    s.x("INSERT INTO conflicts VALUES(?,?,?,?,?,?,?)", (opened[-1], keep["id"], o["id"], sub, pred,
+                                                                       "open", now()))
+                    s.x("UPDATE items SET conflict=1 WHERE id IN (?,?)", (keep["id"], o["id"]))
         s.x("INSERT OR REPLACE INTO meta VALUES('canon_global', ?)", (str(now()),))
-    for pid in {r["project_id"] for r in moved}:
+    for pid in {p for _, p in moved}:
         s.kb_dirty(pid)
+    out = {"moved": moved, "closed": closed, "conflicts": opened}
     if moved or closed:
-        s.audit(None, "canon.migrate", "", {"moved": len(moved), "closed": closed})
-    return {"moved": len(moved), "closed": closed}
+        s.audit(None, "canon.migrate", "", out)
+        logging.getLogger("commons.canon").warning(
+            "Canon migration: %d facts moved onto the global timeline, %d older values closed, %d conflicts opened for "
+            "the owner (audit canon.migrate lists them)", len(moved), len(closed), len(opened))
+    return out

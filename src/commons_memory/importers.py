@@ -181,15 +181,22 @@ def queued_srcs(s: Store, srcs: list[str]) -> set[str]:
         [f"import:{x}" for x in srcs[k:k + 400]])}
 
 
-def _edited(s: Store, src: str, it: dict) -> str | None:
+def _edited(s: Store, src: str, it: dict, agent_id: str | None = None) -> str | None:
     """The id of src's imported item when the incoming version says something else (an edited file), else None.
-    Compared after redaction, as stored; a src that was dropped, merged or deleted stays skipped."""
+    Compared after redaction, as stored; a src that was dropped, merged or deleted stays skipped, and so does another
+    agent's import that this caller may not change (its row or its project)."""
     from .redact import redact
     r = s.q("SELECT value FROM meta WHERE key=?", (f"import:{src}",))
-    old = s.q("SELECT id, title, content FROM items WHERE id=?", (r[0]["value"],)) if r else []
+    old = s.q("SELECT id, title, content, agent_id, project_id FROM items WHERE id=?", (r[0]["value"],)) if r else []
     if not old:
         return None
     o = old[0]
+    if agent_id and o["agent_id"] != agent_id:
+        try:
+            s._row_write(o["id"])
+            s.check_project(o["project_id"], "write")
+        except CommonsError:
+            return None
     title = it.get("title") or ""
     if redact(it.get("content") or it.get("text") or "")[0] != (o["content"] or "") or \
             (title and redact(title)[0] != (o["title"] or "")):
@@ -213,7 +220,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
         for it in items:
             src, status = it.get("src"), it.get("status") or "keep"
             status = "keep" if keep_all and status == "review" else status
-            prev = _edited(s, src, it) if src and src in have and status == "keep" else None
+            prev = _edited(s, src, it, agent_id) if src and src in have and status == "keep" else None
             if src and src in have and not prev:
                 skipped += 1
                 continue

@@ -79,7 +79,7 @@ def register_prompts(mcp, store, who) -> None:
     @mcp.resource("commons-hub://playbook", name="playbook", description="The routine every agent follows",
                   mime_type="text/plain")
     def playbook() -> str:
-        from .server import INSTRUCTIONS
+        from .playbook import INSTRUCTIONS
         return INSTRUCTIONS
 
     @mcp.resource("commons-hub://team", name="team", description="What every agent is doing right now",

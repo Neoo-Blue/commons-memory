@@ -60,8 +60,10 @@ only in a note is lost.
 ## 6. Retired values
 For each change in changes(since="7d"): search for the old value, and grep the memory files and the repo for it.
 Walk work:<key>.places, which lists every place the customer facts are repeated. Each note that still states the
-old value: retire it with record_decision(what, why, supersedes=[ids]), or update or forget your own notes. List what
-you could not reach (a live page, a kit) as findings for the session that owns it.
+old value: retire it with record_decision(what, why, supersedes=[ids]), or update or forget your own notes. A Canon
+fact is never superseded (the hub refuses it): correct one with fact_set(subject, predicate, value, evidence=...), or
+for an owner-only one put it in the owner batch. List what you could not reach (a live page, a kit) as findings for
+the session that owns it.
 
 ## 7. Digest
 Write one digest with remember(title="Consistency pass <date>", tags=["consistency-pass"], content=...):

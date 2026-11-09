@@ -25,6 +25,12 @@ DUP_THRESHOLD = float(os.environ.get("COMMONS_LIBRARIAN_DUP", "0.9"))
 STALE_DAYS = float(os.environ.get("COMMONS_LIBRARIAN_STALE_DAYS", "90"))
 
 
+def _canon_fact(s: Store, iid: str) -> bool:
+    from .canon import is_canon
+    rows = s.q("SELECT kind, subject FROM items WHERE id=?", (iid,))
+    return any(r["kind"] == "fact" and is_canon(r["subject"]) for r in rows)
+
+
 class Librarian:
     def __init__(self, store: Store):
         self.s = store
@@ -235,10 +241,12 @@ class Librarian:
         return n
 
     def _assign(self, run_id, items) -> int:
+        """File an unfiled item in the one project its text names; Canon facts are never filed (one timeline)."""
+        from .canon import is_canon
         projects = [dict(r) for r in self.s.q("SELECT id, name FROM projects")]
         n = 0
         for i in items:
-            if i["project_id"] or i["kind"] in ("checkpoint",):
+            if i["project_id"] or i["kind"] in ("checkpoint",) or (i["kind"] == "fact" and is_canon(i.get("subject"))):
                 continue
             text = f"{i['title']} {i['content']}".lower()
             hits = [p for p in projects if re.search(rf"\b{re.escape(p['name'].lower())}\b", text)]
@@ -484,6 +492,8 @@ class Librarian:
                 continue
             op, a, b = parts[0].upper(), parts[1], parts[2]
             it = self.s.q("SELECT * FROM items WHERE id=?", (a,))
+            if op in ("PROJECT", "MERGE") and _canon_fact(self.s, a if op == "PROJECT" else b.split()[0]):
+                continue  # a Canon fact is never filed in a project or merged away
             if op == "TAG" and it:
                 new = [t.strip().lower() for t in b.split(",") if t.strip()][:6]
                 self._log(run_id, "tag", a, {"tags": json.loads(it[0]["tags"] or "[]")}, {"tags": new})

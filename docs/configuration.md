@@ -57,8 +57,8 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, canoncache.py, capture.py, cli_v7.py, cli_v8.py, expose.py, join.py, ledger.py, setup.py, wakeclient.py |
-| `COMMONS_HOOK_CANON` | — | Set to 0 so the hooks on this machine neither keep the Canon cache in ~/.commons/state/ nor inject it, nor write the Canon core block into the instruction files | capture.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, canoncache.py, capture.py, cli_v7.py, cli_v8.py, expose.py, instructions.py, join.py, ledger.py, setup.py, wakeclient.py |
+| `COMMONS_HOOK_CANON` | — | Set to 0 so the hooks on this machine neither keep the Canon cache in ~/.commons/state/ nor inject it, nor write the Canon core block into the instruction files (one already there is taken out) | capture.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
 | `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | canoncache.py, capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |

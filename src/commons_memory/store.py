@@ -248,6 +248,9 @@ class Store:
             aid = existing["id"]
         else:
             k = name.strip().casefold()
+            if any(k == str(r["name"]).strip().casefold() for r in self.q("SELECT name FROM agents")):
+                raise CommonsError(f"{name!r} is another agent's name in other letters (names ignore case): pick "
+                                   "another")
             if any(k == str(r["display"]).casefold() for r in self.q("SELECT display FROM agents WHERE display IS NOT NULL")):
                 raise CommonsError(f"{name!r} is another agent's display name: pick another name")
             aid = new_id("agt")
@@ -411,6 +414,11 @@ class Store:
             raise CommonsError(f"unknown id {iid}")
         r = r[0]
         self.check_project(r["project_id"], "write")
+        if project and r["kind"] == "fact":
+            from .canon import is_canon
+            if is_canon(r["subject"]):
+                raise CommonsError(f"{iid} is a Canon fact: Canon is one timeline whatever the project, so it is filed "
+                                   "in none")
         sets, args, found = [], [], []
         if content is not None and title is None and (r["title"] or "") == " ".join((r["content"] or "").split())[:80]:
             title = " ".join(content.split())[:80]  # an auto-derived title follows the edited content
@@ -444,9 +452,11 @@ class Store:
     def delete_item(self, iid: str, agent_id: str | None = None) -> dict:
         """Hard-delete a memory with its keyword row, vector and graph edges (ACL: write on its project)."""
         self._row_write(iid)
-        r = self.q("SELECT project_id, kind FROM items WHERE id=?", (iid,))
+        r = self.q("SELECT project_id, kind, subject, meta FROM items WHERE id=?", (iid,))
         if not r:
             raise CommonsError(f"unknown id {iid}")
+        from .canon import check_delete
+        check_delete(r[0])
         self.check_project(r[0]["project_id"], "write")
         self.x("DELETE FROM items WHERE id=?", (iid,))
         self.sync_fts(iid)
@@ -486,6 +496,8 @@ class Store:
         c = r[0]
         if keep_id not in (c["a"], c["b"]):
             raise CommonsError("keep_id must be one of the conflicting items")
+        from .canon import check_resolve
+        check_resolve(self, conflict_id, keep_id)  # owner-only ones wait for the owner; Canon is corrected, not retired
         loser = c["b"] if keep_id == c["a"] else c["a"]
         self.x("UPDATE items SET superseded_by=? WHERE id=?", (keep_id, loser))
         self.x("UPDATE conflicts SET status='resolved' WHERE id=?", (conflict_id,))
@@ -1245,7 +1257,9 @@ class Store:
                         tags: list[str] | None = None, sets: list[dict] | None = None,
                         supersedes: list[str] | None = None) -> dict:
         """sets=[{subject, predicate, value}] become the current facts (Canon's write path for owner-only facts);
-        supersedes=[ids] retires the notes the decision replaces. Both are checked before anything is written."""
+        supersedes=[ids] retires the notes the decision replaces. Both are checked before anything is written, and the
+        decision lands with everything it sets in one transaction (vectors are added after the commit, so no agent
+        waits on embedding)."""
         content = f"DECISION: {what}\nWHY: {why}"
         if alternatives:
             content += "\nALTERNATIVES CONSIDERED:\n" + "\n".join(f"- {a}" for a in alternatives)
@@ -1257,12 +1271,23 @@ class Store:
             sets = check_decision(self, sets, supersedes)
             content += "".join(f"\nSETS {x['subject']}.{x['predicate']} = {dump(x['value'])}" for x in sets)
             meta |= {"sets": sets, "supersedes": list(supersedes or [])}
-        out = self.add_item("decision", content, title=what, summary=f"{what} — because {why}"[:200], project=project,
-                            agent_id=agent_id, session_id=session_id, related_ids=related_ids, entities=entities,
-                            tags=(tags or []) + ["decision"], meta=meta)
+        deferred = self.defer_embed
+        self.defer_embed = True
+        try:
+            with self.tx():
+                out = self.add_item("decision", content, title=what, summary=f"{what}, because {why}"[:200],
+                                    project=project, agent_id=agent_id, session_id=session_id, related_ids=related_ids,
+                                    entities=entities, tags=(tags or []) + ["decision"], meta=meta)
+                if sets or supersedes:
+                    from .canon import apply_decision
+                    out |= apply_decision(self, out["id"], sets, supersedes, agent_id, project)
+        finally:
+            self.defer_embed = deferred
+        if not deferred:
+            self.embed_ids([out["id"]] + [x["id"] for x in out.get("set") or []])
         if sets or supersedes:
-            from .canon import apply_decision
-            out |= apply_decision(self, out["id"], sets, supersedes, agent_id, project)
+            from .canon import related
+            out["related"] = related(self, out["id"], out)
         return out
 
     def why(self, query: str, project: str | None = None, max_tokens: int = 800) -> dict:

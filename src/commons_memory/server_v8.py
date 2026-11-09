@@ -393,13 +393,9 @@ def register_v8(mcp, store, who):
         """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
         removed by the user from the dashboard."""
         aid = me(agent, api_key)
-        r = store.q("SELECT agent_id, tags, kind, subject FROM items WHERE id=?", (id,))
+        r = store.q("SELECT agent_id, tags FROM items WHERE id=?", (id,))
         if not r:
             raise CommonsError(f"unknown id {id}")
-        from .canon import is_canon
-        if r[0]["kind"] == "fact" and is_canon(r[0]["subject"]):
-            raise CommonsError("Canon facts keep their history: correct one with fact_set(..., evidence=...), or for an "
-                               "owner-only fact record_decision(sets=[...])")
         if "conversation" in json.loads(r[0]["tags"] or "[]"):
             raise CommonsError("conversation records (what the user and agents said) can only be removed by the user")
         if r[0]["agent_id"] != aid:
@@ -496,18 +492,21 @@ def register_v8(mcp, store, who):
         evidence (commit, release, URL or item id); owner-only predicates are refused: record_decision(sets=...)."""
         aid = me(agent, api_key)
         from .canon import guard
-        guard(store, aid, subject, predicate, evidence)
+        predicate = guard(store, aid, subject, predicate, evidence)
         return _js(facts.set(subject, predicate, value, valid_from=valid_from or None, project=project or None,
                              agent_id=aid, evidence=evidence or None))
 
     @mcp.tool()
-    def fact_invalidate(subject: str, predicate: str, at: str = "", project: str = "", agent: str = "",
-                        api_key: str = "") -> str:
+    def fact_invalidate(subject: str, predicate: str, at: str = "", project: str = "", evidence: str = "",
+                        agent: str = "", api_key: str = "") -> str:
         """End the current value of subject.predicate (in `project`; empty = unscoped facts) at `at` (default now)
-        without replacing it."""
+        without replacing it. A Canon fact needs evidence that it no longer holds, ends now or earlier, and the end
+        shows in changes(); owner-only ones are refused (the owner changes them with record_decision(sets=...))."""
+        aid = me(agent, api_key)
         from .canon import guard
-        guard(store, me(agent, api_key), subject, predicate)
-        return _js(facts.invalidate(subject, predicate, at=at or None, project=project or None))
+        predicate = guard(store, aid, subject, predicate, evidence)
+        return _js(facts.invalidate(subject, predicate, at=at or None, project=project or None, agent_id=aid,
+                                    evidence=evidence or None))
 
     @mcp.tool()
     def fact_get(subject: str, predicate: str = "", as_of: str = "", project: str = "") -> str:

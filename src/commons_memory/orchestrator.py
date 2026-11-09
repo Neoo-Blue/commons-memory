@@ -1459,13 +1459,14 @@ class Orchestrator:
                 for r in self.s.q("SELECT * FROM recurring ORDER BY name")]
 
     # ---------------------------------------------------------------- pickup
-    def pickup(self, agent_id: str, project: str | None = None, max_tokens: int = 900) -> dict:
+    def pickup(self, agent_id: str, project: str | None = None, max_tokens: int = 900, facts: bool = True) -> dict:
         """What should this agent do next? It opens with FACTS (Canon: the company core and the products this agent
         works on, plus the open conflict count), which the budget never cuts; then ready subtasks, inbox,
-        expertise-ranked leftovers and preferences, cut to max_tokens. `body` is everything after FACTS."""
+        expertise-ranked leftovers and preferences, cut to max_tokens. `body` is everything after FACTS. facts=False
+        leaves FACTS out without building it (a hook client that already has Canon)."""
         from .canon import facts_section
         try:
-            facts = facts_section(self.s, agent_id, project)
+            facts = facts_section(self.s, agent_id, project) if facts else ""
         except Exception:  # noqa: BLE001 - Canon must never cost an agent its check-in
             facts = ""
         a = dict(self.s.q("SELECT * FROM agents WHERE id=?", (agent_id,))[0])
