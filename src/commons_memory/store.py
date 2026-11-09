@@ -414,11 +414,12 @@ class Store:
             raise CommonsError(f"unknown id {iid}")
         r = r[0]
         self.check_project(r["project_id"], "write")
-        if project and r["kind"] == "fact":
-            from .canon import is_canon
-            if is_canon(r["subject"]):
-                raise CommonsError(f"{iid} is a Canon fact: Canon is one timeline whatever the project, so it is filed "
-                                   "in none")
+        from .canon import check_delete, is_canon
+        if content is not None or title is not None:
+            check_delete(r)  # a Canon fact, or the decision that set one, is never rewritten in place; tags may change
+        if project and r["kind"] == "fact" and is_canon(r["subject"]):
+            raise CommonsError(f"{iid} is a Canon fact: Canon is one timeline whatever the project, so it is filed "
+                               "in none")
         sets, args, found = [], [], []
         if content is not None and title is None and (r["title"] or "") == " ".join((r["content"] or "").split())[:80]:
             title = " ".join(content.split())[:80]  # an auto-derived title follows the edited content
@@ -1283,11 +1284,20 @@ class Store:
                     out |= apply_decision(self, out["id"], sets, supersedes, agent_id, project)
         finally:
             self.defer_embed = deferred
-        if not deferred:
-            self.embed_ids([out["id"]] + [x["id"] for x in out.get("set") or []])
+        # the decision is recorded: nothing from here on may tell the caller it failed (a retry would record it twice)
+        try:
+            if not deferred:
+                self.embed_ids([out["id"]] + [x["id"] for x in out.get("set") or []])
+        except Exception:  # noqa: BLE001 - reindex() embeds what has no vector, as it does an import's backlog
+            pass
         if sets or supersedes:
             from .canon import related
-            out["related"] = related(self, out["id"], out)
+            try:
+                out["related"] = related(self, out["id"], out)
+            except Exception as e:  # noqa: BLE001
+                out["related"] = []
+                out["note"] = (f"recorded; looking for notes that still state an old value failed "
+                               f"({type(e).__name__}), so search for them yourself")
         return out
 
     def why(self, query: str, project: str | None = None, max_tokens: int = 800) -> dict:

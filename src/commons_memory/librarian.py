@@ -16,6 +16,7 @@ import os
 import re
 from collections import Counter
 
+from .canon import canon_fact as _canon_fact
 from .embed import HashEmbedder, cosine
 from .ids import estimate_tokens, iso, new_id, now
 from .kb import STOP, _terms
@@ -23,12 +24,6 @@ from .store import CommonsError, Store
 
 DUP_THRESHOLD = float(os.environ.get("COMMONS_LIBRARIAN_DUP", "0.9"))
 STALE_DAYS = float(os.environ.get("COMMONS_LIBRARIAN_STALE_DAYS", "90"))
-
-
-def _canon_fact(s: Store, iid: str) -> bool:
-    from .canon import is_canon
-    rows = s.q("SELECT kind, subject FROM items WHERE id=?", (iid,))
-    return any(r["kind"] == "fact" and is_canon(r["subject"]) for r in rows)
 
 
 class Librarian:
@@ -83,6 +78,10 @@ class Librarian:
         e = r[0]
         if e["status"] != "applied" or not e["reversible"]:
             raise CommonsError("entry not undoable")
+        if e["action"] in ("merge", "assign_project") and _canon_fact(self.s, e["target"]):
+            raise CommonsError(f"{e['target']} is a Canon fact now: it is in no project and never merged away or "
+                               "brought back beside a newer value. Correct Canon with fact_set(..., evidence=...) or "
+                               "record_decision(sets=[...])")
         b = json.loads(e["before"] or "{}")
         if e["action"] == "tag":
             self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(b["tags"]), e["target"]))
@@ -135,6 +134,10 @@ class Librarian:
         return out
 
     def _merge(self, run_id, keep, dup) -> str:
+        """dup is superseded by keep. Never a Canon fact, whatever proposed it (a proposal queued before v0.38 too)."""
+        if _canon_fact(self.s, dup):
+            raise CommonsError(f"{dup} is a Canon fact: it is never merged away. Reject this proposal; Canon is "
+                               "corrected with fact_set(..., evidence=...) or record_decision(sets=[...])")
         self.s.x("UPDATE items SET superseded_by=? WHERE id=?", (keep, dup))
         self.s.relate(dup, keep, "merged_into", agent_id=self.agent_id)
         # carry the duplicate's links over to the survivor

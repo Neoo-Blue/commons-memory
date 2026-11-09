@@ -94,9 +94,14 @@ def _read(path: Path) -> str:
 
 def _write(path: Path, text: str) -> None:
     """Atomic: a temp file beside the real file (a symlinked CLAUDE.md stays a symlink), then os.replace, so a session
-    reading it at that moment sees the old file or the new one, never an empty or partial one."""
+    reading it at that moment sees the old file or the new one, never an empty or partial one. A file with a second
+    name (a hard link) is written in place instead, so both names keep seeing one file."""
     real = path.resolve()
     real.parent.mkdir(parents=True, exist_ok=True)
+    if real.exists() and real.stat().st_nlink > 1:
+        with open(real, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        return
     tmp = real.with_name(f".{real.name}.{os.getpid()}.commons-tmp")
     with open(tmp, "w", encoding="utf-8", newline="") as f:
         f.write(text)
@@ -105,11 +110,31 @@ def _write(path: Path, text: str) -> None:
     os.replace(tmp, real)
 
 
+def _block(lines: list[str], begin: str, end: str) -> tuple[tuple[int, int] | None, set[int]]:
+    """(the first block, as the indexes of its begin and end lines, or None; the begin lines no end follows before the
+    next begin). A marker counts only on a line of its own (spaces and tabs around it allowed), so a block never spans
+    another begin: one whose end line was deleted is an orphan, and no later end ever pairs with it."""
+    first, opened, orphans = None, None, set()
+    for i, x in enumerate(lines):
+        x = x.strip(" \t\r\n")
+        if x == begin:
+            if opened is not None:
+                orphans.add(opened)
+            opened = i
+        elif x == end and opened is not None:
+            first, opened = first or (opened, i), None
+    return first, orphans | ({opened} if opened is not None else set())
+
+
 def _apply(path: Path, block: str | None, whole: bool, begin: str = BEGIN, end: str = END) -> str:
     """block=None removes. whole=True: the file is ours entirely (skill, .mdc). begin/end mark the block (the playbook
-    by default), each on a line of its own. Locked, atomic, and in the file's own line endings."""
+    by default), each on a line of its own; a begin whose end was deleted is dropped (that line only, nothing the owner
+    wrote after it) and the block written again. Locked, atomic, in the file's own line endings, with its byte order
+    mark kept; a read-only file is left alone."""
     with _locked():
         old = _read(path) if path.exists() else ""
+        if old and not os.access(path.resolve(), os.W_OK):
+            return "read-only (left alone)"
         if whole:
             if block is None:
                 if path.exists():
@@ -118,22 +143,30 @@ def _apply(path: Path, block: str | None, whole: bool, begin: str = BEGIN, end: 
                 return "absent"
             _write(path, block)
             return "updated" if old else "installed"
-        nl = "\r\n" if "\r\n" in old else "\n"
-        pat = re.compile(rf"^{re.escape(begin)}[ \t]*\r?\n.*?^{re.escape(end)}[ \t]*(?=\r?$)", re.S | re.M)
+        bom, body = ("\ufeff", old[1:]) if old.startswith("\ufeff") else ("", old)
+        nl = "\r\n" if "\r\n" in body else "\n"
+        lines = body.splitlines(keepends=True)
+        found, orphans = _block(lines, begin, end)
+        keep = [x for i, x in enumerate(lines) if i not in orphans and not (found and found[0] <= i <= found[1])]
         if block is None:
-            if not pat.search(old):
+            if not found and not orphans:
                 return "absent"
-            _write(path, pat.sub("", old).rstrip() + nl)
+            _write(path, bom + "".join(keep).rstrip() + nl)
             return "removed"
         block = block.replace("\r\n", "\n").replace("\n", nl)
         if old and not path.with_name(path.name + ".bak-commons").exists():
             shutil.copy2(path, path.with_name(path.name + ".bak-commons"))
-        new = pat.sub(lambda _m: block, old, count=1) if pat.search(old) else (
-            old.rstrip() + nl + nl + block + nl if old else block + nl)
-        if new == old:
+        if found:  # in place: what came before the block, the block, what came after it
+            at = sum(1 for i in range(found[0]) if i not in orphans)
+            tail = lines[found[1]][len(lines[found[1]].rstrip("\r\n")):]
+            new = "".join(keep[:at]) + block + tail + "".join(keep[at:])
+        else:
+            rest = "".join(keep)
+            new = rest.rstrip() + nl + nl + block + nl if rest.strip() else block + nl
+        if bom + new == old:
             return "unchanged"
-        _write(path, new)
-        return "updated" if pat.search(old) else "installed"
+        _write(path, bom + new)
+        return "updated" if found else "installed"
 
 
 def install(harness: str = "all", url: str | None = None, agent: str | None = None, uninstall: bool = False) -> list[dict]:
@@ -160,7 +193,7 @@ def install(harness: str = "all", url: str | None = None, agent: str | None = No
 
 
 def canon_core(text: str | None) -> list[str]:
-    """Write the Canon core block (text, at most 20 lines: canoncache.block, what the owner set) into each
+    """Write the Canon block (text, at most 20 lines: canoncache.block, which holds no text an agent wrote) into each
     always-loaded file that carries the Commons playbook (appended once, then updated in place), so sub-agents, peers
     and the woken Claude start with it too; None removes it. Nothing outside the block's markers changes, and no value
     can forge a marker: < and > in the text become ‹ and ›. Returns the files changed."""
@@ -174,7 +207,7 @@ def canon_core(text: str | None) -> list[str]:
                 continue
         except OSError:
             continue
-        if _apply(path, block, False, CANON_BEGIN, CANON_END) not in ("unchanged", "absent"):
+        if _apply(path, block, False, CANON_BEGIN, CANON_END) in ("updated", "installed", "removed"):
             out.append(str(path))
     return out
 
@@ -198,6 +231,7 @@ def refresh() -> list[str]:
             whole = p.endswith(WHOLE)
             if whole and "Commons" not in text:
                 continue
-            _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole)
-            out.append(str(path))
+            if _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole) in ("updated",
+                                                                                                    "installed"):
+                out.append(str(path))
     return out

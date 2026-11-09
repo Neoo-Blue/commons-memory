@@ -58,9 +58,12 @@ Hooks **never block the agent**. They time out after `COMMONS_HOOK_TIMEOUT` (def
 when the server can't be reached they append the event to `~/.commons/hook-queue.jsonl`. Each successful hook then sends
 up to 25 queued events, reading the file a line at a time. One hook holds a batch at a time, corrupt lines and events
 the hub refuses are dropped, and the queue stops growing at `COMMONS_HOOK_QUEUE_MAX_MB` (default 50). A slow reply is not an outage: the server already has that event, so it is not queued.
-A session start the hub does not answer (slow or down) is held for that session instead: its next prompt asks the hub
-for the pack once, with whatever is left of the hook's 4-second budget as its timeout, and the pack arrives with that
-prompt. A session start waits for the hub only for what is left of that budget.
+A session start the hub received but did not answer in time is held for that session instead: its next prompt asks
+the hub for the pack once, with whatever is left of the hook's 4-second budget as its timeout, and the pack arrives
+with that prompt. The session is marked as asked before that request goes out, so a hook the harness kills while it
+waits never leaves the next prompt to ask again, and a hub that could not be reached at all is not asked again. A
+session start, and a prompt, wait for the hub only for what is left of that budget, less 0.7 s for the interpreter's
+own start.
 
 ## Canon on this machine
 
@@ -70,32 +73,41 @@ so a slow or unreachable hub costs it nothing:
 - **The cache.** A detached `commons canon pull` (at session start, at most once a minute, and at most every 5 minutes
   on prompts) writes `~/.commons/state/canon.json`, the hub's `canon()` plus `fetched_at`, `ok` and `error`, and
   `canon.md`, a compact rendering: the CANON line with the precedence, the company core, one short card per product.
-  It keeps the changes of the last 7 days, at most 500. A failed pull keeps the old cache and records `ok: false` with
-  the error (never the key). The pull runs from your home folder with Python's safe path (`-P`), never from the
-  session's project. Peers and guards read the same files; nothing here writes back to Commons. Without `COMMONS_URL`
-  the pull reads the local database, in the hook itself.
+  It keeps the changes of the last 7 days, at most 500, each old and new value cut to 400 characters (the lines show
+  120), so a week of big lists still fits; a Canon too big for the cache's 2 MB is a failed pull, said plainly. A
+  failed pull keeps the old cache and records `ok: false` with the error (never the key). The pull runs from your home
+  folder with Python's safe path (`-P`), never from the session's project. Peers and guards read the same files;
+  nothing here writes back to Commons. Without `COMMONS_URL` the pull reads the local database, in the hook itself.
 - **Session start** (every source: startup, resume, clear, compact) opens with the core, the card of the product whose
-  `work:<key>.repos` holds this checkout's `origin` remote (one line each for any other product of that repo), the last
-  7 days of changes to every product and the company (this checkout's product first, at most 8 lines; the rest come
-  with the next message), the open conflict count and, from the refs of the last fetch (no network), how many commits
-  the checkout is behind origin's default branch. A cache that is missing, more than 6 hours old or failing is said in
-  one plain line, which Claude Code also shows you. The hub's pack follows, without Canon a second time; only a fresh
-  cache whose last pull worked lets the hub leave its own FACTS out. A prompt from a session whose start never reached
-  the hook gets the start's Canon.
+  `work:<key>.repos` holds this checkout's `origin` remote (its one line when the card does not fit, one line each for
+  any other product of that repo, and outside any product's repo one line per product), the last 7 days of changes to
+  every product and the company (this checkout's product first, as many of the newest 8 as fit after the core and the
+  card; the next message shows up to 10 more), the open conflict count and, from the refs of the last fetch (no
+  network), how many commits the checkout is behind origin's default branch. A cut core ends with where the rest is. A
+  cache that is missing, more than 6 hours old or failing is said in one plain line, which Claude Code also shows you.
+  The hub's pack follows, without Canon a second time; only a fresh cache whose last pull worked, once the products
+  made it in, lets the hub leave its own FACTS out. A prompt from a session whose start never reached the hook gets the
+  start's Canon.
 - **Each prompt** adds one line per Canon change this session has not been shown yet
-  (`~/.commons/state/sessions/<session_id>.json`, written once the hook's output is ready), at most 10, and the card of
-  each product the prompt names (its key, or a `name`, `names`, `alias`, `aliases` or `name_*` fact, e.g. `name_zh`),
-  once per session. The first 16 KB of a prompt are read; `_` and `-` are part of a word; a key that is an everyday word
-  (secret, journal, poise, santa, cooli) counts only through a name fact. Names in scripts without spaces, such as
-  Chinese, match anywhere in the prompt.
-- **Instruction files.** What the owner set (the precedence, the owner-only list, and the focus and standing rules while
-  they are owner-only), dated by the pull, with one line saying where the rest is, is kept in a second managed block,
-  `<!-- commons:canon:begin ... -->` to `<!-- commons:canon:end -->`, in `~/.claude/CLAUDE.md`, `~/.grok/AGENTS.md`,
-  `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md` wherever the Commons playbook is installed, so sub-agents, peers and
-  the woken Claude carry it too. `<` and `>` in a value become `‹` and `›`, so nothing forges a marker; the markers
-  count only on lines of their own; each write is locked, atomic (a symlinked file stays a symlink) and keeps the
-  file's line endings. Nothing outside the markers changes; the block goes when the cache is more than 3 days old or
-  Canon is turned off, and `commons instructions uninstall` removes it.
+  (`~/.commons/state/sessions/<session_id>.json`, written once the hook's output is ready), the newest 10, then one
+  line naming `changes(since=...)` for any older ones, which then count as delivered (a burst of changes reaches a
+  session once), and the card of each product the prompt names (its key, or a `name`, `names`, `alias`, `aliases` or
+  `name_*` fact, e.g. `name_zh`), once per session; a name found inside a longer product name ("Pulse" in "Pulse
+  Search") counts once it also stands on its own. The first 16 KB of a prompt are read; `_` and `-` are part of a
+  word; a key that is an everyday word (secret, journal, poise, santa, cooli) counts only through a name fact. Names in
+  scripts without spaces, such as Chinese, match anywhere in the prompt.
+- **Instruction files.** A second managed block, `<!-- commons:canon:begin ... -->` to `<!-- commons:canon:end -->`,
+  in `~/.claude/CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md` wherever the Commons
+  playbook is installed, tells sub-agents, peers and the woken Claude where Canon is (`canon()` on the hub, a copy in
+  `canon.md`), dated by the pull, with the precedence and the owner-only list. It holds no text an agent wrote:
+  `record_decision` takes any agent's word for the owner's, so the standing rules and the focus stay in `canon()` and
+  the session's own context, the owner-only list is shown as `<kind>.<predicate>` names only, and a precedence Canon
+  changed is a pointer to `canon()`. `<` and `>` become `‹` and `›`, so nothing forges a marker; the markers count only
+  on lines of their own (spaces, tabs and a byte order mark around them are fine), and a begin marker whose end was
+  deleted is dropped by itself, so a later write never takes the text that follows it. Each write is locked, atomic (a
+  symlinked file stays a symlink; a hard-linked one is written in place) and keeps the file's line endings; a
+  read-only file is left alone. Nothing outside the markers changes; the block goes when the cache is more than 3 days
+  old or Canon is turned off, and `commons instructions uninstall` removes it.
 - `COMMONS_HOOK_CANON=0` turns all of this off on a machine. The hook's whole context stays under 9,500 characters
   (Claude Code moves a longer one to a file): Canon's part stays under 6,000, so the hub's busy and duplicate-work
   warnings, recall and the claim id always keep room, and the hub's pack is cut to fit.

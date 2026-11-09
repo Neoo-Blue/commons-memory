@@ -12,25 +12,33 @@ All notable changes, newest first. The README describes the current release only
 - **Upgrade the hub first.** Upgrade the hub before the hook clients (a hub older than v0.38 has no `canon` tool; the
   clients then stay quiet and use the hub's pack), and back up the hub's database before its first v0.38 start.
 - **Canon.** Facts on `product:<key>` (what customers may be told), `work:<key>` (internal state), `company` and
-  `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, Canon facts leave their
-  projects (Pulse's `product:<key>.this_week` rows were in `pulse`) and the newest of two current values stays current;
-  where the values of an owner-only fact differ, each closed one gets an open conflict for the owner. The audit row
-  `canon.migrate` lists every moved id with its old project, so the move can be undone; a fact with no predicate is
-  left where it was. `this_week` stays on the timeline but out of `canon()` and `changes()`, and needs no evidence.
+  `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, in one transaction (two
+  processes opening the database together migrate once), the Canon facts Pulse wrote leave their projects (`pulse`,
+  where its `product:<key>.this_week` rows were, and any project where the agent `pulse` wrote Canon facts) unless the
+  project has an ACL, with their predicates in one form (`Prices` is `prices`), and the newest of two current values
+  stays current; where the values of an owner-only fact differ, each closed one gets an open conflict for the owner.
+  Any other Canon-subject fact in a project (a client's `company` facts in a restricted project), any restricted to
+  named agents, and any whose predicate has no one form (`setup fee`), stays where it is as a note, out of Canon, named
+  in the log for the owner to keep, delete or record. The audit row `canon.migrate` lists every moved id with its old project, every renamed
+  predicate and every row left as a note, so each step can be undone; a fact with no predicate is left where it was.
+  `this_week` stays on the timeline but out of `canon()` and `changes()`, and needs no evidence.
 - **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
   forbidden claims, not offered, work status, direction and do-not-merge, company focus, standing rules, precedence and
   the list itself, vendor terms; `company.owner_only` and `company.precedence` always) changes only through
   `record_decision(sets=...)` quoting the owner; the Pulse relay records the owner's Studio edits that way too, and no
-  agent name stands for the owner. `fact_set` and `fact_invalidate` refuse it and say how to do it right; any other
+  agent name stands for the owner. The list's entries are `<kind>.<predicate>` names in one form (`Product.Prices` is
+  `product.prices`). `fact_set` and `fact_invalidate` refuse it and say how to do it right; any other
   Canon fact needs `evidence`. A new agent name may not differ from an existing one only in case.
 - **One form, one history.** Canon predicates are lowercase `a-z0-9_` (`Prices` is `prices`; anything else is
   refused), a value must say something (`[]` does: nothing is listed), Canon takes no `valid_from` in the future, and
   a value set again in another form (key order, `19.0` for `19`) is no change. A Canon fact is corrected by a newer
-  value, never superseded by a decision, deleted (`forget`, the dashboard), restricted, filed in a project by the
-  librarian, or retired by resolving a conflict, on any path; the decision that set one stays too. `fact_set` settles
-  the open conflicts on the value it corrects; `fact_invalidate` on Canon needs evidence, ends a value no earlier than
-  it began and shows in `changes()` as old -> null. `record_decision` lands whole or not at all. `remember(kind="fact")`
-  no longer writes Canon facts.
+  value, never superseded by a decision, deleted (`forget`, the dashboard), rewritten in place, restricted, filed in a
+  project or merged away (by the librarian or a refile suggestion, one queued before v0.38 included, or by undoing an
+  old change), or retired by resolving a conflict, on any path; the decision that set one stays too, as it was
+  recorded and visible to every agent. `fact_set` settles the open conflicts on the value it corrects;
+  `fact_invalidate` on Canon needs evidence, ends a value no earlier than it began and shows in `changes()` as old ->
+  null. `record_decision` lands whole or not at all, and once it has landed it reports success even if embedding it
+  fails afterwards (the vectors come with `reindex()`). `remember(kind="fact")` no longer writes Canon facts.
 - **Decisions write first.** `record_decision(..., sets=[{subject, predicate, value}], supersedes=[ids])` sets the
   facts, retires the notes it replaces, settles conflicts on what it set, and returns `related`: notes that still state
   an old value, for the caller to supersede.
@@ -45,22 +53,28 @@ All notable changes, newest first. The README describes the current release only
   the Canon changes since that agent's last turn, once, even a write that committed late.
 - **On this machine, before the hub answers.** A detached `commons canon pull` (session start, then at most every 5
   minutes on prompts; run from the home folder with Python's safe path) keeps `~/.commons/state/canon.json` (the
-  hub's `canon()` with the last 7 days of changes, at most 500, plus `fetched_at`, `ok`, `error`; a failed pull keeps
-  the old data, and the key never lands in it) and `canon.md` current. Every session start, compaction, resume and
-  clear included, opens with the core, the card of the product whose `work:<key>.repos` holds the checkout's origin,
-  the last 7 days of changes to every product and the company (this checkout's first, at most 8 lines, the rest with
-  the next message), the open conflict count and how far the checkout is behind origin as of the last fetch, all from
-  the cache; a missing, 6-hour-old or failing cache is said in one line the owner sees too, and only a fresh cache
-  lets the hub leave its FACTS out. Each prompt adds one line per change the session has not been shown and, once per
-  session, the card of a product it names (Chinese names too; everyday-word keys only through a name fact). What the
-  owner set is also kept, dated, as a second managed block in `CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md`
-  and `~/.codex/AGENTS.md`, written atomically, in the file's own line endings, with no value able to forge a marker,
-  and taken out when the cache is 3 days old. The hook never loads the MCP server. `COMMONS_HOOK_CANON=0` turns it
-  off, block included.
+  hub's `canon()` with the last 7 days of changes, at most 500, each value cut to 400 characters, plus `fetched_at`,
+  `ok`, `error`; a failed pull keeps the old data, and the key never lands in it) and `canon.md` current. Every session
+  start, compaction, resume and clear included, opens with the core, the card of the product whose `work:<key>.repos`
+  holds the checkout's origin (its one line when the card does not fit; outside any product's repo, one line per
+  product), the last 7 days of changes to every product and the company (this checkout's first, as many of the newest
+  8 as fit after the core and the card; the next message shows up to 10 more), the open conflict count and how far
+  the checkout is behind origin as of the last fetch, all from the cache; a missing, 6-hour-old or failing cache is
+  said in one line the owner sees too, and only a fresh cache lets the hub leave its FACTS out. Each prompt adds one
+  line per change the session has not been shown, the newest 10 and one line naming `changes(since=...)` for older
+  ones, and, once per session, the card of a product it names (Chinese names too; everyday-word keys only through a
+  name fact). Where Canon is, dated, with the precedence and the owner-only list, is also kept as a second managed
+  block in `CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md`; it holds no text an
+  agent wrote (the standing rules and focus stay in `canon()` and the session context), is written atomically (a
+  hard-linked file in place, a read-only one left alone), in the file's own line endings, with no value able to forge
+  a marker and no deleted end marker able to take the owner's text with it, and goes when the cache is 3 days old. The
+  hook never loads the MCP server. `COMMONS_HOOK_CANON=0` turns it off, block included.
 - **A missed start is retried.** 17 of 54 recent home-folder sessions started with no pack when the hub was slow, and
-  nothing retried. A start the hub does not answer is now held for its session, and the next prompt asks for the pack
-  once, with the rest of the hook's 4-second budget. Canon's part of a hook's context stays under 6,000 characters, so
-  the whole stays under 9,500, the size Claude Code still injects whole, with room for the hub's warnings.
+  nothing retried. A start the hub received but did not answer in time is now held for its session, and the next
+  prompt asks for the pack once (marked as asked before it waits, so a hook killed while waiting never repeats it),
+  with the rest of the hook's 4-second budget less 0.7 s for the interpreter's start; a hub that could not be reached
+  is not asked again. Canon's part of a hook's context stays under 6,000 characters, so the whole stays under 9,500,
+  the size Claude Code still injects whole, with room for the hub's warnings.
 - **Conflicts.** One on an owner-only fact is never resolved by an agent (`conflicts()` refuses it; the owner's decision
   settles it), a Canon fact is never retired by keeping the other side, and the librarian never merges Canon facts.
 - **Write path.** The librarian keeps the NEWER of two near-duplicates, so edited notes win; chat fragments the capture

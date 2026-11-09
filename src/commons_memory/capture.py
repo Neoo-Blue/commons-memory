@@ -582,15 +582,23 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     canon, notice, st, flags = _canon_first(harness, event, payload, sid, cwd, url, store_factory, started)
     payload |= flags  # canon_local (the hub leaves FACTS out), start_pack (a start the hub missed)
     late = bool(payload.get("start_pack"))
-    if event == "session_start" or late:  # the harness kills a hook at 5 s: a start waits only for what is left
-        left = QUEUE_HOOK_BUDGET_S - (time.monotonic() - started)
-        timeout = max(0.3, left) if late else min(timeout, max(0.3, left))  # a late pack gets all of it, once
+    # the harness kills a hook at 5 s, counted from before run_hook: a start, and a prompt (whose Canon may have run
+    # git), wait for the hub only for what the budget has left after the interpreter's own start; a late pack, all of it
+    if event == "session_start" or st is not None:
+        left = QUEUE_HOOK_BUDGET_S - HOOK_START_S - (time.monotonic() - started)
+        timeout = max(0.1, left) if late else min(timeout, max(0.1, left))
+    if late:  # asked for once: a hook killed while it waits must not leave the next prompt to ask again
+        try:
+            from .canoncache import save, session
+            save(sid, session(sid) | {"start_pending": False})
+        except Exception:  # noqa: BLE001
+            pass
     if url:
         res = _post(url, harness, event, payload, timeout, started)
     else:
         res = _local(harness, event, payload, store_factory)
+    slow = res is SLOW  # the hub has a start it did not answer in time: its pack comes with the next prompt, once
     res = res if isinstance(res, dict) else None  # a reply of any other shape is no reply
-    missed = res is None  # the hub did not answer: a start's pack comes with its next prompt, asked for once
     if event == "session_start" and url:
         try:  # Commons still registered as this client's MCP server? (put back if something removed it)
             from .setup import ensure_mcp
@@ -612,7 +620,7 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
     out = output_for(harness, hevent, _join(canon, ctx if isinstance(ctx, str) else ""), notice)
     if st is not None:  # saved only now that the output exists: a hook killed earlier leaves the session unmarked
         if event == "session_start":
-            st["start_pending"] = missed
+            st["start_pending"] = slow  # an unreachable hub is not asked again with every prompt
         elif late:
             st["start_pending"] = False
         try:
@@ -743,6 +751,8 @@ def _key() -> str:
 
 QUEUE_DRAIN_EVENTS = 25  # most events one hook sends for the queue, so a backlog never holds up the agent
 QUEUE_HOOK_BUDGET_S = 4  # harnesses kill a hook at 5 s: draining, a start's wait and its git calls stop before that
+HOOK_START_S = 0.7  # the interpreter starts before run_hook does (longer under load): Canon paths leave it this much
+SLOW = object()  # _post: the hub has the event and did not answer in time (not: the hub could not be reached)
 QUEUE_CLAIM_STALE_S = 60  # a claim this old belongs to a hook that died
 
 
@@ -860,7 +870,7 @@ def _post(url, harness, event, payload, timeout, started=None):
     try:
         res = _send(url, body, timeout)
     except TimeoutError:  # urllib raises this bare only once the request is sent: the hub has it and is just slow
-        return None
+        return SLOW
     except Exception:  # noqa: BLE001 - offline: queue for later, never block the agent
         if event != "session_start":  # a start is held for its own session instead: its pack comes with the next prompt
             _enqueue(q, (json.dumps(body) + "\n").encode())
