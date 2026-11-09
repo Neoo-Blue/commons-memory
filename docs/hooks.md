@@ -111,7 +111,8 @@ so a slow or unreachable hub costs it nothing:
   uninstall` removes it.
 - `COMMONS_HOOK_CANON=0` turns all of this off on a machine. The hook's whole context stays under 9,500 characters
   (Claude Code moves a longer one to a file): Canon's part stays under 6,000, so the hub's busy and duplicate-work
-  warnings, recall and the claim id always keep room, and the hub's pack is cut to fit.
+  warnings, recall and the claim id always keep room, and the hub's pack is cut to fit. Each Canon line stays one
+  line: a subject, product key or agent name prints with any line break as a space, so none forges a line.
 - **Upgrade the hub before the hook clients.** A hub older than v0.38 has no `canon` tool: the pull records that
   quietly (no notice at every session start) and the hub keeps sending its own pack.
 

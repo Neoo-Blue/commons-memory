@@ -21,8 +21,12 @@ All notable changes, newest first. The README describes the current release only
   closed one gets an open conflict for the owner. Any other Canon-subject fact (a client's `company` facts in a
   restricted project, an agent's `company.focus`, one restricted to named agents, one whose predicate has no one form
   like `setup fee`, or none) stays where it is as a note, out of Canon, named in the log for the owner to keep, delete
-  or record, and its open conflicts are dismissed. The audit row `canon.migrate` lists every moved id with its old
-  project, every renamed predicate, every row left as a note and every dismissed conflict, so each step can be undone.
+  or record, and its open conflicts with no Canon fact on either side are dismissed; one that pairs a Canon fact with
+  such a note (an agent's competing price) stays open, and the owner's decision on that field settles it. A Canon
+  value that such a note had closed, with no later Canon value of its field, ends at the migration, so `changes()`
+  shows old -> null where `canon()` has no value; on an owner-only field the owner also gets an open conflict between
+  it and the note. The audit row `canon.migrate` lists every moved id with its old project, every renamed predicate,
+  every row left as a note, every dismissed conflict and every ended value, so each step can be undone.
   `changes()` never shows such a note, or a row the caller may not read, as a change's old value. `this_week` stays on
   the timeline but out of `canon()` and `changes()`, and needs no evidence.
 - **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
@@ -31,7 +35,8 @@ All notable changes, newest first. The README describes the current release only
   `record_decision(sets=...)` quoting the owner; the Pulse relay records the owner's Studio edits that way too, and no
   agent name stands for the owner. The list's entries are `<kind>.<predicate>` names in one form (`Product.Prices` is
   `product.prices`). `fact_set` and `fact_invalidate` refuse it and say how to do it right; any other
-  Canon fact needs `evidence`. A new agent name may not differ from an existing one only in case.
+  Canon fact needs `evidence`. A new agent name may not differ from an existing one only in case, and no agent name
+  holds a control character or line break.
 - **One form, one history.** Canon predicates are lowercase `a-z0-9_` (`Prices` is `prices`; anything else is
   refused), a value must say something (`[]` does: nothing is listed), Canon takes no `valid_from` in the future, and
   a value set again in another form (key order, `19.0` for `19`) is no change. A Canon fact is corrected by a newer
@@ -43,7 +48,10 @@ All notable changes, newest first. The README describes the current release only
   `fact_set` settles the open conflicts on the value it corrects; `fact_invalidate` on Canon needs evidence, ends a
   value no earlier than it began and shows in `changes()` as old -> null. `record_decision` lands whole or not at all,
   and once it has landed it reports success even if embedding it fails afterwards (the vectors come with
-  `reindex()`). `remember(kind="fact")` no longer writes Canon facts.
+  `reindex()`). `remember(kind="fact")` no longer writes Canon facts. The key after `product:`, `work:`, `vendor:` or
+  `company:` is lowercase `a-z0-9_.-` and starts with a letter or digit (`product:santa`, `company:ops`): `fact_set`,
+  `fact_invalidate` and `record_decision(sets=...)` refuse any other, so no key carries a line break into the
+  injected Canon, which also prints every subject, key and agent name on one line.
 - **Decisions write first.** `record_decision(..., sets=[{subject, predicate, value}], supersedes=[ids])` sets the
   facts, retires the notes it replaces, settles conflicts on what it set, and returns `related`: notes that still state
   an old value, for the caller to supersede.

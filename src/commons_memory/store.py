@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS audit(
 
 
 PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}")
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")  # control characters and Unicode line separators
 # One fixed bigint: pg_advisory_xact_lock(integer) does not exist, and every hub process must share this key.
 _AUDIT_CHAIN_LOCK = "SELECT pg_advisory_xact_lock(748213651::bigint)"
 
@@ -94,6 +95,12 @@ def _j(v: Any) -> str:
 
 def _hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _agent_name(name) -> None:
+    """An agent name is one line: Canon's change lines, and every list of who did what, print it as written."""
+    if CONTROL.search(str(name or "")):
+        raise CommonsError(f"an agent name is one line of text with no control characters, not {name!r}")
 
 
 class Store:
@@ -237,6 +244,7 @@ class Store:
     def register_agent(self, name: str, vendor: str = "", model: str = "", description: str = "",
                        capabilities: list[str] | None = None, a2a_url: str = "",
                        issue_key: bool = True, issued_by: str = "") -> dict:
+        _agent_name(name)
         existing = self.get_agent(name)
         key = f"cmk_{pysecrets.token_urlsafe(24)}" if issue_key else None
         if existing:
@@ -270,6 +278,7 @@ class Store:
         return dict(r[0]) if r else None
 
     def ensure_agent(self, name: str) -> str:
+        _agent_name(name)
         a = self.get_agent(name)
         if a:
             self.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), a["id"]))
