@@ -72,6 +72,20 @@ INSTRUCTIONS = """Commons is the shared memory and task hub for all of the user'
    Creating an account? vault_generate(name, service, url, purpose) gives you a username and strong password and
    stores them; vault_reveal gets a login back. When pickup says Commons was updated, read whats_new() and adapt.
 8) Before you stop: board() for anything still open, then handoff(summary, next_steps), then report_usage().
+9) Canon is the current truth: facts on product:<key> (what customers may be told), work:<key> (internal state),
+   company and vendor:<name>, on one timeline whatever your project.
+   BRIEF: before work on a product, and after any compaction, read canon(product) and git fetch.
+   WRITE FIRST: record_decision(what, why, sets=[{subject, predicate, value}], supersedes=[ids]) before you
+   announce a decision, and supersede the related notes it returns. Cite ids; never restate values in prose.
+   ASK BY ITEM: one line per item, only for money, public promises or legal text, reversing a recorded decision,
+   or irreversible steps. A range approval like "1-2 ok" never counts for those.
+   FINISH: grep for the old value and walk work:<key>.places.
+   Precedence: 1 the owner's words in the current conversation; 2 Canon; 3 the system of record in its domain
+   (Stripe for charged prices, origin/main for what shipped): a disagreement with Canon is drift to report, never a
+   silent pick; 4 live pages, Pulse kits and guides; 5 repo docs; 6 notes, memory files, handoffs and chat.
+   Owner-only facts (company.owner_only: money, terms, promises, forbidden claims, not offered, status, direction,
+   do_not_merge, focus, rules) change only by record_decision(sets=...) quoting the owner; fact_set refuses them,
+   and their conflicts wait for the owner. Set any other fact with evidence.
 Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
 Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them."""
 
@@ -158,6 +172,10 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         if not content.strip():
             raise CommonsError("remember needs `content` (the memory text; `text` and `fact` also work)")
         aid, auth = who(agent, api_key)
+        from .canon import is_canon
+        if kind == "fact" and is_canon(subject):  # one write path for Canon, so the guard and the timeline hold
+            raise CommonsError(f"{subject} is Canon: write it with fact_set(subject, predicate, value, evidence=...), "
+                               "or for an owner-only fact record_decision(what, why, sets=[...])")
         out = store.add_item(kind, content, title=title, project=project or None, agent_id=aid, tags=tags,
                              entities=entities, related_ids=related_ids, subject=subject or None,
                              predicate=predicate or None, value=value or None, session_id=session_id or None,
@@ -213,6 +231,8 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
         """List open contradicting facts; or resolve one by passing resolve_id + keep_id (the other is superseded)."""
         if resolve_id:
             aid, _ = who(agent, api_key)
+            from .canon import check_resolve
+            check_resolve(store, resolve_id, keep_id)  # owner-only facts wait for the owner; Canon is fact_set's
             return _fmt(store.resolve_conflict(resolve_id, keep_id, aid), "json")
         return _fmt(store.list_conflicts(), "json")
 
@@ -326,15 +346,18 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def record_decision(what: str = "", why: str = "", alternatives: list[str] | None = None, evidence: list[str] | None = None,
                         project: str = "", session_id: str = "", related_ids: list[str] | None = None,
                         entities: list[str] | None = None, tags: list[str] | None = None,
+                        sets: list[dict] | None = None, supersedes: list[str] | None = None,
                         decision: str = "", rationale: str = "", agent: str = "", api_key: str = "") -> str:
         """Log a decision (`what`, alias `decision`) with its rationale (`why`, alias `rationale`) so other AIs can
-        later ask why(). Link code/memory ids via related_ids."""
+        later ask why(). Link code/memory ids via related_ids. sets=[{subject, predicate, value}] makes it Canon (the
+        only way owner-only facts change; quote the owner in why); supersedes=[ids] retires notes it replaces. Returns
+        related: notes that still state an old value, to supersede too."""
         what, why = what or decision, why or rationale
         if not what.strip() or not why.strip():
             raise CommonsError("record_decision needs `what` (alias `decision`) and `why` (alias `rationale`)")
         aid, _ = who(agent, api_key)
         return _fmt(store.record_decision(what, why, alternatives, aid, project or None, session_id or None,
-                                          related_ids, evidence, entities, tags), "json")
+                                          related_ids, evidence, entities, tags, sets=sets, supersedes=supersedes), "json")
 
     @mcp.tool()
     def why(query: str, project: str = "", max_tokens: int = 800) -> str:

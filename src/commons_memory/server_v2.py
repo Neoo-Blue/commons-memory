@@ -140,13 +140,15 @@ def register_v2(mcp, store, who):
     # ------------------------------------------------------------ continuity
     @mcp.tool()
     def pickup(project: str = "", max_tokens: int = 900, agent: str = "", api_key: str = "") -> str:
-        """Start-of-session check-in: ready subtasks, inbox, leftovers ranked by your expertise, plus user preferences."""
+        """Start-of-session check-in: FACTS first (Canon: the company core, the products you work on, open conflicts),
+        then ready subtasks, inbox, leftovers ranked by your expertise, plus user preferences."""
         from .server import playbook_once
         aid = me(agent, api_key, write=False)
         from .handover import nudge
         from .releases import nudge as rnudge
-        return (playbook_once(store, aid) + rnudge(store, aid) + nudge(store, aid)
-                + orch.pickup(aid, project or None, max_tokens)["text"])
+        pk = orch.pickup(aid, project or None, max_tokens)
+        return ((pk["facts"] + "\n\n" if pk["facts"] else "") + playbook_once(store, aid) + rnudge(store, aid)
+                + nudge(store, aid) + pk["body"])
 
     @mcp.tool()
     def add_leftover(text: str, task_type: str = "general", priority: int = 1, project: str = "", source_id: str = "",

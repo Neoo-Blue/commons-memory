@@ -16,19 +16,27 @@ def _js(o):
     return json.dumps(o, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
+BUILTIN_SKILLS = (("commons", "SKILL.md", ["core", "memory", "coordination"]),
+                  ("consistency-pass", "consistency-pass/SKILL.md", ["canon", "consistency", "weekly"]))
+
+
 def seed_skills(store) -> None:
-    """Make sure the core `commons` skill is in the pool (active)."""
+    """Make sure the built-in skills are in the pool (active): the core `commons` skill and the weekly
+    `consistency-pass`."""
     pool = SkillPool(store)
-    if store.q("SELECT 1 FROM skills WHERE name='commons'"):
+    have = {r["name"] for r in store.q(f"SELECT name FROM skills WHERE name IN ({','.join('?' * len(BUILTIN_SKILLS))})",
+                                       [b[0] for b in BUILTIN_SKILLS])}
+    missing = [b for b in BUILTIN_SKILLS if b[0] not in have]
+    if not missing:
         return
     from importlib import resources
-    content = (resources.files("commons_memory") / "skills" / "SKILL.md").read_text(encoding="utf-8")
     import os
     prev = os.environ.get("COMMONS_SKILL_AUTO_APPROVE")
     os.environ["COMMONS_SKILL_AUTO_APPROVE"] = "1"  # built-in, shipped with the package
     try:
-        pool.publish("commons", content, tags=["core", "memory", "coordination"], agent_id=store.ensure_agent("commons"),
-                     changelog="built-in core skill")
+        for name, path, tags in missing:
+            content = (resources.files("commons_memory") / "skills" / path).read_text(encoding="utf-8")
+            pool.publish(name, content, tags=tags, agent_id=store.ensure_agent("commons"), changelog="built-in skill")
     finally:
         if prev is None:
             os.environ.pop("COMMONS_SKILL_AUTO_APPROVE", None)

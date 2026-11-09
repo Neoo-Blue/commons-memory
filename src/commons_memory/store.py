@@ -123,6 +123,8 @@ class Store:
         from .projects import COLUMNS as PROJECT_COLUMNS
         add_columns(self.db, [("audit", "prev", "TEXT"), ("audit", "hash", "TEXT")] + PROJECT_COLUMNS)
         self._backfill_audit_chain()
+        from .canon import migrate as canon_migrate
+        canon_migrate(self)  # once: Canon facts move onto their one global timeline
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
         self._pgvec = False
@@ -1240,16 +1242,28 @@ class Store:
     def record_decision(self, what: str, why: str, alternatives: list[str] | None = None, agent_id: str | None = None,
                         project: str | None = None, session_id: str | None = None, related_ids: list[str] | None = None,
                         evidence: list[str] | None = None, entities: list[str] | None = None,
-                        tags: list[str] | None = None) -> dict:
+                        tags: list[str] | None = None, sets: list[dict] | None = None,
+                        supersedes: list[str] | None = None) -> dict:
+        """sets=[{subject, predicate, value}] become the current facts (Canon's write path for owner-only facts);
+        supersedes=[ids] retires the notes the decision replaces. Both are checked before anything is written."""
         content = f"DECISION: {what}\nWHY: {why}"
         if alternatives:
             content += "\nALTERNATIVES CONSIDERED:\n" + "\n".join(f"- {a}" for a in alternatives)
         if evidence:
             content += "\nEVIDENCE:\n" + "\n".join(f"- {e}" for e in evidence)
-        return self.add_item("decision", content, title=what, summary=f"{what} — because {why}"[:200], project=project,
-                             agent_id=agent_id, session_id=session_id, related_ids=related_ids, entities=entities,
-                             tags=(tags or []) + ["decision"],
-                             meta={"what": what, "why": why, "alternatives": alternatives or [], "evidence": evidence or []})
+        meta = {"what": what, "why": why, "alternatives": alternatives or [], "evidence": evidence or []}
+        if sets or supersedes:
+            from .canon import check_decision, dump
+            sets = check_decision(self, sets, supersedes)
+            content += "".join(f"\nSETS {x['subject']}.{x['predicate']} = {dump(x['value'])}" for x in sets)
+            meta |= {"sets": sets, "supersedes": list(supersedes or [])}
+        out = self.add_item("decision", content, title=what, summary=f"{what} — because {why}"[:200], project=project,
+                            agent_id=agent_id, session_id=session_id, related_ids=related_ids, entities=entities,
+                            tags=(tags or []) + ["decision"], meta=meta)
+        if sets or supersedes:
+            from .canon import apply_decision
+            out |= apply_decision(self, out["id"], sets, supersedes, agent_id, project)
+        return out
 
     def why(self, query: str, project: str | None = None, max_tokens: int = 800) -> dict:
         """Return decisions linked to an id, or matching a free-text query."""

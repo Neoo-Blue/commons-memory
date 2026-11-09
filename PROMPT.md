@@ -65,6 +65,20 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
    Creating an account? vault_generate(name, service, url, purpose) gives you a username and strong password and
    stores them; vault_reveal gets a login back. When pickup says Commons was updated, read whats_new() and adapt.
 8) Before you stop: board() for anything still open, then handoff(summary, next_steps), then report_usage().
+9) Canon is the current truth: facts on product:<key> (what customers may be told), work:<key> (internal state),
+   company and vendor:<name>, on one timeline whatever your project.
+   BRIEF: before work on a product, and after any compaction, read canon(product) and git fetch.
+   WRITE FIRST: record_decision(what, why, sets=[{subject, predicate, value}], supersedes=[ids]) before you
+   announce a decision, and supersede the related notes it returns. Cite ids; never restate values in prose.
+   ASK BY ITEM: one line per item, only for money, public promises or legal text, reversing a recorded decision,
+   or irreversible steps. A range approval like "1-2 ok" never counts for those.
+   FINISH: grep for the old value and walk work:<key>.places.
+   Precedence: 1 the owner's words in the current conversation; 2 Canon; 3 the system of record in its domain
+   (Stripe for charged prices, origin/main for what shipped): a disagreement with Canon is drift to report, never a
+   silent pick; 4 live pages, Pulse kits and guides; 5 repo docs; 6 notes, memory files, handoffs and chat.
+   Owner-only facts (company.owner_only: money, terms, promises, forbidden claims, not offered, status, direction,
+   do_not_merge, focus, rules) change only by record_decision(sets=...) quoting the owner; fact_set refuses them,
+   and their conflicts wait for the owner. Set any other fact with evidence.
 Never write secret values (use env://NAME, vault://path#key, op://vault/item/field). Never invent tool results.
 Your client lists the core tools; tools(query) finds the other ~130 and call(tool, args) runs any of them.
 ```

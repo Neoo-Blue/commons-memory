@@ -174,10 +174,15 @@ class Librarian:
         return f"model:{m}" if m else "heuristic"
 
     def _dedupe(self, run_id, items) -> dict:
+        """Near-duplicates (same kind and project): the NEWER one is kept and supersedes the older, so an edited note
+        (Vivi's hourly sync adds each edited line anew) is never buried under its stale version. Canon facts keep
+        their own timeline (facts.py) and are never merged."""
+        from .canon import is_canon
         merged, proposed = [], []
-        pool = [dict(r) for r in self.s.q("SELECT id, kind, project_id, title, content, created_at FROM items WHERE "
-                                          "superseded_by IS NULL AND kind IN ('memory','fact','source') AND COALESCE(tags,'') "
-                                          "NOT LIKE '%\"subtask\"%' ORDER BY created_at")]  # task outputs are per-run records
+        pool = [dict(r) for r in self.s.q("SELECT id, kind, project_id, title, content, subject, created_at FROM items "
+                                          "WHERE superseded_by IS NULL AND kind IN ('memory','fact','source') AND "
+                                          "COALESCE(tags,'') NOT LIKE '%\"subtask\"%' ORDER BY created_at")]  # task outputs are per-run records
+        pool = [p for p in pool if not (p["kind"] == "fact" and is_canon(p["subject"]))]
         new_ids = {i["id"] for i in items}
         pos = {p["id"]: n for n, p in enumerate(pool)}
         terms, vecs = {}, {}
@@ -195,19 +200,19 @@ class Librarian:
         pairs = sorted({(min(pos[n["id"]], pos[x["id"]]), max(pos[n["id"]], pos[x["id"]]))
                         for n in pool if n["id"] in new_ids for x in pool
                         if x["id"] != n["id"] and x["kind"] == n["kind"] and x["project_id"] == n["project_id"]})
-        for i, j in pairs:  # a is the older item and is kept; b, the newer, is the duplicate
+        for i, j in pairs:  # a is the older item, the duplicate; b, the newer, is kept
             a, b = pool[i], pool[j]
-            if b["id"] not in seen:
+            if a["id"] not in seen:
                 ta, tb = t(a), t(b)
                 jac = len(ta & tb) / max(1, len(ta | tb))
                 if jac >= 0.8 and cosine(v(a), v(b)) >= DUP_THRESHOLD:
-                    seen.add(b["id"])
+                    seen.add(a["id"])
                     if self.auto_approve():
-                        self._merge(run_id, a["id"], b["id"])
-                        merged.append(b["id"])
+                        self._merge(run_id, b["id"], a["id"])
+                        merged.append(a["id"])
                     else:
-                        p = self._propose("merge", b["id"], {"keep": a["id"], "dup": b["id"]},
-                                          f"near-duplicate of {a['id']} (cosine ≥ {DUP_THRESHOLD})")
+                        p = self._propose("merge", a["id"], {"keep": b["id"], "dup": a["id"]},
+                                          f"older near-duplicate of {b['id']} (cosine ≥ {DUP_THRESHOLD})")
                         if p:
                             proposed.append(p)
         return {"merged": merged, "proposed": proposed}

@@ -1,8 +1,9 @@
 """Import memories from other memory systems (v0.9): claude-mem, mem0, Claude Code memory files, sesame.
 
 Each source yields plain item dicts; `import_items` writes them idempotently (meta.src = "<source>:<id>"), keeping
-the original timestamps and projects, redacting like every write, and embedding in batches. Claude Code `feedback`
-memories also become shared preferences, so every connected AI follows them through pickup().
+the original timestamps and projects, redacting like every write, and embedding in batches. A source whose content
+changed since it was imported (an edited memory file) comes in again as a new version that supersedes the old one.
+Claude Code `feedback` memories also become shared preferences, so every connected AI follows them through pickup().
 `commons import <source>` runs against the local database or pushes to a remote hub (--url) via the import_items
 MCP tool. Secrets never travel: sesame contributes service metadata and env-var names only.
 """
@@ -180,8 +181,25 @@ def queued_srcs(s: Store, srcs: list[str]) -> set[str]:
         [f"import:{x}" for x in srcs[k:k + 400]])}
 
 
+def _edited(s: Store, src: str, it: dict) -> str | None:
+    """The id of src's imported item when the incoming version says something else (an edited file), else None.
+    Compared after redaction, as stored; a src that was dropped, merged or deleted stays skipped."""
+    from .redact import redact
+    r = s.q("SELECT value FROM meta WHERE key=?", (f"import:{src}",))
+    old = s.q("SELECT id, title, content FROM items WHERE id=?", (r[0]["value"],)) if r else []
+    if not old:
+        return None
+    o = old[0]
+    title = it.get("title") or ""
+    if redact(it.get("content") or it.get("text") or "")[0] != (o["content"] or "") or \
+            (title and redact(title)[0] != (o["title"] or "")):
+        return o["id"]
+    return None
+
+
 def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> dict:
-    """Write items idempotently (skip any whose src is already handled). Per-item `status`: keep (default) imports;
+    """Write items idempotently (skip any whose src is already handled, unless its content changed: then the new
+    version supersedes the old one, same src). Per-item `status`: keep (default) imports;
     review queues it for a human (retro review queue); drop / merge / duplicate only records the decision so later
     runs skip it. Embeds once at the end, in batches."""
     from . import settings
@@ -189,13 +207,14 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     keep_all = settings.get(s, "auto_approve_all")  # the owner approves everything: nothing waits in the review queue
     have = known(s, [i.get("src") for i in items])
     queued_already = queued_srcs(s, [i.get("src") for i in items])
-    added, skipped, prefs, queued, ledger, errors, new_ids = 0, 0, 0, 0, 0, [], []
+    added, skipped, updated, prefs, queued, ledger, errors, new_ids = 0, 0, 0, 0, 0, 0, [], []
     s.defer_embed = True
     try:
         for it in items:
             src, status = it.get("src"), it.get("status") or "keep"
             status = "keep" if keep_all and status == "review" else status
-            if src and src in have:
+            prev = _edited(s, src, it) if src and src in have and status == "keep" else None
+            if src and src in have and not prev:
                 skipped += 1
                 continue
             if status in ("drop", "merge", "duplicate"):
@@ -227,6 +246,10 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
                 errors.append(f"{src}: {e}")
                 continue
             new_ids.append(r["id"])
+            if prev:  # the edited version replaces the old one; history keeps both
+                s.x("UPDATE items SET superseded_by=? WHERE id=? AND superseded_by IS NULL", (r["id"], prev))
+                s.relate(r["id"], prev, "supersedes", agent_id=agent_id)
+                updated += 1
             if src:
                 s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"import:{src}", r["id"]))
                 have.add(src)
@@ -238,7 +261,7 @@ def import_items(s: Store, items: list[dict], agent_id: str | None = None) -> di
     finally:
         s.defer_embed = False
     emb = {"done": s.embed_ids(new_ids)}  # only this call's rows: a backlog is the background reindex's job
-    return {"added": added, "skipped": skipped, "queued": queued, "decided": ledger, "preferences": prefs,
+    return {"added": added, "skipped": skipped, "updated": updated, "queued": queued, "decided": ledger, "preferences": prefs,
             "embedded": emb.get("done", 0), "errors": errors[:20], "error_count": len(errors)}
 
 

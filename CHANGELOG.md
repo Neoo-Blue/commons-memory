@@ -2,6 +2,48 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.38.0: Canon, one current truth per product that every agent reads first
+- **Why.** Four incidents on 2026-11-08 had one cause: a decision landed in one place as prose and nothing carried it.
+  Pulse's kit kept the old Secret Santa prices for about 65 hours; a compacted session lost its own decision and merged
+  a trial after a "1-2 ok"; the Poise Mac app shipped while "Not today" stayed on the site, the kit and five guides; a
+  kit filled from an old page forbade features that had shipped. Facts were split by directory name, a decision could
+  not retire what it replaced, the librarian kept the older of two near-duplicates, over 200 chat fragments were filed
+  as decisions, and an edited memory file was never imported again.
+- **Canon.** Facts on `product:<key>` (what customers may be told), `work:<key>` (internal state), `company` and
+  `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, Canon facts leave their
+  projects (Pulse's `product:<key>.this_week` rows were in `pulse`) and the newest of two current values stays current.
+  `this_week` stays on the timeline but out of `canon()` and `changes()`.
+- **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
+  forbidden claims, not offered, work status, direction and do-not-merge, company focus, standing rules, precedence and
+  the list itself, vendor terms) changes only through `record_decision(sets=...)` or the Pulse relay (agent `pulse`).
+  `fact_set` and `fact_invalidate` refuse it and say how to do it right; any other Canon fact needs `evidence`.
+  `remember(kind="fact")` and `forget` no longer write or delete Canon facts.
+- **Decisions write first.** `record_decision(..., sets=[{subject, predicate, value}], supersedes=[ids])` sets the
+  facts, retires the notes it replaces, settles conflicts on what it set, and returns `related`: notes that still state
+  an old value, for the caller to supersede.
+- **`canon(product, repo)` and `changes(since)`.** canon returns the company core (at most 20 lines), each product's
+  facts, vendors, the requested product's card (one line per product without one), the last 7 days of changes and the
+  open conflict count; `repo` matches `work:<key>.repos`. changes lists what moved since an ISO time or epoch ms.
+  `fact_set`, `fact_get`, `fact_history`, `canon` and `changes` are in the default tool list.
+- **Every agent sees it.** `pickup()` opens with FACTS (the company core, cards of the products the agent worked on in
+  the last 14 days or every product's one line, the open conflict count), which the token budget never cuts; the
+  SessionStart pack keeps it whole. `turn()` appends the Canon changes since that agent's last turn, once.
+- **Conflicts.** One on an owner-only fact is never resolved by an agent (`conflicts()` refuses it; the owner's decision
+  settles it), a Canon fact is never retired by keeping the other side, and the librarian never merges Canon facts.
+- **Write path.** The librarian keeps the NEWER of two near-duplicates, so edited notes win; chat fragments the capture
+  regex catches are stored as observations, not decisions; the importer brings an edited file in again as a new
+  version that supersedes the old one (same `src`) and still skips unchanged ones.
+- **Weekly pass.** The built-in `consistency-pass` skill: check the sync, relay and caches, resolve conflicts on
+  agent-owned facts by precedence, batch owner-only ones for the owner, flag decisions that changed a product without
+  `sets`, route peer findings to a session that can edit code, retire notes that state old values, write a digest.
+- **For agents:**
+  - Before work on a product and after any compaction, read `canon(product)` and `git fetch`.
+  - Record a decision with `record_decision(what, why, sets=[...], supersedes=[...])` before you announce it, then
+    supersede the `related` notes it returns. Cite ids; never restate values in prose.
+  - Ask the owner one line per item for money, public promises, legal text, reversals and irreversible steps; a range
+    approval never counts for those.
+  - Set other Canon facts with `fact_set(..., evidence=...)`; never resolve a conflict on an owner-only fact.
+
 ## v0.37.1: dashboard tokens are optional, and stuck work can be moved or stopped by any agent
 - **Why.** The owner never wanted a token to open their own dashboard: it sits behind Cloudflare Access and the owner
   password already guards keys, approvals and settings. Answering a "Still wanted?" meant the dashboard, and a

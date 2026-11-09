@@ -15,9 +15,10 @@ precompact      emergency save (same as stop, keeps everything verbatim too)
 ==============  ===============================================================================================
 
 Typed observations (``decision``, ``bugfix``, ``discovery``, ``security_alert``, ``todo``, ``change``,
-``summary``) are stored as items of kind ``observation`` and fan out: decisions -> reasoning log
-(``record_decision``), todos -> leftovers, security alerts -> notification, everything -> KB/graph via the normal
-item pipeline. Text inside ``<private>...</private>`` never leaves the client (stripped before posting and again
+``summary``) are stored as items of kind ``observation`` and fan out: todos -> leftovers, security alerts ->
+notification, everything -> KB/graph via the normal item pipeline. A captured "decision" stays an observation unless
+the observer model gave its reason: a regex hit on a chat fragment is not a decision (agents record real ones with
+``record_decision``). Text inside ``<private>...</private>`` never leaves the client (stripped before posting and again
 server-side), secrets are redacted as everywhere else, and capture can be disabled per project.
 """
 from __future__ import annotations
@@ -366,9 +367,8 @@ class Capture:
                         (skey, o["kind"], text)):
                 continue  # consecutive Stop events resend the same transcript tail: capture each line once
             meta = {"source": f"hook:{harness}", "session": skey, "via": via}
-            if o["kind"] == "decision":
-                r = self.s.record_decision(text, o.get("why") or "(captured from session)", agent_id=agent_id, project=project)
-                iid = r["id"] if isinstance(r, dict) else r
+            if o["kind"] == "decision" and via == "llm" and str(o.get("why") or "").strip():
+                iid = self.s.record_decision(text, str(o["why"]), agent_id=agent_id, project=project)["id"]
             else:
                 iid = self.s.add_item("observation", text, title=f"[{o['kind']}] {text[:70]}", project=project,
                                       agent_id=agent_id, tags=["observation", o["kind"]], meta=meta | ({"files": o["files"]} if o.get("files") else {}))["id"]
@@ -402,11 +402,12 @@ class Capture:
     def context(self, agent_id: str, project: str | None, max_tokens: int | None = None) -> str:
         max_tokens = max_tokens or int(os.environ.get("COMMONS_HOOK_CONTEXT_TOKENS", "1200"))
         from .orchestrator import Orchestrator
-        parts = [f"# Commons memory ({project or 'all projects'})"]
+        parts, facts = [f"# Commons memory ({project or 'all projects'})"], ""
         try:
             pk = Orchestrator(self.s).pickup(agent_id, project, max_tokens=int(max_tokens * 0.6))
-            if pk["text"] and pk["text"] != "Nothing pending.":
-                parts.append(pk["text"])
+            facts = pk.get("facts") or ""
+            if pk["body"] and pk["body"] != "Nothing pending.":
+                parts.append(pk["body"])
         except Exception:  # noqa: BLE001
             pass
         rec = self.s.search("", project=project, kinds=["decision", "observation"], limit=8,
@@ -417,6 +418,9 @@ class Capture:
         text = "\n\n".join(parts)
         while estimate_tokens(text) > max_tokens and "\n" in text:
             text = text.rsplit("\n", 1)[0]
+        if facts:  # Canon is never cut by the budget: it goes right under the header, whole
+            head, _, rest = text.partition("\n\n")
+            text = "\n\n".join(x for x in (head, facts, rest) if x)
         return text
 
     def recall(self, prompt: str, project: str | None, max_tokens: int = 300, skey: str | None = None) -> str:

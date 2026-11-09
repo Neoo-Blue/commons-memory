@@ -130,12 +130,12 @@ def test_librarian_dedupe_tag_assign_undo_and_find(store, monkeypatch):
     assert rep["tagged"] >= 2 and rep["assigned"] >= 1
     item = store.q("SELECT * FROM items WHERE id=?", (a["id"],))[0]
     assert item["project_id"] == store.project_id("billing") and json.loads(item["tags"])
-    # approve merge, then undo it
+    # approve merge (the newer one is kept, v0.38), then undo it
     prop = lib.proposals()[0]
     out = lib.decide(prop["id"], True)
-    assert store.q("SELECT superseded_by FROM items WHERE id=?", (b["id"],))[0]["superseded_by"] == a["id"]
+    assert store.q("SELECT superseded_by FROM items WHERE id=?", (a["id"],))[0]["superseded_by"] == b["id"]
     lib.undo(out["log"])
-    assert store.q("SELECT superseded_by FROM items WHERE id=?", (b["id"],))[0]["superseded_by"] is None
+    assert store.q("SELECT superseded_by FROM items WHERE id=?", (a["id"],))[0]["superseded_by"] is None
     # undo a tag change
     tag_log = store.q("SELECT id, target FROM librarian_log WHERE action='tag' AND target=?", (c["id"],))[0]
     lib.undo(tag_log["id"])

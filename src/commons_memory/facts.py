@@ -4,9 +4,11 @@ A fact is ``subject.predicate = value`` with ``valid_from``/``valid_to``. Settin
 one at exactly the new ``valid_from`` (it is superseded, never deleted), so ``get(as_of=...)`` answers "what was true
 then" and ``history`` shows the full timeline. Backfilling an older value slots it in before the later one.
 Relations carry the same window (``end_relation``) so the graph can be queried as of a date.
+Canon subjects (product:, work:, company, vendor:; canon.py) have ONE global timeline whatever the caller's project.
 """
 from __future__ import annotations
 
+from .canon import dump, is_canon
 from .store import CommonsError, Store, _parse_time, iso, now
 
 COLUMNS = [("items", "valid_from", "REAL"), ("items", "valid_to", "REAL"),
@@ -45,45 +47,55 @@ class Facts:
         self.s = s
 
     def _rows(self, subject, predicate=None, pid: str | None = None, scoped: bool = False, need: str = "read"):
-        """Facts about subject (one project's timeline when scoped; pid None = unscoped facts), minus those in
-        projects the caller can't `need`."""
+        """Facts about subject (one project's timeline when scoped; pid None = unscoped facts; a Canon subject always
+        has its one global timeline), minus those in projects the caller can't `need`."""
         sql = "SELECT * FROM items WHERE kind='fact' AND subject=?"
         args = [subject]
         if predicate:
             sql += " AND predicate=?"
             args.append(predicate)
-        if scoped:
+        if scoped and not is_canon(subject):
             sql += " AND project_id IS ?" if pid is None else " AND project_id=?"
             args.append(pid)
         rows = [dict(r) for r in self.s.q(sql + " ORDER BY COALESCE(valid_from, created_at)", args)]
         hidden = self.s.hidden_ids([r["id"] for r in rows], need)
         return [r for r in rows if r["id"] not in hidden]
 
-    def set(self, subject: str, predicate: str, value: str, valid_from=None, project: str | None = None,
-            agent_id: str | None = None) -> dict:
+    def set(self, subject: str, predicate: str, value, valid_from=None, project: str | None = None,
+            agent_id: str | None = None, decision: str | None = None, evidence: str | None = None) -> dict:
+        """decision: the record_decision that set it; evidence: how the agent knows. Both are kept with the fact.
+        A Canon fact set again to its current value, with no decision behind it, changes nothing."""
+        canon = is_canon(subject)
+        if canon or not isinstance(value, str):
+            project, value = (None if canon else project), dump(value)
         vf = _t(valid_from) or now()
         pid = self.s.project_id(project) if project else None
         self.s.check_project(pid, "write")
         rows = [r for r in self._rows(subject, predicate, pid, scoped=True, need="write")
                 if r["superseded_by"] != "invalidated" or r["valid_to"]]
+        cur = [o for o in rows if (o["valid_from"] or o["created_at"]) <= vf and (o["valid_to"] is None or o["valid_to"] > vf)]
+        if canon and not decision and valid_from in (None, "") and cur and all(o["value"] == value for o in cur):
+            return {"id": cur[-1]["id"], "unchanged": True, "valid_from": iso(cur[-1]["valid_from"] or cur[-1]["created_at"]),
+                    "valid_to": None, "closed": [], "old": value}
         later = [r for r in rows if (r["valid_from"] or r["created_at"]) > vf]
         vt = min((r["valid_from"] or r["created_at"]) for r in later) if later else None
-        r = self.s.add_item("fact", f"{subject} {predicate} {value}", project=project, agent_id=agent_id,
+        meta = {k: v for k, v in (("decision", decision), ("evidence", evidence)) if v}
+        r = self.s.add_item("fact", f"{subject} {predicate} {value}", project=project, agent_id=agent_id, meta=meta or None,
                             subject=subject, predicate=predicate, value=value, check_conflicts=False)
         new = r["id"]
-        closed = []
-        for o in rows:
-            ofrom = o["valid_from"] or o["created_at"]
-            if ofrom <= vf and (o["valid_to"] is None or o["valid_to"] > vf):
-                self.s.x("UPDATE items SET valid_to=?, superseded_by=? WHERE id=?", (vf, new, o["id"]))
-                self.s.relate(new, o["id"], "supersedes", {"at": vf})
-                closed.append(o["id"])
+        for o in cur:
+            self.s.x("UPDATE items SET valid_to=?, superseded_by=? WHERE id=?", (vf, new, o["id"]))
+            self.s.relate(new, o["id"], "supersedes", {"at": vf})
         self.s.x("UPDATE items SET valid_from=?, valid_to=?, superseded_by=? WHERE id=?",
                  (vf, vt, later[0]["id"] if later else None, new))
-        return {"id": new, "valid_from": iso(vf), "valid_to": iso(vt) if vt else None, "closed": closed}
+        if decision:
+            self.s.relate(decision, new, "sets", agent_id=agent_id)
+        return {"id": new, "valid_from": iso(vf), "valid_to": iso(vt) if vt else None, "closed": [o["id"] for o in cur],
+                "old": cur[-1]["value"] if cur else None}
 
     def invalidate(self, subject: str, predicate: str, at=None, project: str | None = None) -> dict:
         t = _t(at) or now()
+        project = None if is_canon(subject) else project
         pid = self.s.find_project(project) if project else None
         if project and not pid:
             raise CommonsError(f"no such project {project!r}")

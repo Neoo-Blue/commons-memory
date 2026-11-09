@@ -37,6 +37,7 @@ check)` (bulk, idempotent import; driven by `commons import <source> [--curate] 
 | Connection (v0.8.1) | `whoami` (returns the agent for this key, server version and the marker `commons-ok`; used by the Connect page verify line) |
 | 3-step search (v0.8) | `search_index` → `timeline_around` → `get_items` (compact index first, full content only on request) |
 | Temporal facts (v0.8) | `fact_set`, `fact_invalidate`, `fact_get` (`as_of=`), `fact_history` (valid_from / valid_to) |
+| Canon (v0.38) | `canon` (company core, product cards, 7 days of changes, open conflicts), `changes` (since an ISO time or epoch ms), `record_decision(sets=[...], supersedes=[...])`; `product:`, `work:`, `company` and `vendor:` facts share one timeline, and owner-only ones change only by decision or the Pulse relay |
 | Spaces (v0.8) | `spaces`, `space_search`, `memory_audit` |
 | Diagrams (v0.8) | `diagram` (kind=`code` or `job`; interactive HTML written to Drive) |
 | Knowledge base | `kb_get`, `kb_search`, `kb_list`, `kb_refresh` |

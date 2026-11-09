@@ -52,7 +52,13 @@ def register_v8(mcp, store, who):
             out["captured"] = r.get("observations", 0)
         if user_message.strip():
             r = cap.event(aid, "prompt", pl | {"prompt": user_message}, harness="mcp")
-            out["context"] = r.get("context") or "Nothing in Commons matches this message."
+            from .canon import news
+            try:
+                moved = news(store, aid)  # Canon changes since this agent's last turn, each shown once
+            except Exception:  # noqa: BLE001 - never cost the turn its context
+                moved = ""
+            out["context"] = "\n\n".join(x for x in (r.get("context"), moved) if x) or \
+                "Nothing in Commons matches this message."
         if not out:
             raise CommonsError("pass user_message (before you answer) and/or reply (your previous answer)")
         from .server import playbook_once
@@ -387,9 +393,13 @@ def register_v8(mcp, store, who):
         """Delete a memory you wrote yourself (a mistake, a blank or broken import). Other agents' memories can only be
         removed by the user from the dashboard."""
         aid = me(agent, api_key)
-        r = store.q("SELECT agent_id, tags FROM items WHERE id=?", (id,))
+        r = store.q("SELECT agent_id, tags, kind, subject FROM items WHERE id=?", (id,))
         if not r:
             raise CommonsError(f"unknown id {id}")
+        from .canon import is_canon
+        if r[0]["kind"] == "fact" and is_canon(r[0]["subject"]):
+            raise CommonsError("Canon facts keep their history: correct one with fact_set(..., evidence=...), or for an "
+                               "owner-only fact record_decision(sets=[...])")
         if "conversation" in json.loads(r[0]["tags"] or "[]"):
             raise CommonsError("conversation records (what the user and agents said) can only be removed by the user")
         if r[0]["agent_id"] != aid:
@@ -478,19 +488,25 @@ def register_v8(mcp, store, who):
     facts = Facts(store)
 
     @mcp.tool()
-    def fact_set(subject: str, predicate: str, value: str, valid_from: str = "", project: str = "",
-                 agent: str = "", api_key: str = "") -> str:
+    def fact_set(subject: str, predicate: str, value: str | list | dict, evidence: str = "", valid_from: str = "",
+                 project: str = "", agent: str = "", api_key: str = "") -> str:
         """Assert subject.predicate = value from valid_from (default now). The previous value is closed at exactly
-        that instant (valid_to), never deleted, so fact_get(as_of=...) answers 'what was true then'."""
+        that instant (valid_to), never deleted, so fact_get(as_of=...) answers 'what was true then'. Canon subjects
+        (product:<key>, work:<key>, company, vendor:<name>) share one timeline whatever the project and need
+        evidence (commit, release, URL or item id); owner-only predicates are refused: record_decision(sets=...)."""
+        aid = me(agent, api_key)
+        from .canon import guard
+        guard(store, aid, subject, predicate, evidence)
         return _js(facts.set(subject, predicate, value, valid_from=valid_from or None, project=project or None,
-                             agent_id=me(agent, api_key)))
+                             agent_id=aid, evidence=evidence or None))
 
     @mcp.tool()
     def fact_invalidate(subject: str, predicate: str, at: str = "", project: str = "", agent: str = "",
                         api_key: str = "") -> str:
         """End the current value of subject.predicate (in `project`; empty = unscoped facts) at `at` (default now)
         without replacing it."""
-        me(agent, api_key)
+        from .canon import guard
+        guard(store, me(agent, api_key), subject, predicate)
         return _js(facts.invalidate(subject, predicate, at=at or None, project=project or None))
 
     @mcp.tool()
@@ -503,6 +519,22 @@ def register_v8(mcp, store, who):
     def fact_history(subject: str, predicate: str = "", project: str = "") -> str:
         """Full validity timeline of a subject's facts (valid_from -> valid_to)."""
         return _js(facts.history(subject, predicate or None, project=project or None))
+
+    @mcp.tool()
+    def canon(product: str = "", repo: str = "") -> str:
+        """Canon, the current truth: the company core (precedence, owner-only facts, rules), each product's customer
+        facts (product:<key>) and internal state (work:<key>), vendors, the last 7 days of changes and the open
+        conflict count. product = a key such as "santa"; repo = a git remote URL or "owner/name" (matched against
+        work:<key>.repos). Read it before work on a product and after a compaction; it outranks notes and docs."""
+        from .canon import canon as _canon
+        return _js(_canon(store, product or None, repo or None))
+
+    @mcp.tool()
+    def changes(since: str | int | float = "") -> str:
+        """What changed in Canon since `since` (ISO time, epoch ms, or 7d/12h; default the last 7 days), oldest
+        first: at, subject, predicate, old, new, by, and the decision that set it."""
+        from .canon import changes as _changes
+        return _js(_changes(store, since if since not in ("", None) else None))
 
     # ---- scoped spaces
     from .spaces import Spaces, audit
