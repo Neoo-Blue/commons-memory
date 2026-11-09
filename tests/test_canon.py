@@ -1029,3 +1029,63 @@ def test_migration_ends_a_canon_value_whose_successor_stays_a_note(store):
         {"subject": "work:pulse", "predicate": "status", "value": "live"}])
     assert C.open_conflicts(store) == (0, 0) and C.canon(store, "pulse")["products"]["pulse"]["work"] == {
         "status": "live"}
+
+
+def test_migration_ends_no_value_whose_field_keeps_a_current_one(store):
+    claude, pulse = store.ensure_agent("claude"), store.ensure_agent("pulse")
+
+    def v037(subject, value, agent, project, before=None):  # v0.37: a timeline per project, one for unfiled facts
+        i = store.add_item("fact", f"{subject} status {value}", project=project, subject=subject, predicate="status",
+                           value=value, agent_id=agent, check_conflicts=False)["id"]
+        if before:
+            store.x("UPDATE items SET superseded_by=?, valid_to=? WHERE id=?", (i, time.time(), before))
+            store.relate(i, before, "supersedes", {"at": time.time()})
+        time.sleep(0.01)
+        return i
+    # an older current value in the unfiled timeline (the owner's CLI), the same value as the one claude's closed
+    v037("work:pulse", "live", None, None)
+    p = v037("work:pulse", "live", pulse, "pulse")
+    pn = v037("work:pulse", "paused", claude, "pulse", p)
+    # an older current value in another project Pulse wrote in, a different value
+    v037("work:santa", "beta", pulse, "santa")
+    s = v037("work:santa", "live", pulse, "pulse")
+    sn = v037("work:santa", "paused", claude, "pulse", s)
+    store.x("DELETE FROM meta WHERE key='canon_global'")
+    r = C.migrate(store)
+    assert sorted(k[0] for k in r["kept"]) == sorted([pn, sn])
+    # each field keeps a value, so nothing ends and the owner has no empty field to set again
+    assert r["ended"] == [] and r["conflicts"] == [] and C.open_conflicts(store) == (0, 0)
+    assert [store.q("SELECT superseded_by FROM items WHERE id=?", (i,))[0][0] for i in (p, s)] == [pn, sn]
+    assert C.canon(store, "pulse")["products"]["pulse"]["work"] == {"status": "live"}
+    assert C.canon(store, "santa")["products"]["santa"]["work"] == {"status": "beta"}
+    assert [c for c in C.changes(store, "1") if c["new"] is None] == []
+
+
+def test_migration_puts_a_conflicts_predicate_in_one_form_so_the_owners_decision_settles_it(store):
+    claude, pulse = store.ensure_agent("claude"), store.ensure_agent("pulse")
+    # v0.37: Pulse's 'Prices' and an agent's competing unfiled value open a conflict; Pulse then corrects its price,
+    # closing the value in the conflict
+    a = store.add_item("fact", "santa Prices $9", project="pulse", subject="product:santa", predicate="Prices",
+                       value='["$9 up to 10 people"]', agent_id=pulse, check_conflicts=False)["id"]
+    time.sleep(0.01)
+    b = store.add_item("fact", "santa Prices $5", subject="product:santa", predicate="Prices",
+                       value='["$5 for everyone"]', agent_id=claude)
+    assert b["conflicts_with"] == [a]
+    time.sleep(0.01)
+    c = store.add_item("fact", "santa Prices $12", project="pulse", subject="product:santa", predicate="Prices",
+                       value='["$12 up to 10 people"]', agent_id=pulse, check_conflicts=False)["id"]
+    store.x("UPDATE items SET superseded_by=?, valid_to=? WHERE id=?", (c, time.time(), a))
+    store.relate(c, a, "supersedes", {"at": time.time()})
+    # the librarian's text conflict on a renamed row is about no field: its predicate stays
+    note = store.add_item("memory", "Santa is $5 for everyone", agent_id=claude)["id"]
+    store.x("INSERT INTO conflicts VALUES(?,?,?,?,?,?,?)", ("cfl_text", note, c, "text", "contradicts", "open",
+                                                          time.time()))
+    store.x("DELETE FROM meta WHERE key='canon_global'")
+    r = C.migrate(store)
+    assert r["dismissed"] == [] and sorted(map(tuple, r["renamed"])) == sorted([(a, "Prices"), (c, "Prices")])
+    assert sorted((x["a"], x["b"], x["subject"], x["predicate"]) for x in store.list_conflicts()) == sorted(
+        [(a, b["id"], "product:santa", "prices"), (note, c, "text", "contradicts")])
+    # the path the owner is told to take settles it
+    store.record_decision("Santa prices", "owner: $12 up to 10 people", sets=[
+        {"subject": "product:santa", "predicate": "prices", "value": ["$12 up to 10 people"]}])
+    assert C.open_conflicts(store) == (0, 0)

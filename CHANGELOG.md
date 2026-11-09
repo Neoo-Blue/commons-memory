@@ -15,20 +15,20 @@ All notable changes, newest first. The README describes the current release only
   `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, in one transaction (two
   processes opening the database together migrate once), Canon-subject facts join it: unfiled ones, and those in a
   project Pulse wrote in (`pulse`, where its `product:<key>.this_week` rows were, and any project where the agent
-  `pulse` wrote Canon facts) unless the project has an ACL, with their predicates in one form (`Prices` is `prices`);
-  an owner-only one only when the owner (no agent) or Pulse wrote it, so no other agent's old value becomes the
-  owner's word. The newest of two current values stays current; where the values of an owner-only fact differ, each
-  closed one gets an open conflict for the owner. Any other Canon-subject fact (a client's `company` facts in a
-  restricted project, an agent's `company.focus`, one restricted to named agents, one whose predicate has no one form
-  like `setup fee`, or none) stays where it is as a note, out of Canon, named in the log for the owner to keep, delete
-  or record, and its open conflicts with no Canon fact on either side are dismissed; one that pairs a Canon fact with
-  such a note (an agent's competing price) stays open, and the owner's decision on that field settles it. A Canon
-  value that such a note had closed, with no later Canon value of its field, ends at the migration, so `changes()`
-  shows old -> null where `canon()` has no value; on an owner-only field the owner also gets an open conflict between
-  it and the note. The audit row `canon.migrate` lists every moved id with its old project, every renamed predicate,
-  every row left as a note, every dismissed conflict and every ended value, so each step can be undone.
-  `changes()` never shows such a note, or a row the caller may not read, as a change's old value. `this_week` stays on
-  the timeline but out of `canon()` and `changes()`, and needs no evidence.
+  `pulse` wrote Canon facts) unless the project has an ACL, with their predicates in one form (`Prices` is `prices`, in
+  their conflicts too); an owner-only one only when the owner (no agent) or Pulse wrote it, so no other agent's old
+  value becomes the owner's word. The newest of two current values stays current; where the values of an owner-only fact
+  differ, each closed one gets an open conflict for the owner. Any other Canon-subject fact (a client's `company` facts
+  in a restricted project, an agent's `company.focus`, one restricted to named agents, one whose predicate has no one
+  form like `setup fee`, or none) stays where it is as a note, out of Canon, named in the log for the owner to keep,
+  delete or record, and its open conflicts with no Canon fact on either side are dismissed; one that pairs a Canon fact
+  with such a note (an agent's competing price) stays open, and the owner's decision on that field settles it. A Canon
+  value that such a note had closed, with no later Canon value of its field and none still current, ends at the
+  migration, so `changes()` shows old -> null where `canon()` has no value; on an owner-only field the owner also gets
+  an open conflict between it and the note. The audit row `canon.migrate` lists every moved id with its old project,
+  every renamed predicate, every row left as a note, every dismissed conflict and every ended value, so each step can be
+  undone. `changes()` never shows such a note, or a row the caller may not read, as a change's old value. `this_week`
+  stays on the timeline but out of `canon()` and `changes()`, and needs no evidence.
 - **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
   forbidden claims, not offered, work status, direction and do-not-merge, company focus, standing rules, precedence and
   the list itself, vendor terms; `company.owner_only` and `company.precedence` always) changes only through

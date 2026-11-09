@@ -650,14 +650,15 @@ def migrate(s) -> dict:
     facts in a restricted project, an agent's company.focus, a predicate with no one form like 'setup fee', or none)
     stays where it is as a note (kind memory), out of Canon, for the owner to decide, and its open conflicts with no
     Canon fact on either side are dismissed: one that pairs a Canon fact with a note stays open, and the owner's
-    decision on that field settles it. Where two rows held a current value of one subject.predicate, the newest stays
-    current and closes the others; two different values of an owner-only fact are the owner's to choose between, so
-    each closed one gets an open conflict with the kept one. A Canon value closed by a row that is a note now, with no
-    later Canon value of its field, ends at the migration (changes() shows old -> null, as canon() has no value), and on
-    an owner-only field gets an open conflict with that note. One transaction that checks the once-flag again itself,
-    so two processes opening the database at once migrate once. The audit row (canon.migrate) lists every moved id with
-    its old project, every renamed predicate, every row left as a note, every dismissed conflict and every ended value
-    with the note that had closed it, so each step can be undone; the log names the notes."""
+    decision on that field settles it (a renamed predicate is renamed in its conflicts too). Where two rows held a
+    current value of one subject.predicate, the newest stays current and closes the others; two different values of an
+    owner-only fact are the owner's to choose between, so each closed one gets an open conflict with the kept one. A
+    Canon value closed by a row that is a note now, with no later Canon value of its field and none still current, ends
+    at the migration (changes() shows old -> null, as canon() has no value), and on an owner-only field gets an open
+    conflict with that note. One transaction that checks the once-flag again itself, so two processes opening the
+    database at once migrate once. The audit row (canon.migrate) lists every moved id with its old project, every
+    renamed predicate, every row left as a note, every dismissed conflict and every ended value with the note that had
+    closed it, so each step can be undone; the log names the notes."""
     def when(r) -> float:
         return r["valid_from"] or r["created_at"] or 0.0
     if s.q("SELECT 1 FROM meta WHERE key='canon_global'"):  # every later start: no write lock to wait for
@@ -687,6 +688,8 @@ def migrate(s) -> dict:
             if p != r["predicate"]:
                 renamed.append([r["id"], r["predicate"]])
                 s.x("UPDATE items SET predicate=? WHERE id=?", (p, r["id"]))
+                s.x("UPDATE conflicts SET predicate=? WHERE (a=? OR b=?) AND subject=? AND predicate=?",
+                    (p, r["id"], r["id"], r["subject"], r["predicate"]))  # so settle_set finds them by the field
             if pid:
                 moved.append([r["id"], pid])
                 s.x("UPDATE items SET project_id=NULL WHERE id=?", (r["id"],))
@@ -704,9 +707,9 @@ def migrate(s) -> dict:
         oo = set(owner_only(s))  # as the rows say it now
         t = now()
         for (sub, pred), group in fields.items():  # a value closed by a row that is a note now, with no later Canon
-            for r in group:                          # value of its field: it ends, so changes() agrees with canon()
-                n = r["superseded_by"]
-                if n not in notes or any(when(o) > when(r) for o in group):
+            for r in group:                          # value of its field and none current: it ends, so changes()
+                n = r["superseded_by"]               # agrees with canon()
+                if n not in notes or cur.get((sub, pred)) or any(when(o) > when(r) for o in group):
                     continue
                 m = _meta(r) | {"ended": {"at": t, "by": None, "evidence": f"successor {n} kept as a note"}}
                 s.x("UPDATE items SET superseded_by='invalidated', valid_to=COALESCE(valid_to, ?), updated_at=?, "
