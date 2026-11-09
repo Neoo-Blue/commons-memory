@@ -16,6 +16,8 @@ import os
 import re
 from collections import Counter
 
+from .canon import pinned
+from .canon import pinned_id as _pinned
 from .embed import HashEmbedder, cosine
 from .ids import estimate_tokens, iso, new_id, now
 from .kb import STOP, _terms
@@ -77,6 +79,10 @@ class Librarian:
         e = r[0]
         if e["status"] != "applied" or not e["reversible"]:
             raise CommonsError("entry not undoable")
+        if e["action"] in ("merge", "assign_project") and _pinned(self.s, e["target"]):
+            raise CommonsError(f"{e['target']} is a Canon fact, or the decision that set one, now: it is never filed, "
+                               "merged away or brought back beside a newer value. Correct Canon with fact_set(..., "
+                               "evidence=...) or record_decision(sets=[...])")
         b = json.loads(e["before"] or "{}")
         if e["action"] == "tag":
             self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(b["tags"]), e["target"]))
@@ -129,6 +135,12 @@ class Librarian:
         return out
 
     def _merge(self, run_id, keep, dup) -> str:
+        """dup is superseded by keep. Never a Canon fact or the decision that set one, whatever proposed it (a proposal
+        queued before v0.38 too)."""
+        if _pinned(self.s, dup):
+            raise CommonsError(f"{dup} is a Canon fact, or the decision that set one: it is never merged away. Reject "
+                               "this proposal; Canon is corrected with fact_set(..., evidence=...) or "
+                               "record_decision(sets=[...])")
         self.s.x("UPDATE items SET superseded_by=? WHERE id=?", (keep, dup))
         self.s.relate(dup, keep, "merged_into", agent_id=self.agent_id)
         # carry the duplicate's links over to the survivor
@@ -174,10 +186,15 @@ class Librarian:
         return f"model:{m}" if m else "heuristic"
 
     def _dedupe(self, run_id, items) -> dict:
+        """Near-duplicates (same kind and project): the NEWER one is kept and supersedes the older, so an edited note
+        (Vivi's hourly sync adds each edited line anew) is never buried under its stale version. Canon facts keep
+        their own timeline (facts.py) and are never merged."""
+        from .canon import is_canon
         merged, proposed = [], []
-        pool = [dict(r) for r in self.s.q("SELECT id, kind, project_id, title, content, created_at FROM items WHERE "
-                                          "superseded_by IS NULL AND kind IN ('memory','fact','source') AND COALESCE(tags,'') "
-                                          "NOT LIKE '%\"subtask\"%' ORDER BY created_at")]  # task outputs are per-run records
+        pool = [dict(r) for r in self.s.q("SELECT id, kind, project_id, title, content, subject, created_at FROM items "
+                                          "WHERE superseded_by IS NULL AND kind IN ('memory','fact','source') AND "
+                                          "COALESCE(tags,'') NOT LIKE '%\"subtask\"%' ORDER BY created_at")]  # task outputs are per-run records
+        pool = [p for p in pool if not (p["kind"] == "fact" and is_canon(p["subject"]))]
         new_ids = {i["id"] for i in items}
         pos = {p["id"]: n for n, p in enumerate(pool)}
         terms, vecs = {}, {}
@@ -195,19 +212,19 @@ class Librarian:
         pairs = sorted({(min(pos[n["id"]], pos[x["id"]]), max(pos[n["id"]], pos[x["id"]]))
                         for n in pool if n["id"] in new_ids for x in pool
                         if x["id"] != n["id"] and x["kind"] == n["kind"] and x["project_id"] == n["project_id"]})
-        for i, j in pairs:  # a is the older item and is kept; b, the newer, is the duplicate
+        for i, j in pairs:  # a is the older item, the duplicate; b, the newer, is kept
             a, b = pool[i], pool[j]
-            if b["id"] not in seen:
+            if a["id"] not in seen:
                 ta, tb = t(a), t(b)
                 jac = len(ta & tb) / max(1, len(ta | tb))
                 if jac >= 0.8 and cosine(v(a), v(b)) >= DUP_THRESHOLD:
-                    seen.add(b["id"])
+                    seen.add(a["id"])
                     if self.auto_approve():
-                        self._merge(run_id, a["id"], b["id"])
-                        merged.append(b["id"])
+                        self._merge(run_id, b["id"], a["id"])
+                        merged.append(a["id"])
                     else:
-                        p = self._propose("merge", b["id"], {"keep": a["id"], "dup": b["id"]},
-                                          f"near-duplicate of {a['id']} (cosine ≥ {DUP_THRESHOLD})")
+                        p = self._propose("merge", a["id"], {"keep": b["id"], "dup": a["id"]},
+                                          f"older near-duplicate of {b['id']} (cosine ≥ {DUP_THRESHOLD})")
                         if p:
                             proposed.append(p)
         return {"merged": merged, "proposed": proposed}
@@ -230,10 +247,12 @@ class Librarian:
         return n
 
     def _assign(self, run_id, items) -> int:
+        """File an unfiled item in the one project its text names; Canon facts and the decisions that set them are
+        never filed (every agent reads them, whatever the project's ACL)."""
         projects = [dict(r) for r in self.s.q("SELECT id, name FROM projects")]
         n = 0
         for i in items:
-            if i["project_id"] or i["kind"] in ("checkpoint",):
+            if i["project_id"] or i["kind"] in ("checkpoint",) or pinned(i):
                 continue
             text = f"{i['title']} {i['content']}".lower()
             hits = [p for p in projects if re.search(rf"\b{re.escape(p['name'].lower())}\b", text)]
@@ -479,6 +498,8 @@ class Librarian:
                 continue
             op, a, b = parts[0].upper(), parts[1], parts[2]
             it = self.s.q("SELECT * FROM items WHERE id=?", (a,))
+            if op in ("PROJECT", "MERGE") and _pinned(self.s, a if op == "PROJECT" else b.split()[0]):
+                continue  # a Canon fact, or the decision that set one, is never filed in a project or merged away
             if op == "TAG" and it:
                 new = [t.strip().lower() for t in b.split(",") if t.strip()][:6]
                 self._log(run_id, "tag", a, {"tags": json.loads(it[0]["tags"] or "[]")}, {"tags": new})

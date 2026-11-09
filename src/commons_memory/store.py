@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS audit(
 
 
 PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,63}")
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")  # control characters and Unicode line separators
 # One fixed bigint: pg_advisory_xact_lock(integer) does not exist, and every hub process must share this key.
 _AUDIT_CHAIN_LOCK = "SELECT pg_advisory_xact_lock(748213651::bigint)"
 
@@ -94,6 +95,12 @@ def _j(v: Any) -> str:
 
 def _hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _agent_name(name) -> None:
+    """An agent name is one line: Canon's change lines, and every list of who did what, print it as written."""
+    if CONTROL.search(str(name or "")):
+        raise CommonsError(f"an agent name is one line of text with no control characters, not {name!r}")
 
 
 class Store:
@@ -123,6 +130,8 @@ class Store:
         from .projects import COLUMNS as PROJECT_COLUMNS
         add_columns(self.db, [("audit", "prev", "TEXT"), ("audit", "hash", "TEXT")] + PROJECT_COLUMNS)
         self._backfill_audit_chain()
+        from .canon import migrate as canon_migrate
+        canon_migrate(self)  # once: Canon facts move onto their one global timeline
         self.embedder = get_embedder() if embedder == "auto" else (
             get_embedder(embedder) if isinstance(embedder, str) else embedder)
         self._pgvec = False
@@ -235,6 +244,7 @@ class Store:
     def register_agent(self, name: str, vendor: str = "", model: str = "", description: str = "",
                        capabilities: list[str] | None = None, a2a_url: str = "",
                        issue_key: bool = True, issued_by: str = "") -> dict:
+        _agent_name(name)
         existing = self.get_agent(name)
         key = f"cmk_{pysecrets.token_urlsafe(24)}" if issue_key else None
         if existing:
@@ -246,6 +256,9 @@ class Store:
             aid = existing["id"]
         else:
             k = name.strip().casefold()
+            if any(k == str(r["name"]).strip().casefold() for r in self.q("SELECT name FROM agents")):
+                raise CommonsError(f"{name!r} is another agent's name in other letters (names ignore case): pick "
+                                   "another")
             if any(k == str(r["display"]).casefold() for r in self.q("SELECT display FROM agents WHERE display IS NOT NULL")):
                 raise CommonsError(f"{name!r} is another agent's display name: pick another name")
             aid = new_id("agt")
@@ -265,6 +278,7 @@ class Store:
         return dict(r[0]) if r else None
 
     def ensure_agent(self, name: str) -> str:
+        _agent_name(name)
         a = self.get_agent(name)
         if a:
             self.x("UPDATE agents SET last_seen=? WHERE id=?", (now(), a["id"]))
@@ -409,6 +423,12 @@ class Store:
             raise CommonsError(f"unknown id {iid}")
         r = r[0]
         self.check_project(r["project_id"], "write")
+        from .canon import check_delete, pinned
+        if content is not None or title is not None:
+            check_delete(r)  # a Canon fact, or the decision that set one, is never rewritten in place; tags may change
+        if project and pinned(r):
+            raise CommonsError(f"{iid} is a Canon fact, or the decision that set one: every agent reads Canon, and "
+                               "why() explains it by that decision, so neither is filed in a project")
         sets, args, found = [], [], []
         if content is not None and title is None and (r["title"] or "") == " ".join((r["content"] or "").split())[:80]:
             title = " ".join(content.split())[:80]  # an auto-derived title follows the edited content
@@ -442,9 +462,11 @@ class Store:
     def delete_item(self, iid: str, agent_id: str | None = None) -> dict:
         """Hard-delete a memory with its keyword row, vector and graph edges (ACL: write on its project)."""
         self._row_write(iid)
-        r = self.q("SELECT project_id, kind FROM items WHERE id=?", (iid,))
+        r = self.q("SELECT project_id, kind, subject, meta FROM items WHERE id=?", (iid,))
         if not r:
             raise CommonsError(f"unknown id {iid}")
+        from .canon import check_delete
+        check_delete(r[0])
         self.check_project(r[0]["project_id"], "write")
         self.x("DELETE FROM items WHERE id=?", (iid,))
         self.sync_fts(iid)
@@ -484,6 +506,8 @@ class Store:
         c = r[0]
         if keep_id not in (c["a"], c["b"]):
             raise CommonsError("keep_id must be one of the conflicting items")
+        from .canon import check_resolve
+        check_resolve(self, conflict_id, keep_id)  # owner-only ones wait for the owner; Canon is corrected, not retired
         loser = c["b"] if keep_id == c["a"] else c["a"]
         self.x("UPDATE items SET superseded_by=? WHERE id=?", (keep_id, loser))
         self.x("UPDATE conflicts SET status='resolved' WHERE id=?", (conflict_id,))
@@ -1240,16 +1264,50 @@ class Store:
     def record_decision(self, what: str, why: str, alternatives: list[str] | None = None, agent_id: str | None = None,
                         project: str | None = None, session_id: str | None = None, related_ids: list[str] | None = None,
                         evidence: list[str] | None = None, entities: list[str] | None = None,
-                        tags: list[str] | None = None) -> dict:
+                        tags: list[str] | None = None, sets: list[dict] | None = None,
+                        supersedes: list[str] | None = None) -> dict:
+        """sets=[{subject, predicate, value}] become the current facts (Canon's write path for owner-only facts);
+        supersedes=[ids] retires the notes the decision replaces. Both are checked before anything is written, and the
+        decision lands with everything it sets in one transaction (vectors are added after the commit, so no agent
+        waits on embedding)."""
         content = f"DECISION: {what}\nWHY: {why}"
         if alternatives:
             content += "\nALTERNATIVES CONSIDERED:\n" + "\n".join(f"- {a}" for a in alternatives)
         if evidence:
             content += "\nEVIDENCE:\n" + "\n".join(f"- {e}" for e in evidence)
-        return self.add_item("decision", content, title=what, summary=f"{what} — because {why}"[:200], project=project,
-                             agent_id=agent_id, session_id=session_id, related_ids=related_ids, entities=entities,
-                             tags=(tags or []) + ["decision"],
-                             meta={"what": what, "why": why, "alternatives": alternatives or [], "evidence": evidence or []})
+        meta = {"what": what, "why": why, "alternatives": alternatives or [], "evidence": evidence or []}
+        if sets or supersedes:
+            from .canon import check_decision, dump
+            sets = check_decision(self, sets, supersedes)
+            content += "".join(f"\nSETS {x['subject']}.{x['predicate']} = {dump(x['value'])}" for x in sets)
+            meta |= {"sets": sets, "supersedes": list(supersedes or [])}
+        deferred = self.defer_embed
+        self.defer_embed = True
+        try:
+            with self.tx():
+                out = self.add_item("decision", content, title=what, summary=f"{what}, because {why}"[:200],
+                                    project=project, agent_id=agent_id, session_id=session_id, related_ids=related_ids,
+                                    entities=entities, tags=(tags or []) + ["decision"], meta=meta)
+                if sets or supersedes:
+                    from .canon import apply_decision
+                    out |= apply_decision(self, out["id"], sets, supersedes, agent_id, project)
+        finally:
+            self.defer_embed = deferred
+        # the decision is recorded: nothing from here on may tell the caller it failed (a retry would record it twice)
+        try:
+            if not deferred:
+                self.embed_ids([out["id"]] + [x["id"] for x in out.get("set") or []])
+        except Exception:  # noqa: BLE001 - reindex() embeds what has no vector, as it does an import's backlog
+            pass
+        if sets or supersedes:
+            from .canon import related
+            try:
+                out["related"] = related(self, out["id"], out)
+            except Exception as e:  # noqa: BLE001
+                out["related"] = []
+                out["note"] = (f"recorded; looking for notes that still state an old value failed "
+                               f"({type(e).__name__}), so search for them yourself")
+        return out
 
     def why(self, query: str, project: str | None = None, max_tokens: int = 800) -> dict:
         """Return decisions linked to an id, or matching a free-text query."""

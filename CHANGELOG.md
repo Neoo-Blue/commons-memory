@@ -2,6 +2,112 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.38.0: Canon, one current truth per product that every agent reads first
+- **Why.** Four incidents on 2026-11-08 had one cause: a decision landed in one place as prose and nothing carried it.
+  Pulse's kit kept the old Secret Santa prices for about 65 hours; a compacted session lost its own decision and merged
+  a trial after a "1-2 ok"; the Poise Mac app shipped while "Not today" stayed on the site, the kit and five guides; a
+  kit filled from an old page forbade features that had shipped. Facts were split by directory name, a decision could
+  not retire what it replaced, the librarian kept the older of two near-duplicates, over 200 chat fragments were filed
+  as decisions, and an edited memory file was never imported again.
+- **Upgrade the hub first.** Upgrade the hub before the hook clients (a hub older than v0.38 has no `canon` tool; the
+  clients then stay quiet and use the hub's pack), and back up the hub's database before its first v0.38 start.
+- **Canon.** Facts on `product:<key>` (what customers may be told), `work:<key>` (internal state), `company` and
+  `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, in one transaction (two
+  processes opening the database together migrate once), Canon-subject facts join it: unfiled ones, and those in a
+  project Pulse wrote in (`pulse`, where its `product:<key>.this_week` rows were, and any project where the agent
+  `pulse` wrote Canon facts) unless the project has an ACL, with their predicates in one form (`Prices` is `prices`, in
+  their conflicts too); an owner-only one only when the owner (no agent) or Pulse wrote it, so no other agent's old
+  value becomes the owner's word. The newest of two current values stays current; where the values of an owner-only fact
+  differ, each closed one gets an open conflict for the owner. Any other Canon-subject fact (a client's `company` facts
+  in a restricted project, an agent's `company.focus`, one restricted to named agents, one whose predicate has no one
+  form like `setup fee`, or none) stays where it is as a note, out of Canon, named in the log for the owner to keep,
+  delete or record, and its open conflicts with no Canon fact on either side are dismissed; one that pairs a Canon fact
+  with such a note (an agent's competing price) stays open, and the owner's decision on that field settles it. A Canon
+  value that such a note had closed, with no later Canon value of its field and none still current, ends at the
+  migration, so `changes()` shows old -> null where `canon()` has no value; on an owner-only field the owner also gets
+  an open conflict between it and the note. The audit row `canon.migrate` lists every moved id with its old project,
+  every renamed predicate, every row left as a note, every dismissed conflict and every ended value, so each step can be
+  undone. `changes()` never shows such a note, or a row the caller may not read, as a change's old value. `this_week`
+  stays on the timeline but out of `canon()` and `changes()`, and needs no evidence.
+- **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
+  forbidden claims, not offered, work status, direction and do-not-merge, company focus, standing rules, precedence and
+  the list itself, vendor terms; `company.owner_only` and `company.precedence` always) changes only through
+  `record_decision(sets=...)` quoting the owner; the Pulse relay records the owner's Studio edits that way too, and no
+  agent name stands for the owner. The list's entries are `<kind>.<predicate>` names in one form (`Product.Prices` is
+  `product.prices`). `fact_set` and `fact_invalidate` refuse it and say how to do it right; any other
+  Canon fact needs `evidence`. A new agent name may not differ from an existing one only in case, and no agent name
+  holds a control character or line break.
+- **One form, one history.** Canon predicates are lowercase `a-z0-9_` (`Prices` is `prices`; anything else is
+  refused), a value must say something (`[]` does: nothing is listed), Canon takes no `valid_from` in the future, and
+  a value set again in another form (key order, `19.0` for `19`) is no change. A Canon fact is corrected by a newer
+  value, never superseded by a decision, deleted (`forget`, the dashboard), rewritten in place, restricted, filed in a
+  project or merged away (by the librarian or a refile suggestion, one queued before v0.38 included, or by undoing an
+  old change), or retired by resolving a conflict, on any path; the decision that set one stays too, as it was
+  recorded and visible to every agent: never moved into a project (by the librarian, a refile suggestion or the
+  dashboard), merged away, superseded by a later decision, retired through a conflict or listed by `related`.
+  `fact_set` settles the open conflicts on the value it corrects; `fact_invalidate` on Canon needs evidence, ends a
+  value no earlier than it began and shows in `changes()` as old -> null. `record_decision` lands whole or not at all,
+  and once it has landed it reports success even if embedding it fails afterwards (the vectors come with
+  `reindex()`). `remember(kind="fact")` no longer writes Canon facts. The key after `product:`, `work:`, `vendor:` or
+  `company:` is lowercase `a-z0-9_.-` and starts with a letter or digit (`product:santa`, `company:ops`): `fact_set`,
+  `fact_invalidate` and `record_decision(sets=...)` refuse any other, so no key carries a line break into the
+  injected Canon, which also prints every subject, key and agent name on one line.
+- **Decisions write first.** `record_decision(..., sets=[{subject, predicate, value}], supersedes=[ids])` sets the
+  facts, retires the notes it replaces, settles conflicts on what it set, and returns `related`: notes that still state
+  an old value, for the caller to supersede.
+- **`canon(product, repo)` and `changes(since)`.** canon returns the company core (at most 20 lines, each at most 240
+  characters), each product's facts, the company's facts and the owner-only list in force, vendors, the requested
+  product's card (one line per product without one), the last 7 days of changes and the open conflict count; `repo`
+  matches `work:<key>.repos`. changes lists what moved since an ISO time or epoch ms (a backfill is no change).
+  `fact_set`, `fact_get`, `fact_history`, `canon` and `changes` are in the default tool list.
+- **Every agent sees it.** `pickup()` opens with FACTS (the company core, cards of the products the agent worked on in
+  the last 14 days or every product's one line, the open conflict count), which the token budget never cuts; the
+  SessionStart pack keeps it whole, and is not built when the hook client already has a fresh Canon. `turn()` appends
+  the Canon changes since that agent's last turn, once, even a write that committed late.
+- **On this machine, before the hub answers.** A detached `commons canon pull` (session start, then at most every 5
+  minutes on prompts; run from the home folder with Python's safe path) keeps `~/.commons/state/canon.json` (the
+  hub's `canon()` with the last 7 days of changes, at most 500, each value cut to 400 characters, plus `fetched_at`,
+  `ok`, `error`; a failed pull keeps the old data, and the key never lands in it) and `canon.md` current. Every session
+  start, compaction, resume and clear included, opens with the core, the card of the product whose `work:<key>.repos`
+  holds the checkout's origin (its one line when the card does not fit; outside any product's repo, one line per
+  product), the last 7 days of changes to every product and the company (this checkout's first, as many of the newest
+  8 as fit after the core and the card; the next message shows up to 10 more), the open conflict count and how far
+  the checkout is behind origin as of the last fetch, all from the cache; a missing, 6-hour-old or failing cache is
+  said in one line the owner sees too, and only a fresh cache lets the hub leave its FACTS out. Each prompt adds one
+  line per change the session has not been shown, the newest 10 and one line naming `changes(since=...)` for older
+  ones, and, once per session, the card of a product it names (Chinese names too; everyday-word keys only through a
+  name fact). Where Canon is, dated, with the precedence and the owner-only list, is also kept as a second managed
+  block in `CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md`; it holds no text an
+  agent wrote (the standing rules and focus stay in `canon()` and the session context), is written atomically (a
+  hard-linked file in place; a read-only one, or one that is not UTF-8, left alone without stopping the others), in
+  the file's own line endings, with no value able to forge a marker and no deleted end marker able to take the owner's
+  text with it, and goes when the cache is 3 days old. The hook never loads the MCP server. `COMMONS_HOOK_CANON=0`
+  turns it off, block included.
+- **A missed start is retried.** 17 of 54 recent home-folder sessions started with no pack when the hub was slow, and
+  nothing retried. A start the hub received but did not answer in time is now held for its session, and the next
+  prompt asks for the pack once (marked as asked before it waits, so a hook killed while waiting never repeats it),
+  with the rest of the hook's 4-second budget less 0.7 s for the interpreter's start; a hub that could not be reached
+  is not asked again. The late pack comes after that prompt's own duplicate-work warning, recall and claim id, so a
+  cut to fit trims the pack, never those. Canon's part of a hook's context stays under 6,000 characters, so the whole
+  stays under 9,500, the size Claude Code still injects whole, with room for the hub's warnings.
+- **Conflicts.** One on an owner-only fact is never resolved by an agent (`conflicts()` refuses it; the owner's decision
+  settles it), a Canon fact or the decision that set one is never retired by keeping the other side, and the librarian
+  never merges Canon facts.
+- **Write path.** The librarian keeps the NEWER of two near-duplicates, so edited notes win; chat fragments the capture
+  regex catches are stored as observations, not decisions; the importer brings an edited file in again as a new
+  version that supersedes the old one (same `src`) and still skips unchanged ones.
+- **Weekly pass.** The built-in `consistency-pass` skill: check the sync, relay and caches, resolve conflicts on
+  agent-owned facts by precedence, batch owner-only ones for the owner, flag decisions that changed a product without
+  `sets`, route peer findings to a session that can edit code, retire notes that state old values, write a digest.
+- **For agents:**
+  - Before work on a product and after any compaction, read `canon(product)` and `git fetch`.
+  - Record a decision with `record_decision(what, why, sets=[...], supersedes=[...])` before you announce it, then
+    supersede the `related` notes it returns. Cite ids; never restate values in prose.
+  - Ask the owner one line per item for money, public promises, legal text, reversals and irreversible steps; a range
+    approval never counts for those.
+  - Set other Canon facts with `fact_set(..., evidence=...)`; never resolve a conflict on an owner-only fact.
+  - Correct a Canon fact with `sets=[...]` or `fact_set`; never supersede, forget or restrict one.
+
 ## v0.37.1: dashboard tokens are optional, and stuck work can be moved or stopped by any agent
 - **Why.** The owner never wanted a token to open their own dashboard: it sits behind Cloudflare Access and the owner
   password already guards keys, approvals and settings. Answering a "Still wanted?" meant the dashboard, and a

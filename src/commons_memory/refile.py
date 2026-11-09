@@ -217,29 +217,47 @@ def _flow_rows(s: Store, key: str, sure_only: bool) -> list:
             if r["from_pid"] in members and (r["confidence"] == "high" or not sure_only)], to
 
 
+def _still(s: Store, iid: str, pid: str) -> bool:
+    """The note is where a suggestion (or a move) left it, and it is no Canon fact or decision that set one: a
+    suggestion made before v0.38 may name a fact that is Canon now, in no project, and a note may have moved since."""
+    from .canon import pinned
+    r = s.q("SELECT project_id, kind, subject, meta FROM items WHERE id=?", (iid,))
+    return bool(r) and r[0]["project_id"] == pid and not pinned(r[0])
+
+
 def apply(s: Store, key: str, sure_only: bool = True) -> dict:
-    """Move a flow's notes (the sure ones, or all) to their new project; Undo restores them."""
+    """Move a flow's notes (the sure ones, or all) to their new project; Undo restores them. A suggestion whose note
+    has moved since, or is a Canon fact now, is dismissed instead."""
     ensure(s)
     rows, to = _flow_rows(s, key, sure_only)
-    t = now()
+    t, moved = now(), 0
     with s.tx():
         for r in rows:
+            if not _still(s, r["item_id"], r["from_pid"]):
+                s.x("UPDATE refile_moves SET status='dismissed', decided_at=? WHERE item_id=?", (t, r["item_id"]))
+                continue
             s.x("UPDATE items SET project_id=? WHERE id=?", (to, r["item_id"]))
             s.x("UPDATE refile_moves SET status='moved', decided_at=? WHERE item_id=?", (t, r["item_id"]))
-    s.audit(None, "refile.apply", key, {"moved": len(rows), "sure_only": sure_only})
-    return {"moved": len(rows), "undo": {"key": key, "at": t}}
+            moved += 1
+    s.audit(None, "refile.apply", key, {"moved": moved, "dismissed": len(rows) - moved, "sure_only": sure_only})
+    return {"moved": moved, "dismissed": len(rows) - moved, "undo": {"key": key, "at": t}}
 
 
 def undo(s: Store, key: str, at: float) -> dict:
+    """Put back what apply moved, but not a note that has moved again since or is a Canon fact now."""
     ensure(s)
     frm, _, to = key.partition(">")
     rows = s.q("SELECT item_id, from_pid FROM refile_moves WHERE status='moved' AND to_pid=? AND decided_at=?", (to, float(at)))
+    restored = 0
     with s.tx():
         for r in rows:
+            if not _still(s, r["item_id"], to):
+                continue
             s.x("UPDATE items SET project_id=? WHERE id=?", (r["from_pid"], r["item_id"]))
             s.x("UPDATE refile_moves SET status='proposed', decided_at=NULL WHERE item_id=?", (r["item_id"],))
-    s.audit(None, "refile.undo", key, {"restored": len(rows)})
-    return {"restored": len(rows)}
+            restored += 1
+    s.audit(None, "refile.undo", key, {"restored": restored, "left": len(rows) - restored})
+    return {"restored": restored, "left": len(rows) - restored}
 
 
 def dismiss(s: Store, key: str) -> dict:

@@ -20,7 +20,7 @@ import os
 CORE = ["turn", "pickup", "start_work", "finish_work", "msg_recv", "msg_send", "ask", "msg_get", "who", "summon", "resume", "search", "expand", "why",
         "remember", "record_decision", "observe_preference", "submit_task", "claim_subtask", "heartbeat", "complete_subtask", "handoff",
         "add_leftover", "report_usage", "whoami", "board", "board_add", "board_update", "credentials", "use_credential", "vault_deposit", "skill", "skill_help",
-        "infra",
+        "infra", "fact_set", "fact_get", "fact_history", "canon", "changes",
         "tools", "call"]  # one-time or occasional tools (set_profile, vault_generate, handover_status,
 # whats_new, status_update, subtask_pause, context_load, ...) stay one call() away; pickup tells agents when they apply
 # `lite`: memory + coordination only, for the Claude Code plugin and anyone who wants no credential or infra tools

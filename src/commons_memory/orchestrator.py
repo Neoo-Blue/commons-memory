@@ -1459,8 +1459,16 @@ class Orchestrator:
                 for r in self.s.q("SELECT * FROM recurring ORDER BY name")]
 
     # ---------------------------------------------------------------- pickup
-    def pickup(self, agent_id: str, project: str | None = None, max_tokens: int = 900) -> dict:
-        """What should this agent do next? Ready subtasks, inbox, expertise-ranked leftovers, plus preferences."""
+    def pickup(self, agent_id: str, project: str | None = None, max_tokens: int = 900, facts: bool = True) -> dict:
+        """What should this agent do next? It opens with FACTS (Canon: the company core and the products this agent
+        works on, plus the open conflict count), which the budget never cuts; then ready subtasks, inbox,
+        expertise-ranked leftovers and preferences, cut to max_tokens. `body` is everything after FACTS. facts=False
+        leaves FACTS out without building it (a hook client that already has Canon)."""
+        from .canon import facts_section
+        try:
+            facts = facts_section(self.s, agent_id, project) if facts else ""
+        except Exception:  # noqa: BLE001 - Canon must never cost an agent its check-in
+            facts = ""
         a = dict(self.s.q("SELECT * FROM agents WHERE id=?", (agent_id,))[0])
         exp = json.loads(a.get("profile") or "{}").get("expertise", {})
         subs = self.claimable(agent_id, 5)
@@ -1504,7 +1512,8 @@ class Orchestrator:
             text += "\n\n" + digest
         while estimate_tokens(text) > max_tokens and "\n" in text:
             text = text.rsplit("\n", 1)[0]
-        return {"text": text, "subtasks": [s["id"] for s in subs], "inbox": [i["id"] for i in inbox],
+        return {"text": f"{facts}\n\n{text}" if facts else text, "facts": facts, "body": text,
+                "subtasks": [s["id"] for s in subs], "inbox": [i["id"] for i in inbox],
                 "leftovers": [lo["id"] for lo in ranked[:8]], "preferences": prefs["preferences"], "board": bd["ids"]}
 
 

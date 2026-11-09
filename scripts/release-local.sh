@@ -2,7 +2,7 @@
 # Publish a Commons release without GitHub Actions: build the wheel and sdist from the tag on the homelab CI box
 # (ssh alias `ci`, LXC 123; any box with uv works: CI_HOST=...), then create the GitHub release with that version's
 # CHANGELOG section and attach both files. The one-line installers and `commons join` download the latest release.
-# Usage: scripts/release-local.sh v0.37.1 [--not-latest]      (run from the repo, after pushing the tag)
+# Usage: scripts/release-local.sh v0.38.0 [--not-latest]      (run from the repo, after pushing the tag)
 set -euo pipefail
 TAG="${1:?usage: scripts/release-local.sh vX.Y.Z [--not-latest]}"
 LATEST="--latest"

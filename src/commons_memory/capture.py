@@ -6,8 +6,10 @@ DB). Canonical events:
 
 ==============  ===============================================================================================
 session_start   inject a token-budgeted context pack (pickup: tasks/inbox/leftovers, preferences, KB digest,
-                recent decisions and observations for the project)
-prompt          record the prompt; return a small relevant-memory snippet when there is a confident match
+                recent decisions and observations for the project); the hook client puts Canon first, from its
+                local cache (canoncache.py), and holds a start the hub missed for the session's next prompt
+prompt          record the prompt; return a small relevant-memory snippet when there is a confident match; the
+                hook client adds Canon changes since the session's watermark and the card of a product named
 tool            append a raw observation (tool name + compact input/output), fire-and-forget
 stop            summarise pending observations (+ transcript tail) into typed observations
 session_end     same as stop, then close the capture session
@@ -15,9 +17,10 @@ precompact      emergency save (same as stop, keeps everything verbatim too)
 ==============  ===============================================================================================
 
 Typed observations (``decision``, ``bugfix``, ``discovery``, ``security_alert``, ``todo``, ``change``,
-``summary``) are stored as items of kind ``observation`` and fan out: decisions -> reasoning log
-(``record_decision``), todos -> leftovers, security alerts -> notification, everything -> KB/graph via the normal
-item pipeline. Text inside ``<private>...</private>`` never leaves the client (stripped before posting and again
+``summary``) are stored as items of kind ``observation`` and fan out: todos -> leftovers, security alerts ->
+notification, everything -> KB/graph via the normal item pipeline. A captured "decision" stays an observation unless
+the observer model gave its reason: a regex hit on a chat fragment is not a decision (agents record real ones with
+``record_decision``). Text inside ``<private>...</private>`` never leaves the client (stripped before posting and again
 server-side), secrets are redacted as everywhere else, and capture can be disabled per project.
 """
 from __future__ import annotations
@@ -181,13 +184,13 @@ class Capture:
         skey = f"{harness}:{payload.get('session_id') or payload.get('conversation_id') or 'default'}"
         if event == "session_start":
             from .skillsync import index
-            return {"ok": True, "context": self.context(agent_id, project) if st["inject"] else "",
-                    "skills": index(self.s)}  # the hook writes pointers so every pool skill shows up natively
+            return {"ok": True, "skills": index(self.s),  # the hook writes pointers so every pool skill shows up natively
+                    "context": self.context(agent_id, project, facts=not payload.get("canon_local")) if st["inject"] else ""}
         if event == "prompt":
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
             if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
                 return {"ok": True, "context": ""}
-            ctx = ""
+            ctx, late = "", ""
             if st["inject"]:  # before storing, or it finds itself
                 from . import settings
                 from . import work as W
@@ -196,7 +199,15 @@ class Capture:
                 except Exception:  # noqa: BLE001 - a failed check must not block the prompt
                     ctx = ""
                 ctx += self.recall(text, project, skey=skey)
-            ctx += self._session_claim(agent_id, skey, text, project, payload.get("cwd"))
+                if payload.get("start_pack"):  # the hub did not answer this session's start: its pack comes now
+                    try:
+                        late = ("Commons start pack (late: the hub did not answer when this session started)\n" +
+                                self.context(agent_id, project, facts=not payload.get("canon_local")))
+                    except Exception:  # noqa: BLE001 - never cost the prompt its own context
+                        pass
+            claim = self._session_claim(agent_id, skey, text, project, payload.get("cwd"))
+            # the prompt's own warning, recall and claim id first, a late pack last: a cut to fit trims only the pack
+            ctx = "\n\n".join(x.strip("\n") for x in (ctx, claim, late) if x.strip())
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
                 self.verbatim(agent_id, project, skey, harness, "user", text)
@@ -366,9 +377,8 @@ class Capture:
                         (skey, o["kind"], text)):
                 continue  # consecutive Stop events resend the same transcript tail: capture each line once
             meta = {"source": f"hook:{harness}", "session": skey, "via": via}
-            if o["kind"] == "decision":
-                r = self.s.record_decision(text, o.get("why") or "(captured from session)", agent_id=agent_id, project=project)
-                iid = r["id"] if isinstance(r, dict) else r
+            if o["kind"] == "decision" and via == "llm" and str(o.get("why") or "").strip():
+                iid = self.s.record_decision(text, str(o["why"]), agent_id=agent_id, project=project)["id"]
             else:
                 iid = self.s.add_item("observation", text, title=f"[{o['kind']}] {text[:70]}", project=project,
                                       agent_id=agent_id, tags=["observation", o["kind"]], meta=meta | ({"files": o["files"]} if o.get("files") else {}))["id"]
@@ -399,14 +409,17 @@ class Capture:
         return {"observations": len(made), "via": via, "items": made}
 
     # ---------------------------------------------------------------------------------------- injection
-    def context(self, agent_id: str, project: str | None, max_tokens: int | None = None) -> str:
+    def context(self, agent_id: str, project: str | None, max_tokens: int | None = None, facts: bool = True) -> str:
+        """The start pack. facts=False leaves Canon's FACTS out: the hook client already put Canon first, from its
+        local cache."""
         max_tokens = max_tokens or int(os.environ.get("COMMONS_HOOK_CONTEXT_TOKENS", "1200"))
         from .orchestrator import Orchestrator
-        parts = [f"# Commons memory ({project or 'all projects'})"]
+        parts, canon = [f"# Commons memory ({project or 'all projects'})"], ""
         try:
-            pk = Orchestrator(self.s).pickup(agent_id, project, max_tokens=int(max_tokens * 0.6))
-            if pk["text"] and pk["text"] != "Nothing pending.":
-                parts.append(pk["text"])
+            pk = Orchestrator(self.s).pickup(agent_id, project, max_tokens=int(max_tokens * 0.6), facts=facts)
+            canon = pk.get("facts") or ""
+            if pk["body"] and pk["body"] != "Nothing pending.":
+                parts.append(pk["body"])
         except Exception:  # noqa: BLE001
             pass
         rec = self.s.search("", project=project, kinds=["decision", "observation"], limit=8,
@@ -417,6 +430,9 @@ class Capture:
         text = "\n\n".join(parts)
         while estimate_tokens(text) > max_tokens and "\n" in text:
             text = text.rsplit("\n", 1)[0]
+        if canon:  # Canon is never cut by the budget: it goes right under the header, whole
+            head, _, rest = text.partition("\n\n")
+            text = "\n\n".join(x for x in (head, canon, rest) if x)
         return text
 
     def recall(self, prompt: str, project: str | None, max_tokens: int = 300, skey: str | None = None) -> str:
@@ -481,14 +497,16 @@ class Capture:
 
 
 # ------------------------------------------------------------------------------------------- hook client
-def output_for(harness: str, hevent: str, context: str) -> str:
-    """Harness-specific stdout JSON for context injection ('' when nothing to inject)."""
+def output_for(harness: str, hevent: str, context: str, notice: str = "") -> str:
+    """Harness-specific stdout JSON for context injection ('' when nothing to inject). Claude Code also shows `notice`
+    to the owner (systemMessage); every harness has it in the context."""
     if not context:
         return ""
     if harness == "cursor":
         return json.dumps({"additional_context": context}) if hevent == "sessionStart" else ""
     if harness in ("claude-code", "codex", "gemini"):
-        return json.dumps({"hookSpecificOutput": {"hookEventName": hevent, "additionalContext": context}})
+        out = {"hookSpecificOutput": {"hookEventName": hevent, "additionalContext": context}}
+        return json.dumps(out | ({"systemMessage": notice} if notice and harness == "claude-code" else {}))
     return context
 
 
@@ -563,17 +581,33 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         payload["keep_working"] = int(os.environ.get("COMMONS_HOOK_KEEP_WORKING_MAX", "5"))
     url = os.environ.get("COMMONS_URL", "").rstrip("/")
     timeout = float(os.environ.get("COMMONS_HOOK_TIMEOUT", "2"))
+    canon, notice, st, flags = _canon_first(harness, event, payload, sid, cwd, url, store_factory, started)
+    payload |= flags  # canon_local (the hub leaves FACTS out), start_pack (a start the hub missed)
+    late = bool(payload.get("start_pack"))
+    # the harness kills a hook at 5 s, counted from before run_hook: a start, and a prompt (whose Canon may have run
+    # git), wait for the hub only for what the budget has left after the interpreter's own start; a late pack, all of it
+    if event == "session_start" or st is not None:
+        left = QUEUE_HOOK_BUDGET_S - HOOK_START_S - (time.monotonic() - started)
+        timeout = max(0.1, left) if late else min(timeout, max(0.1, left))
+    if late:  # asked for once: a hook killed while it waits must not leave the next prompt to ask again
+        try:
+            from .canoncache import save, session
+            save(sid, session(sid) | {"start_pending": False})
+        except Exception:  # noqa: BLE001
+            pass
     if url:
         res = _post(url, harness, event, payload, timeout, started)
     else:
         res = _local(harness, event, payload, store_factory)
+    slow = res is SLOW  # the hub has a start it did not answer in time: its pack comes with the next prompt, once
+    res = res if isinstance(res, dict) else None  # a reply of any other shape is no reply
     if event == "session_start" and url:
         try:  # Commons still registered as this client's MCP server? (put back if something removed it)
             from .setup import ensure_mcp
             note = ensure_mcp(harness, url)
             if note:
                 res = dict(res or {})
-                res["context"] = (note + "\n\n" + (res.get("context") or "")).strip()
+                res["context"] = (note + "\n\n" + str(res.get("context") or "")).strip()
         except Exception:  # noqa: BLE001 - never block a session over this
             pass
     if res and event == "session_start" and isinstance(res.get("skills"), list):
@@ -583,8 +617,87 @@ def run_hook(harness: str, hevent: str, stdin_text: str, store_factory=None) -> 
         except Exception:  # noqa: BLE001 - never block a session over this
             pass
     if res and res.get("block") and harness == "claude-code" and hevent == "Stop":
-        return json.dumps({"decision": "block", "reason": res["block"]})  # Claude Code keeps going instead of stopping
-    return output_for(harness, hevent, (res or {}).get("context", "")) if res else ""
+        return json.dumps({"decision": "block", "reason": str(res["block"])})  # Claude Code keeps going, not stopping
+    ctx = (res or {}).get("context")
+    out = output_for(harness, hevent, _join(canon, ctx if isinstance(ctx, str) else ""), notice)
+    if st is not None:  # saved only now that the output exists: a hook killed earlier leaves the session unmarked
+        if event == "session_start":
+            st["start_pending"] = slow  # an unreachable hub is not asked again with every prompt
+        elif late:
+            st["start_pending"] = False
+        try:
+            from .canoncache import save
+            save(sid, st)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+CONTEXT_MAX = 9500  # Claude Code moves a longer additionalContext to a file and shows the session 2,000 chars of it
+
+
+def _join(canon: str, ctx: str) -> str:
+    """Canon from the cache first and whole (canoncache keeps it under CANON_MAX), then the hub's context, cut at a
+    line end to fit."""
+    room = CONTEXT_MAX - len(canon) - 2
+    if len(ctx) > room:
+        ctx = ctx[:room].rsplit("\n", 1)[0] if room > 0 else ""
+    return "\n\n".join(x for x in (canon, ctx) if x)
+
+
+def _canon_first(harness, event, payload, sid, cwd, url, store_factory, started) -> tuple[str, str, dict | None, dict]:
+    """Canon from the local state cache (canoncache.py), ahead of the hub's answer and with no hub call: (context, a
+    notice for the owner, this session's state for run_hook to save once its output is built, flags for the hub's
+    payload). Starts the background pull when one is due, whatever else fails. Never raises."""
+    if event not in ("session_start", "prompt") or (harness == "cursor" and event == "prompt"):
+        return "", "", None, {}  # Cursor takes hook context only at session start
+    if os.environ.get("COMMONS_HOOK_CANON") == "0":
+        if event == "session_start":
+            try:  # off on this machine: the core block leaves the instruction files too
+                from .instructions import canon_core
+                canon_core(None)
+            except Exception:  # noqa: BLE001
+                pass
+        return "", "", None, {}
+    try:
+        from . import canoncache as K
+    except Exception:  # noqa: BLE001
+        return "", "", None, {}
+    due, c, until = False, None, started + QUEUE_HOOK_BUDGET_S - 1.5  # git stops in time to leave the hub its turn
+    try:
+        due = K.due(K.PULL_START_S if event == "session_start" else K.PULL_PROMPT_S)
+        if due and not url:  # a local database: the pull is a few queries, so it runs now
+            K.pull(store_factory() if store_factory else None)
+        c = K.read()
+        if event == "session_start":
+            st: dict = {}
+            ctx, notice = K.start(c, cwd, st, until)
+            flags = {"canon_local": st["canon"]}  # so the hub's pack leaves FACTS out: a fresh Canon is already here
+        else:
+            st, notice = K.session(sid), ""
+            text = str(payload.get("prompt") or payload.get("text") or "")
+            relayed = text.lstrip().startswith(HARNESS_NOTICES)  # a background task's report, not the user
+            if st:
+                ctx = K.prompt(c, st, text, cards=not relayed)
+            else:  # no state: this session's start never ran here or was cut off, so its Canon comes now
+                ctx, notice = K.start(c, cwd, st, until)
+            flags = {"start_pack": True, "canon_local": bool(st.get("canon"))} \
+                if st.get("start_pending") and not relayed else {}
+    except Exception:  # noqa: BLE001 - Canon must never cost a session its start or a prompt
+        return "", "", None, {}
+    finally:
+        if due and url:
+            try:
+                K.spawn()
+            except Exception:  # noqa: BLE001
+                pass
+    if event == "session_start":
+        try:  # the owner's core in every always-loaded instruction file, for sub-agents, peers and the woken Claude
+            from .instructions import canon_core
+            canon_core(K.block(c))  # None takes it out: no Canon, or a cache more than 3 days old
+        except Exception:  # noqa: BLE001
+            pass
+    return ctx, notice, st, flags
 
 
 def git_changes(cwd: str, session: str, start: bool = False) -> dict | None:
@@ -639,7 +752,9 @@ def _key() -> str:
 
 
 QUEUE_DRAIN_EVENTS = 25  # most events one hook sends for the queue, so a backlog never holds up the agent
-QUEUE_HOOK_BUDGET_S = 4  # harnesses kill a hook at 5 s, so draining stops before that
+QUEUE_HOOK_BUDGET_S = 4  # harnesses kill a hook at 5 s: draining, a start's wait and its git calls stop before that
+HOOK_START_S = 0.7  # the interpreter starts before run_hook does (longer under load): Canon paths leave it this much
+SLOW = object()  # _post: the hub has the event and did not answer in time (not: the hub could not be reached)
 QUEUE_CLAIM_STALE_S = 60  # a claim this old belongs to a hook that died
 
 
@@ -757,9 +872,9 @@ def _post(url, harness, event, payload, timeout, started=None):
     try:
         res = _send(url, body, timeout)
     except TimeoutError:  # urllib raises this bare only once the request is sent: the hub has it and is just slow
-        return None
+        return SLOW
     except Exception:  # noqa: BLE001 - offline: queue for later, never block the agent
-        if event != "session_start":
+        if event != "session_start":  # a start is held for its own session instead: its pack comes with the next prompt
             _enqueue(q, (json.dumps(body) + "\n").encode())
         return None
     spare = QUEUE_HOOK_BUDGET_S - (time.monotonic() - (started or time.monotonic()))

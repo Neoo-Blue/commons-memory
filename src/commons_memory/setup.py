@@ -274,7 +274,7 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
         except Exception as e:  # noqa: BLE001
             add("key accepted", False, str(e)[:120], "key")
     add("MCP server registered", registered(client, base), client, "mcp")
-    from .server import INSTRUCTIONS
+    from .playbook import INSTRUCTIONS
     files = [Path(os.path.expanduser(p)) for p in I.TARGETS[client]]
     current = all(f.exists() and INSTRUCTIONS in f.read_text() for f in files)
     add("master instructions current", current, ", ".join(map(str, files)), "instructions")

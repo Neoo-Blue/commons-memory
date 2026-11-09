@@ -138,6 +138,7 @@ COMMONS_VAULT_KEY	Master key of the credential vault (base64 of 32 random bytes)
 COMMONS_RELATED_SIM	Similarity (0-1) at which start_work lists a memory, doc or decision as connected to the work (default 0.6)
 COMMONS_VAULT_KEY_FILE	File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume)
 COMMONS_AGENT_JUDGE_WAIT	Seconds Commons waits for a connected agent to answer a credential judgment (agent:any / agent:NAME in the decision chain) before moving on (default 90)
+COMMONS_HOOK_CANON	Set to 0 so the hooks on this machine neither keep the Canon cache in ~/.commons/state/ nor inject it, nor write the Canon core block into the instruction files (one already there is taken out)
 COMMONS_HOOK_GIT	Set to 0 so the hooks on this machine never send the session's git diff to Commons
 COMMONS_AUDIT_KEY_FILE	Ed25519 key that signs audit exports (default COMMONS_HOME/audit_signing.key, created 0600 on first export)
 COMMONS_DASHBOARD_PORT	Dashboard port used to build approval links when no dashboard URL is set on Setup. If Docker maps the dashboard to another host port, or it sits behind a tunnel, set the dashboard URL on Setup instead
