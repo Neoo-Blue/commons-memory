@@ -13,15 +13,18 @@ All notable changes, newest first. The README describes the current release only
   clients then stay quiet and use the hub's pack), and back up the hub's database before its first v0.38 start.
 - **Canon.** Facts on `product:<key>` (what customers may be told), `work:<key>` (internal state), `company` and
   `vendor:<name>` share one global timeline whatever project the writer is in. Once, at start, in one transaction (two
-  processes opening the database together migrate once), the Canon facts Pulse wrote leave their projects (`pulse`,
-  where its `product:<key>.this_week` rows were, and any project where the agent `pulse` wrote Canon facts) unless the
-  project has an ACL, with their predicates in one form (`Prices` is `prices`), and the newest of two current values
-  stays current; where the values of an owner-only fact differ, each closed one gets an open conflict for the owner.
-  Any other Canon-subject fact in a project (a client's `company` facts in a restricted project), any restricted to
-  named agents, and any whose predicate has no one form (`setup fee`), stays where it is as a note, out of Canon, named
-  in the log for the owner to keep, delete or record. The audit row `canon.migrate` lists every moved id with its old project, every renamed
-  predicate and every row left as a note, so each step can be undone; a fact with no predicate is left where it was.
-  `this_week` stays on the timeline but out of `canon()` and `changes()`, and needs no evidence.
+  processes opening the database together migrate once), Canon-subject facts join it: unfiled ones, and those in a
+  project Pulse wrote in (`pulse`, where its `product:<key>.this_week` rows were, and any project where the agent
+  `pulse` wrote Canon facts) unless the project has an ACL, with their predicates in one form (`Prices` is `prices`);
+  an owner-only one only when the owner (no agent) or Pulse wrote it, so no other agent's old value becomes the
+  owner's word. The newest of two current values stays current; where the values of an owner-only fact differ, each
+  closed one gets an open conflict for the owner. Any other Canon-subject fact (a client's `company` facts in a
+  restricted project, an agent's `company.focus`, one restricted to named agents, one whose predicate has no one form
+  like `setup fee`, or none) stays where it is as a note, out of Canon, named in the log for the owner to keep, delete
+  or record, and its open conflicts are dismissed. The audit row `canon.migrate` lists every moved id with its old
+  project, every renamed predicate, every row left as a note and every dismissed conflict, so each step can be undone.
+  `changes()` never shows such a note, or a row the caller may not read, as a change's old value. `this_week` stays on
+  the timeline but out of `canon()` and `changes()`, and needs no evidence.
 - **Owner-only facts.** `company.owner_only` (default: prices, setup fee, trial, refund, partner terms, promises,
   forbidden claims, not offered, work status, direction and do-not-merge, company focus, standing rules, precedence and
   the list itself, vendor terms; `company.owner_only` and `company.precedence` always) changes only through
@@ -35,10 +38,12 @@ All notable changes, newest first. The README describes the current release only
   value, never superseded by a decision, deleted (`forget`, the dashboard), rewritten in place, restricted, filed in a
   project or merged away (by the librarian or a refile suggestion, one queued before v0.38 included, or by undoing an
   old change), or retired by resolving a conflict, on any path; the decision that set one stays too, as it was
-  recorded and visible to every agent. `fact_set` settles the open conflicts on the value it corrects;
-  `fact_invalidate` on Canon needs evidence, ends a value no earlier than it began and shows in `changes()` as old ->
-  null. `record_decision` lands whole or not at all, and once it has landed it reports success even if embedding it
-  fails afterwards (the vectors come with `reindex()`). `remember(kind="fact")` no longer writes Canon facts.
+  recorded and visible to every agent: never moved into a project (by the librarian, a refile suggestion or the
+  dashboard), merged away, superseded by a later decision, retired through a conflict or listed by `related`.
+  `fact_set` settles the open conflicts on the value it corrects; `fact_invalidate` on Canon needs evidence, ends a
+  value no earlier than it began and shows in `changes()` as old -> null. `record_decision` lands whole or not at all,
+  and once it has landed it reports success even if embedding it fails afterwards (the vectors come with
+  `reindex()`). `remember(kind="fact")` no longer writes Canon facts.
 - **Decisions write first.** `record_decision(..., sets=[{subject, predicate, value}], supersedes=[ids])` sets the
   facts, retires the notes it replaces, settles conflicts on what it set, and returns `related`: notes that still state
   an old value, for the caller to supersede.
@@ -66,17 +71,20 @@ All notable changes, newest first. The README describes the current release only
   name fact). Where Canon is, dated, with the precedence and the owner-only list, is also kept as a second managed
   block in `CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md`; it holds no text an
   agent wrote (the standing rules and focus stay in `canon()` and the session context), is written atomically (a
-  hard-linked file in place, a read-only one left alone), in the file's own line endings, with no value able to forge
-  a marker and no deleted end marker able to take the owner's text with it, and goes when the cache is 3 days old. The
-  hook never loads the MCP server. `COMMONS_HOOK_CANON=0` turns it off, block included.
+  hard-linked file in place; a read-only one, or one that is not UTF-8, left alone without stopping the others), in
+  the file's own line endings, with no value able to forge a marker and no deleted end marker able to take the owner's
+  text with it, and goes when the cache is 3 days old. The hook never loads the MCP server. `COMMONS_HOOK_CANON=0`
+  turns it off, block included.
 - **A missed start is retried.** 17 of 54 recent home-folder sessions started with no pack when the hub was slow, and
   nothing retried. A start the hub received but did not answer in time is now held for its session, and the next
   prompt asks for the pack once (marked as asked before it waits, so a hook killed while waiting never repeats it),
   with the rest of the hook's 4-second budget less 0.7 s for the interpreter's start; a hub that could not be reached
-  is not asked again. Canon's part of a hook's context stays under 6,000 characters, so the whole stays under 9,500,
-  the size Claude Code still injects whole, with room for the hub's warnings.
+  is not asked again. The late pack comes after that prompt's own duplicate-work warning, recall and claim id, so a
+  cut to fit trims the pack, never those. Canon's part of a hook's context stays under 6,000 characters, so the whole
+  stays under 9,500, the size Claude Code still injects whole, with room for the hub's warnings.
 - **Conflicts.** One on an owner-only fact is never resolved by an agent (`conflicts()` refuses it; the owner's decision
-  settles it), a Canon fact is never retired by keeping the other side, and the librarian never merges Canon facts.
+  settles it), a Canon fact or the decision that set one is never retired by keeping the other side, and the librarian
+  never merges Canon facts.
 - **Write path.** The librarian keeps the NEWER of two near-duplicates, so edited notes win; chat fragments the capture
   regex catches are stored as observations, not decisions; the importer brings an edited file in again as a new
   version that supersedes the old one (same `src`) and still skips unchanged ones.

@@ -5,10 +5,10 @@ may be told), work:<key> (internal state), company, and vendor:<name>. A new val
 history stays. Owner-only predicates (company.owner_only, default OWNER_ONLY; company.owner_only and
 company.precedence always) change only through record_decision(sets=...) quoting the owner (the Pulse relay records
 the owner's Pulse Studio edits that way too); any agent may set the others, with evidence. Predicates have one form
-(lowercase, a-z 0-9 _), values say something, and a Canon fact is never deleted, restricted, filed in a project or
-retired by a note: it is corrected by a newer value, or ended by fact_invalidate. Copies (kits, caches, peer briefs,
-llms.txt, phone prompts) are rendered from Canon and never write back. canon() renders it, changes() lists what moved,
-pickup() opens with it, turn() adds what changed.
+(lowercase, a-z 0-9 _), values say something, and a Canon fact, like the decision that set one, is never deleted,
+restricted, filed in a project or retired: it is corrected by a newer value, or ended by fact_invalidate. Copies (kits,
+caches, peer briefs, llms.txt, phone prompts) are rendered from Canon and never write back. canon() renders it,
+changes() lists what moved, pickup() opens with it, turn() adds what changed.
 """
 from __future__ import annotations
 
@@ -177,8 +177,8 @@ def owner_only(s, data: dict | None = None) -> list[str]:
 
 
 _CONFLICTS = ("SELECT c.id, c.a, c.b, c.subject, c.predicate, a.kind AS ka, a.subject AS sa, a.predicate AS pa, "
-              "b.kind AS kb, b.subject AS sb, b.predicate AS pb FROM conflicts c LEFT JOIN items a ON a.id=c.a "
-              "LEFT JOIN items b ON b.id=c.b ")
+              "a.meta AS ma, b.kind AS kb, b.subject AS sb, b.predicate AS pb, b.meta AS mb FROM conflicts c "
+              "LEFT JOIN items a ON a.id=c.a LEFT JOIN items b ON b.id=c.b ")
 
 
 def _owner_only_in(r, oo) -> str | None:
@@ -304,9 +304,13 @@ def changes(s, since=None, keys: list[str] | None = None, until: float | None = 
         if not wanted(r) or (r["valid_to"] is not None and r["valid_to"] <= r["created_at"] and
                              r["superseded_by"] != "invalidated"):
             continue  # a backfill slots in before a later value: it was never the current one
-        old = s.q("SELECT i.value FROM relations x JOIN items i ON i.id=x.dst WHERE x.src=? AND x.type='supersedes' "
-                  "ORDER BY COALESCE(i.valid_from, i.created_at) DESC LIMIT 1", (r["id"],))
-        old = old[0]["value"] if old else None
+        # the newest value it closed that is still a fact and the caller may read: a row the migration kept out of
+        # Canon (a note now) or one restricted to other agents is never shown as the old value
+        old = s.q("SELECT i.id, i.value FROM relations x JOIN items i ON i.id=x.dst WHERE x.src=? AND "
+                  "x.type='supersedes' AND i.kind='fact' ORDER BY COALESCE(i.valid_from, i.created_at) DESC",
+                  (r["id"],))
+        unseen = s.hidden_ids([o["id"] for o in old]) if old else set()
+        old = next((o["value"] for o in old if o["id"] not in unseen), None)
         if old is not None and same(old, r["value"]):
             continue
         out.append((r["created_at"], {"id": r["id"], "at": iso(r["created_at"]), "subject": r["subject"],
@@ -461,10 +465,13 @@ def check_resolve(s, conflict_id: str, keep_id: str) -> None:
     if hit:
         raise CommonsError(f"{conflict_id} is on {hit}, an owner-only fact: agents never resolve it. Ask the owner, "
                            "then record_decision(why=<their words>, sets=[...]), which settles it.")
-    lose = ("b", "sb", "kb") if keep_id == r["a"] else ("a", "sa", "ka")
+    lose = ("b", "sb", "kb", "mb") if keep_id == r["a"] else ("a", "sa", "ka", "ma")
     if r[lose[2]] == "fact" and is_canon(r[lose[1]]):
         raise CommonsError(f"{r[lose[0]]} is a Canon fact: keep it, or correct Canon with fact_set(subject, predicate, "
                            "value, evidence=...), which closes the old value")
+    if sets_canon({"kind": r[lose[2]], "meta": r[lose[3]]}):
+        raise CommonsError(f"{r[lose[0]]} is the decision that set Canon facts, which cite it: keep it; a new "
+                           "record_decision(sets=[...]) changes them")
 
 
 def check_decision(s, sets, supersedes) -> list[dict]:
@@ -486,26 +493,35 @@ def check_decision(s, sets, supersedes) -> list[dict]:
                                    f'"work.status"], not {x["value"]!r}')
         out.append({"subject": sub, "predicate": pred, "value": value})
     for i in supersedes or []:
-        r = s.q("SELECT project_id, kind, subject FROM items WHERE id=?", (i,))
+        r = s.q("SELECT project_id, kind, subject, meta FROM items WHERE id=?", (i,))
         if not r:
             raise CommonsError(f"supersedes: no item {i}")
         if r[0]["kind"] == "fact" and is_canon(r[0]["subject"]):
             raise CommonsError(f"supersedes: {i} is a Canon fact ({r[0]['subject']}); correct Canon with sets=[...]")
+        if sets_canon(r[0]):  # why() explains Canon by it, for every agent
+            raise CommonsError(f"supersedes: {i} is the decision that set Canon facts, which cite it: it stays as it "
+                               "was recorded; this decision's own sets=[...] change them")
         s.check_project(r[0]["project_id"], "write")
         s._row_write(i)
     return out
-
-
-def canon_fact(s, iid) -> bool:
-    """Is item iid a Canon fact (as it is now, not as some older suggestion saw it)?"""
-    return any(r["kind"] == "fact" and is_canon(r["subject"])
-               for r in s.q("SELECT kind, subject FROM items WHERE id=?", (iid,)))
 
 
 def sets_canon(row) -> bool:
     """A decision whose sets wrote Canon facts: they cite it, and why() explains them by it."""
     return row["kind"] == "decision" and any(isinstance(x, dict) and is_canon(x.get("subject"))
                                              for x in _meta(row).get("sets") or [])
+
+
+def pinned(row) -> bool:
+    """A Canon fact, or the decision that set one (row with kind, subject, meta): never filed in a project, merged
+    away or retired, so every agent's canon() and why() keep reading both."""
+    return (row["kind"] == "fact" and is_canon(row["subject"])) or sets_canon(row)
+
+
+def pinned_id(s, iid) -> bool:
+    """Is item iid pinned, a Canon fact or the decision that set one (as it is now, not as some older suggestion saw
+    it)?"""
+    return any(pinned(r) for r in s.q("SELECT kind, subject, meta FROM items WHERE id=?", (iid,)))
 
 
 def check_delete(row) -> None:
@@ -519,14 +535,18 @@ def check_delete(row) -> None:
                            "was recorded. Record a new decision with sets=[...] to change them")
 
 
-def _settle(s, rows, agent_id, by) -> None:
-    """Mark conflicts resolved by a decision or a corrected Canon fact (`by`); an item stays flagged only while another
-    conflict on it is open."""
+def _close(s, rows, status: str) -> None:
+    """Close conflicts ({id, a, b} rows); an item stays flagged only while another conflict on it is open."""
     for c in rows:
-        s.x("UPDATE conflicts SET status='resolved' WHERE id=?", (c["id"],))
+        s.x("UPDATE conflicts SET status=? WHERE id=?", (status, c["id"]))
     for i in {x for c in rows for x in (c["a"], c["b"])}:
         if not s.q("SELECT 1 FROM conflicts WHERE status='open' AND (a=? OR b=?)", (i, i)):
             s.x("UPDATE items SET conflict=0 WHERE id=?", (i,))
+
+
+def _settle(s, rows, agent_id, by) -> None:
+    """Mark conflicts resolved by a decision or a corrected Canon fact (`by`)."""
+    _close(s, rows, "resolved")
     if rows:
         s.audit(agent_id, "conflict.resolve", by, {"by": by, "conflicts": [c["id"] for c in rows]})
 
@@ -561,11 +581,11 @@ def _stale(s, done: list[dict], exclude: set) -> list[str]:
         hits += s.rank(" ".join(parts), mode="keyword", kinds=["memory", "fact", "decision", "document", "handoff"],
                        limit=50)[0] or []
         for i in dict.fromkeys(hits):
-            r = s.q("SELECT kind, subject, predicate, content, tags FROM items WHERE id=? AND superseded_by IS NULL", (i,))
-            if not r or i in exclude or i in out or '"conversation"' in (r[0]["tags"] or "") or (
-                    r[0]["kind"] == "fact" and (is_canon(r[0]["subject"]) or (  # Canon is corrected, never superseded
-                        r[0]["subject"] == d["subject"] and r[0]["predicate"] == d["predicate"]))):
-                continue
+            r = s.q("SELECT kind, subject, predicate, content, tags, meta FROM items WHERE id=? AND "
+                    "superseded_by IS NULL", (i,))
+            if not r or i in exclude or i in out or '"conversation"' in (r[0]["tags"] or "") or pinned(r[0]) or (
+                    r[0]["kind"] == "fact" and r[0]["subject"] == d["subject"] and r[0]["predicate"] == d["predicate"]):
+                continue  # Canon, and the decision that set it, are corrected by a newer value, never superseded
             if any(p.lower() in (r[0]["content"] or "").lower() for p in parts):
                 out.append(i)
     return out
@@ -603,18 +623,19 @@ def related(s, decision: str, out: dict) -> list[str]:
 
 
 def migrate(s) -> dict:
-    """v0.38, once per database: the Canon facts Pulse wrote leave their projects for the one global timeline, in one
-    form. A Canon-subject fact moves only from a project Pulse wrote in (its project 'pulse', or one where the agent
-    pulse wrote Canon facts) that every agent may read (no project ACL), and only when its predicate has one form
-    ('Prices' and 'prices ' are prices). Any other Canon-subject fact in a project (a client's 'company' facts in a
-    restricted project), any restricted to named agents (restrict()), and any whose predicate has no one form ('setup
-    fee'), stays where it is as a note (kind memory), out of Canon, for the owner to decide. Where two rows held a
-    current value of one subject.predicate, the newest stays current and closes the others; two different values of an
-    owner-only fact were never the owner's choice, so each closed one gets an open conflict with the kept one, for the
-    owner. A fact with no predicate is no Canon fact and stays where it is. One transaction that checks the once-flag
-    again itself, so two processes opening the database at once migrate once. The audit row (canon.migrate) lists
-    every moved id with its old project, every renamed predicate and every row left as a note, so each step can be
-    undone; the log names the notes."""
+    """v0.38, once per database: Canon-subject facts join the one global timeline, in one form. A fact joins when it is
+    unfiled or sits in a project Pulse wrote in (its project 'pulse', or one where the agent pulse wrote Canon facts)
+    that every agent may read (no project ACL), is restricted to no named agents (restrict()), has a predicate with one
+    form ('Prices' and 'prices ' are prices), and, for an owner-only predicate, was written by the owner (no agent) or
+    Pulse: no other agent's v0.37 value becomes the owner's word. Any other Canon-subject fact (a client's 'company'
+    facts in a restricted project, an agent's company.focus, a predicate with no one form like 'setup fee', or none)
+    stays where it is as a note (kind memory), out of Canon, for the owner to decide, and its open conflicts are
+    dismissed: it is no value of a Canon field now. Where two rows held a current value of one subject.predicate, the
+    newest stays current and closes the others; two different values of an owner-only fact are the owner's to choose
+    between, so each closed one gets an open conflict with the kept one. One transaction that checks the once-flag
+    again itself, so two processes opening the database at once migrate once. The audit row (canon.migrate) lists every
+    moved id with its old project, every renamed predicate, every row left as a note and every dismissed conflict, so
+    each step can be undone; the log names the notes."""
     def when(r) -> float:
         return r["valid_from"] or r["created_at"] or 0.0
     if s.q("SELECT 1 FROM meta WHERE key='canon_global'"):  # every later start: no write lock to wait for
@@ -626,15 +647,18 @@ def migrate(s) -> dict:
         rows = [dict(r) for r in s.q("SELECT id, subject, predicate, value, project_id, agent_id, valid_from, "
                                      "valid_to, superseded_by, created_at FROM items WHERE kind='fact' AND "
                                      "subject IS NOT NULL")]
-        rows = [r for r in rows if is_canon(r["subject"]) and r["predicate"]]
+        rows = [r for r in rows if is_canon(r["subject"])]
         acl = {r["project_id"] for r in s.q("SELECT DISTINCT project_id FROM project_acl")}
         hidden = {r["ref"] for r in s.q("SELECT DISTINCT ref FROM row_acl")}  # records restricted to named agents
         pulse = {r["id"] for r in s.q("SELECT id FROM agents WHERE lower(name)='pulse'")}
-        pulses = {r["project_id"] for r in rows if r["agent_id"] in pulse} | {s.find_project("pulse")}
+        pulses = {r["project_id"] for r in rows if r["agent_id"] in pulse and r["predicate"]} | \
+            {s.find_project("pulse")}
+        guarded = set(OWNER_ONLY) | set(owner_only(s))  # the list as any row said it: wider, never narrower
         moved, renamed, kept, closed, opened, cur = [], [], [], [], [], {}
         for r in rows:
-            p, pid = str(r["predicate"]).strip().casefold(), r["project_id"]
-            if not PREDICATE.fullmatch(p) or r["id"] in hidden or (pid and (pid in acl or pid not in pulses)):
+            p, pid = str(r["predicate"] or "").strip().casefold(), r["project_id"]
+            theirs = f"{kind_of(r['subject'])}.{p}" in guarded and r["agent_id"] and r["agent_id"] not in pulse
+            if not PREDICATE.fullmatch(p) or r["id"] in hidden or (pid and (pid in acl or pid not in pulses)) or theirs:
                 kept.append([r["id"], pid])
                 s.x("UPDATE items SET kind='memory' WHERE id=?", (r["id"],))
                 continue
@@ -647,6 +671,9 @@ def migrate(s) -> dict:
                 s.x("DELETE FROM relations WHERE src=? AND type='in_project'", (r["id"],))
             if r["superseded_by"] is None and r["valid_to"] is None:
                 cur.setdefault((r["subject"], p), []).append(r)
+        notes = {i for i, _ in kept}  # a note now takes its open conflicts with it: no owner decision settles those
+        drop = [c for c in s.q("SELECT id, a, b FROM conflicts WHERE status='open'") if {c["a"], c["b"]} & notes]
+        _close(s, drop, "dismissed")
         oo = set(owner_only(s))  # as the rows say it now
         for (sub, pred), group in cur.items():
             group.sort(key=when)
@@ -662,7 +689,8 @@ def migrate(s) -> dict:
                                                                        "open", now()))
                     s.x("UPDATE items SET conflict=1 WHERE id IN (?,?)", (keep["id"], o["id"]))
         s.x("INSERT OR REPLACE INTO meta VALUES('canon_global', ?)", (str(now()),))
-        out = {"moved": moved, "renamed": renamed, "kept": kept, "closed": closed, "conflicts": opened}
+        out = {"moved": moved, "renamed": renamed, "kept": kept, "closed": closed, "conflicts": opened,
+               "dismissed": [c["id"] for c in drop]}
         if any(out.values()):
             s.audit(None, "canon.migrate", "", out)
     for pid in {p for _, p in moved + kept if p}:
@@ -673,11 +701,12 @@ def migrate(s) -> dict:
                     "older values closed, %d conflicts opened for the owner (audit canon.migrate lists them)",
                     len(moved), len(renamed), len(closed), len(opened))
     if kept:
-        what = {r["id"]: f"{r['subject']}.{r['predicate']}" for r in rows}
+        what = {r["id"]: f"{r['subject']}.{r['predicate'] or ''}" for r in rows}
         log.warning("Canon migration: %d Canon-subject facts stay where they were, as notes and out of Canon (in a "
-                    "project with an ACL or one Pulse never wrote in, restricted to named agents, or with no one-form "
-                    "predicate); the owner keeps, deletes or records each into Canon with record_decision(sets=...): "
-                    "%s", len(kept),
+                    "project with an ACL or one Pulse never wrote in, restricted to named agents, with no one-form "
+                    "predicate, or owner-only and written by neither the owner nor Pulse), and %d open conflicts on "
+                    "them are dismissed; the owner keeps, deletes or records each into Canon with "
+                    "record_decision(sets=...): %s", len(kept), len(drop),
                     "; ".join(f"{i} {what[i]} ({s.project_name(p) or 'no project'})" for i, p in kept[:50]) +
                     (f"; {len(kept) - 50} more in the audit row" if len(kept) > 50 else ""))
     return out

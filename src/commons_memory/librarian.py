@@ -16,7 +16,8 @@ import os
 import re
 from collections import Counter
 
-from .canon import canon_fact as _canon_fact
+from .canon import pinned
+from .canon import pinned_id as _pinned
 from .embed import HashEmbedder, cosine
 from .ids import estimate_tokens, iso, new_id, now
 from .kb import STOP, _terms
@@ -78,10 +79,10 @@ class Librarian:
         e = r[0]
         if e["status"] != "applied" or not e["reversible"]:
             raise CommonsError("entry not undoable")
-        if e["action"] in ("merge", "assign_project") and _canon_fact(self.s, e["target"]):
-            raise CommonsError(f"{e['target']} is a Canon fact now: it is in no project and never merged away or "
-                               "brought back beside a newer value. Correct Canon with fact_set(..., evidence=...) or "
-                               "record_decision(sets=[...])")
+        if e["action"] in ("merge", "assign_project") and _pinned(self.s, e["target"]):
+            raise CommonsError(f"{e['target']} is a Canon fact, or the decision that set one, now: it is never filed, "
+                               "merged away or brought back beside a newer value. Correct Canon with fact_set(..., "
+                               "evidence=...) or record_decision(sets=[...])")
         b = json.loads(e["before"] or "{}")
         if e["action"] == "tag":
             self.s.x("UPDATE items SET tags=? WHERE id=?", (json.dumps(b["tags"]), e["target"]))
@@ -134,10 +135,12 @@ class Librarian:
         return out
 
     def _merge(self, run_id, keep, dup) -> str:
-        """dup is superseded by keep. Never a Canon fact, whatever proposed it (a proposal queued before v0.38 too)."""
-        if _canon_fact(self.s, dup):
-            raise CommonsError(f"{dup} is a Canon fact: it is never merged away. Reject this proposal; Canon is "
-                               "corrected with fact_set(..., evidence=...) or record_decision(sets=[...])")
+        """dup is superseded by keep. Never a Canon fact or the decision that set one, whatever proposed it (a proposal
+        queued before v0.38 too)."""
+        if _pinned(self.s, dup):
+            raise CommonsError(f"{dup} is a Canon fact, or the decision that set one: it is never merged away. Reject "
+                               "this proposal; Canon is corrected with fact_set(..., evidence=...) or "
+                               "record_decision(sets=[...])")
         self.s.x("UPDATE items SET superseded_by=? WHERE id=?", (keep, dup))
         self.s.relate(dup, keep, "merged_into", agent_id=self.agent_id)
         # carry the duplicate's links over to the survivor
@@ -244,12 +247,12 @@ class Librarian:
         return n
 
     def _assign(self, run_id, items) -> int:
-        """File an unfiled item in the one project its text names; Canon facts are never filed (one timeline)."""
-        from .canon import is_canon
+        """File an unfiled item in the one project its text names; Canon facts and the decisions that set them are
+        never filed (every agent reads them, whatever the project's ACL)."""
         projects = [dict(r) for r in self.s.q("SELECT id, name FROM projects")]
         n = 0
         for i in items:
-            if i["project_id"] or i["kind"] in ("checkpoint",) or (i["kind"] == "fact" and is_canon(i.get("subject"))):
+            if i["project_id"] or i["kind"] in ("checkpoint",) or pinned(i):
                 continue
             text = f"{i['title']} {i['content']}".lower()
             hits = [p for p in projects if re.search(rf"\b{re.escape(p['name'].lower())}\b", text)]
@@ -495,8 +498,8 @@ class Librarian:
                 continue
             op, a, b = parts[0].upper(), parts[1], parts[2]
             it = self.s.q("SELECT * FROM items WHERE id=?", (a,))
-            if op in ("PROJECT", "MERGE") and _canon_fact(self.s, a if op == "PROJECT" else b.split()[0]):
-                continue  # a Canon fact is never filed in a project or merged away
+            if op in ("PROJECT", "MERGE") and _pinned(self.s, a if op == "PROJECT" else b.split()[0]):
+                continue  # a Canon fact, or the decision that set one, is never filed in a project or merged away
             if op == "TAG" and it:
                 new = [t.strip().lower() for t in b.split(",") if t.strip()][:6]
                 self._log(run_id, "tag", a, {"tags": json.loads(it[0]["tags"] or "[]")}, {"tags": new})

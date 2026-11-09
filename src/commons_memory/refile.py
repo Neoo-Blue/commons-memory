@@ -218,11 +218,11 @@ def _flow_rows(s: Store, key: str, sure_only: bool) -> list:
 
 
 def _still(s: Store, iid: str, pid: str) -> bool:
-    """The note is where a suggestion (or a move) left it, and it is no Canon fact: a suggestion made before v0.38
-    may name a fact that is Canon now, in no project, and a note may have moved since."""
-    from .canon import is_canon
-    r = s.q("SELECT project_id, kind, subject FROM items WHERE id=?", (iid,))
-    return bool(r) and r[0]["project_id"] == pid and not (r[0]["kind"] == "fact" and is_canon(r[0]["subject"]))
+    """The note is where a suggestion (or a move) left it, and it is no Canon fact or decision that set one: a
+    suggestion made before v0.38 may name a fact that is Canon now, in no project, and a note may have moved since."""
+    from .canon import pinned
+    r = s.q("SELECT project_id, kind, subject, meta FROM items WHERE id=?", (iid,))
+    return bool(r) and r[0]["project_id"] == pid and not pinned(r[0])
 
 
 def apply(s: Store, key: str, sure_only: bool = True) -> dict:

@@ -205,10 +205,10 @@ def canon_core(text: str | None) -> list[str]:
         try:
             if block is not None and BEGIN not in _read(path):
                 continue
-        except OSError:
+            if _apply(path, block, False, CANON_BEGIN, CANON_END) in ("updated", "installed", "removed"):
+                out.append(str(path))
+        except (OSError, ValueError):  # missing, unreadable or not UTF-8: left alone, and the next file still gets it
             continue
-        if _apply(path, block, False, CANON_BEGIN, CANON_END) in ("updated", "installed", "removed"):
-            out.append(str(path))
     return out
 
 
@@ -223,15 +223,18 @@ def refresh() -> list[str]:
             if path in seen or not path.exists():
                 continue
             seen.add(path)
-            text = _read(path)
-            if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(WHOLE)):
+            try:
+                text = _read(path)
+                if INSTRUCTIONS in text or (BEGIN not in text and not p.endswith(WHOLE)):
+                    continue
+                head = re.search(r"connected to Commons( at (\S+))?( as agent `([^`]+)`)?", text)
+                url, agent = (head.group(2), head.group(4)) if head else (None, None)
+                whole = p.endswith(WHOLE)
+                if whole and "Commons" not in text:
+                    continue
+                if _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole) in ("updated",
+                                                                                                        "installed"):
+                    out.append(str(path))
+            except (OSError, ValueError):  # unreadable or not UTF-8: left alone, and the next file is still refreshed
                 continue
-            head = re.search(r"connected to Commons( at (\S+))?( as agent `([^`]+)`)?", text)
-            url, agent = (head.group(2), head.group(4)) if head else (None, None)
-            whole = p.endswith(WHOLE)
-            if whole and "Commons" not in text:
-                continue
-            if _apply(path, _render(p, master(url.rstrip(".") if url else None, agent)), whole) in ("updated",
-                                                                                                    "installed"):
-                out.append(str(path))
     return out

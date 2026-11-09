@@ -414,12 +414,12 @@ class Store:
             raise CommonsError(f"unknown id {iid}")
         r = r[0]
         self.check_project(r["project_id"], "write")
-        from .canon import check_delete, is_canon
+        from .canon import check_delete, pinned
         if content is not None or title is not None:
             check_delete(r)  # a Canon fact, or the decision that set one, is never rewritten in place; tags may change
-        if project and r["kind"] == "fact" and is_canon(r["subject"]):
-            raise CommonsError(f"{iid} is a Canon fact: Canon is one timeline whatever the project, so it is filed "
-                               "in none")
+        if project and pinned(r):
+            raise CommonsError(f"{iid} is a Canon fact, or the decision that set one: every agent reads Canon, and "
+                               "why() explains it by that decision, so neither is filed in a project")
         sets, args, found = [], [], []
         if content is not None and title is None and (r["title"] or "") == " ".join((r["content"] or "").split())[:80]:
             title = " ".join(content.split())[:80]  # an auto-derived title follows the edited content

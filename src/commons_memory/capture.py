@@ -190,7 +190,7 @@ class Capture:
             text = strip_private(payload.get("prompt") or payload.get("text") or "")
             if text.lstrip().startswith(HARNESS_NOTICES):  # a background-task notice the harness relays, not the user
                 return {"ok": True, "context": ""}
-            ctx = ""
+            ctx, late = "", ""
             if st["inject"]:  # before storing, or it finds itself
                 from . import settings
                 from . import work as W
@@ -201,11 +201,13 @@ class Capture:
                 ctx += self.recall(text, project, skey=skey)
                 if payload.get("start_pack"):  # the hub did not answer this session's start: its pack comes now
                     try:
-                        ctx = ("Commons start pack (late: the hub did not answer when this session started)\n" +
-                               self.context(agent_id, project, facts=not payload.get("canon_local")) + "\n\n" + ctx)
+                        late = ("Commons start pack (late: the hub did not answer when this session started)\n" +
+                                self.context(agent_id, project, facts=not payload.get("canon_local")))
                     except Exception:  # noqa: BLE001 - never cost the prompt its own context
                         pass
-            ctx += self._session_claim(agent_id, skey, text, project, payload.get("cwd"))
+            claim = self._session_claim(agent_id, skey, text, project, payload.get("cwd"))
+            # the prompt's own warning, recall and claim id first, a late pack last: a cut to fit trims only the pack
+            ctx = "\n\n".join(x.strip("\n") for x in (ctx, claim, late) if x.strip())
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
                 self.verbatim(agent_id, project, skey, harness, "user", text)

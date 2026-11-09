@@ -530,7 +530,8 @@ def test_migration_keeps_owner_only_disagreements_for_the_owner_and_records_ever
     assert sorted(map(tuple, r["moved"])) == sorted((i, pids[i]) for i in (a, b, undated)) and r["closed"] == [a]
     audit = json.loads(store.q("SELECT detail FROM audit WHERE action='canon.migrate'")[0][0])
     assert sorted(map(tuple, audit["moved"])) == sorted(map(tuple, r["moved"])) and "Canon migration" in caplog.text
-    assert store.q("SELECT project_id FROM items WHERE id=?", (blank_pred,))[0][0] is not None  # no predicate: left alone
+    assert store.q("SELECT kind, project_id FROM items WHERE id=?", (blank_pred,))[0][:] == (
+        "memory", store.project_id("client"))  # no predicate: a note where it was
     cfl = store.list_conflicts()
     assert [(c["a"], c["b"], c["predicate"]) for c in cfl] == [(b, a, "prices")] and r["conflicts"] == [cfl[0]["id"]]
     assert C.open_conflicts(store) == (1, 1)
@@ -795,3 +796,146 @@ def test_record_decision_reports_success_when_embedding_fails_after_the_commit(t
     assert not st.q("SELECT 1 FROM embeddings")  # the vectors come with reindex()
     st.embedder = HashEmbedder()
     assert st.reindex()["done"] >= 2
+
+
+def test_migration_publishes_an_owner_only_value_only_from_the_owner_or_pulse(store, caplog):
+    claude, pulse = store.ensure_agent("claude"), store.ensure_agent("pulse")
+
+    def v037(subject, pred, value, project=None, agent=None):  # what v0.37's fact_set stored, the caller's project
+        i = store.add_item("fact", f"{subject} {pred} {value}", project=project, subject=subject, predicate=pred,
+                           value=value, agent_id=agent, check_conflicts=False)["id"]
+        time.sleep(0.01)
+        return i
+    week = v037("product:pulse", "this_week", "3 trials", "pulse", pulse)
+    focus = v037("company", "focus", "pause Santa, all hands on Toastline (claude's reading of a chat)", None, claude)
+    dnm = v037("work:pulse", "do_not_merge", "none", "pulse", claude)
+    prices = v037("product:pulse", "prices", '["$29/mo (from an old pricing page)"]', "pulse", claude)
+    offer = v037("product:pulse", "offer", "Visitors, sales and campaigns in one place", "pulse", claude)
+    trial = v037("product:pulse", "trial", "14 days", "pulse", pulse)  # the relay spoke for the owner in v0.37
+    rules = v037("company", "standing_rules", '["No em dashes"]')  # the local owner (no agent)
+    store.x("DELETE FROM meta WHERE key='canon_global'")
+    with caplog.at_level("WARNING"):
+        r = C.migrate(store)
+    assert sorted(k[0] for k in r["kept"]) == sorted([focus, dnm, prices])  # an agent's owner-only values: notes
+    assert sorted(m[0] for m in r["moved"]) == sorted([week, offer, trial])  # any agent may set offer, with evidence
+    assert "owner-only and written by neither the owner nor Pulse" in caplog.text
+    assert f"{focus} company.focus (no project)" in caplog.text
+    c = C.canon(store, "pulse")
+    assert c["company"] == {"standing_rules": ["No em dashes"]} and "Toastline" not in c["core"]
+    assert c["products"]["pulse"] == {"product": {"offer": "Visitors, sales and campaigns in one place",
+                                                  "trial": "14 days"}, "work": {}}
+    assert all(x["by"] != "claude" or x["predicate"] == "offer" for x in C.changes(store, "1"))
+    kinds = {x["id"]: x["kind"] for x in store.q("SELECT id, kind FROM items")}
+    assert {kinds[i] for i in (focus, dnm, prices)} == {"memory"} and kinds[rules] == "fact"
+
+
+def test_changes_never_show_a_kept_or_hidden_row_as_the_old_value(store):
+    from commons_memory.auth import PRINCIPAL
+    claude, vivi, pulse = (store.ensure_agent(n) for n in ("claude", "vivi", "pulse"))
+    # v0.37: a value restricted to claude, later superseded by an open one, in Pulse's own project
+    old = store.add_item("fact", "product:santa partner_terms 40%", project="pulse", subject="product:santa",
+                         predicate="partner_terms", value="40% to Acme (secret)", agent_id=pulse,
+                         check_conflicts=False)["id"]
+    store.x("INSERT INTO row_acl VALUES(?,?,?,?)", (old, claude, "read", time.time()))
+    time.sleep(0.01)
+    new = store.add_item("fact", "product:santa partner_terms 30%", project="pulse", subject="product:santa",
+                         predicate="partner_terms", value="30% to partners", agent_id=pulse,
+                         check_conflicts=False)["id"]
+    store.x("UPDATE items SET superseded_by=?, valid_to=? WHERE id=?", (new, time.time(), old))
+    store.relate(new, old, "supersedes", {"at": time.time()})
+    store.x("DELETE FROM meta WHERE key='canon_global'")
+    assert [k[0] for k in C.migrate(store)["kept"]] == [old]
+    # v0.38: a restriction left on a Canon fact (written around restrict()) is no old value for anyone else either
+    f = Facts(store)
+    first = f.set("product:santa", "offer", "Calls from Santa, private beta", agent_id=claude, evidence="x")
+    store.x("INSERT INTO row_acl VALUES(?,?,?,?)", (first["id"], claude, "read", time.time()))
+    f.set("product:santa", "offer", "Calls from Santa", agent_id=vivi, evidence="https://santa.example")
+    for agent, offer_was in ((vivi, None), (claude, "Calls from Santa, private beta")):
+        tok = PRINCIPAL.set(agent)
+        try:
+            seen = {x["predicate"]: x["old"] for x in C.changes(store, "1") if x["new"] in ("30% to partners",
+                                                                                         "Calls from Santa")}
+            card = C.canon(store, "santa")
+        finally:
+            PRINCIPAL.reset(tok)
+        assert seen == {"partner_terms": None, "offer": offer_was}
+        assert "secret" not in json.dumps(card) and "40%" not in json.dumps(card)
+
+
+def test_migration_keeps_rows_with_no_predicate_as_notes_and_dismisses_their_conflicts(store):
+    from commons_memory.dashboard import API
+    claude = store.ensure_agent("claude")
+    blank = {p: store.add_item("fact", f"company memo {p!r}", project="client", subject="company", predicate=p,
+                               value="x", check_conflicts=False)["id"] for p in (None, "", " ")}
+    store.x("UPDATE items SET predicate='' WHERE id=?", (blank[""],))
+    # v0.37 opened a conflict between two client projects' 'company' facts (one generic subject, two companies)
+    a = store.add_item("fact", "company focus wholesale", project="acme", subject="company", predicate="focus",
+                       value="wholesale", agent_id=claude)["id"]
+    b = store.add_item("fact", "company focus retail", project="globex", subject="company", predicate="focus",
+                       value="retail", agent_id=claude)
+    assert b["conflicts_with"] == [a] and C.open_conflicts(store) == (1, 1)
+    store.x("DELETE FROM meta WHERE key='canon_global'")
+    r = C.migrate(store)
+    assert sorted(k[0] for k in r["kept"]) == sorted(list(blank.values()) + [a, b["id"]])
+    assert C.open_conflicts(store) == (0, 0) and C.canon(store)["company"] == {}
+    cfl = store.q("SELECT id, status FROM conflicts")
+    assert [c["status"] for c in cfl] == ["dismissed"] and r["dismissed"] == [cfl[0]["id"]]
+    audit = json.loads(store.q("SELECT detail FROM audit WHERE action='canon.migrate'")[0][0])
+    assert audit["dismissed"] == r["dismissed"]
+    assert not store.q("SELECT 1 FROM items WHERE conflict=1")
+    api = API(store)  # notes now: the owner edits or deletes them like any note
+    assert api.post("/api/item/update", {"id": blank[None], "content": "Acme Corp is a client"})["changed"]
+    for i in blank.values():
+        assert api.post("/api/item/delete", {"id": i})["deleted"]
+
+
+async def test_a_decision_that_set_canon_is_never_filed_merged_or_superseded(mcp, monkeypatch):
+    from commons_memory import refile as R
+    from commons_memory.auth import ACL, PRINCIPAL
+    from commons_memory.dashboard import API
+    from commons_memory.librarian import Librarian
+    st = mcp.store
+    vivi = st.ensure_agent("vivi")
+    st.project_id("acme")  # a client project, restricted to claude
+    ACL(st).grant("acme", "claude", "write")
+    st.x("INSERT OR REPLACE INTO meta VALUES('librarian_watermark', '0')")
+    d = await js(mcp, "record_decision", what="Santa partner terms for acme", why="owner said: 30% to Acme",
+                 agent="claude", sets=[{"subject": "product:santa", "predicate": "partner_terms",
+                                        "value": "30% to Acme"}])
+    fid = d["set"][0]["id"]
+    trial = await js(mcp, "record_decision", what="Santa trial", why="owner: 7 days", agent="claude",
+                     project="santawishes", sets=[{"subject": "product:santa", "predicate": "trial",
+                                                   "value": "7 days"}])
+    note = await js(mcp, "remember", content="Santa partner terms are 25%", agent="claude")
+    monkeypatch.setenv("COMMONS_LIBRARIAN_AUTO_APPROVE", "1")
+    lib = Librarian(st)
+    lib.run()  # files unfiled items in the one project their text names: the decision names 'acme', and stays put
+    lib.apply_actions(f"PROJECT {d['id']} acme\nMERGE {note['id']} {d['id']}")
+    with pytest.raises(Exception, match="never merged away"):
+        lib._merge("r", note["id"], d["id"])
+    with pytest.raises(Exception, match="decision that set one"):
+        API(st).post("/api/item/update", {"id": trial["id"], "project": "acme"})
+    R.ensure(st)
+    st.x("INSERT INTO refile_moves VALUES(?,?,?,?,?,?,?,?)", (trial["id"], st.project_id("santawishes"),
+                                                             st.project_id("acme"), "high", "proposed", "r1",
+                                                             time.time(), None))
+    assert R.apply(st, f"{st.project_id('santawishes')}>{st.project_id('acme')}")["dismissed"] == 1
+    where = {r["id"]: (r["project_id"], r["superseded_by"]) for r in st.q("SELECT id, project_id, superseded_by "
+                                                                            "FROM items")}
+    assert where[d["id"]] == (None, None) and where[trial["id"]] == (st.project_id("santawishes"), None)
+    with pytest.raises(Exception, match="decision that set Canon facts"):  # nor retired by a later decision
+        await tool(mcp, "record_decision", what="tidy up", why="old", agent="vivi", supersedes=[d["id"]])
+    st.x("INSERT INTO conflicts VALUES(?,?,?,?,?,?,?)", ("cfl_dec", d["id"], note["id"], "text", "contradicts", "open",
+                                                         time.time()))
+    with pytest.raises(Exception, match="decision that set Canon facts"):  # nor by keeping the other side
+        await tool(mcp, "conflicts", resolve_id="cfl_dec", keep_id=note["id"], agent="vivi")
+    tok = PRINCIPAL.set(vivi)
+    try:
+        assert d["id"] in [x["id"] for x in st.why(fid)["decisions"]]
+        assert d["id"] in [x["id"] for x in st.why("Santa partner terms for acme")["decisions"]]
+    finally:
+        PRINCIPAL.reset(tok)
+    # a later decision lists notes that state the old value, never the decision that set it
+    d2 = await js(mcp, "record_decision", what="Santa partner terms", why="owner: 35% now", agent="claude",
+                  sets=[{"subject": "product:santa", "predicate": "partner_terms", "value": "35% to partners"}])
+    assert d["id"] not in d2["related"]

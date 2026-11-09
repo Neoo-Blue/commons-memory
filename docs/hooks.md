@@ -60,10 +60,10 @@ up to 25 queued events, reading the file a line at a time. One hook holds a batc
 the hub refuses are dropped, and the queue stops growing at `COMMONS_HOOK_QUEUE_MAX_MB` (default 50). A slow reply is not an outage: the server already has that event, so it is not queued.
 A session start the hub received but did not answer in time is held for that session instead: its next prompt asks
 the hub for the pack once, with whatever is left of the hook's 4-second budget as its timeout, and the pack arrives
-with that prompt. The session is marked as asked before that request goes out, so a hook the harness kills while it
-waits never leaves the next prompt to ask again, and a hub that could not be reached at all is not asked again. A
-session start, and a prompt, wait for the hub only for what is left of that budget, less 0.7 s for the interpreter's
-own start.
+with that prompt, after the prompt's own duplicate-work warning, recall and claim id, so a cut to fit trims only the
+pack. The session is marked as asked before that request goes out, so a hook the harness kills while it waits never
+leaves the next prompt to ask again, and a hub that could not be reached at all is not asked again. A session start,
+and a prompt, wait for the hub only for what is left of that budget, less 0.7 s for the interpreter's own start.
 
 ## Canon on this machine
 
@@ -106,8 +106,9 @@ so a slow or unreachable hub costs it nothing:
   on lines of their own (spaces, tabs and a byte order mark around them are fine), and a begin marker whose end was
   deleted is dropped by itself, so a later write never takes the text that follows it. Each write is locked, atomic (a
   symlinked file stays a symlink; a hard-linked one is written in place) and keeps the file's line endings; a
-  read-only file is left alone. Nothing outside the markers changes; the block goes when the cache is more than 3 days
-  old or Canon is turned off, and `commons instructions uninstall` removes it.
+  read-only file, or one that is not UTF-8, is left alone and never stops the others. Nothing outside the markers
+  changes; the block goes when the cache is more than 3 days old or Canon is turned off, and `commons instructions
+  uninstall` removes it.
 - `COMMONS_HOOK_CANON=0` turns all of this off on a machine. The hook's whole context stays under 9,500 characters
   (Claude Code moves a longer one to a file): Canon's part stays under 6,000, so the hub's busy and duplicate-work
   warnings, recall and the claim id always keep room, and the hub's pack is cut to fit.

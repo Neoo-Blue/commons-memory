@@ -289,13 +289,15 @@ def test_a_start_the_hub_misses_is_retried_with_the_next_prompt(env, tmp_path, m
     assert text.endswith("\n\nLATE PACK") and K.session("m")["start_pending"] is False
     assert ctx(run_hook("claude-code", "UserPromptSubmit", json.dumps({"session_id": "m", "prompt": "next"})))[0] == "recall"
     assert "start_pack" not in sent[2]["payload"]
-    # the hub's side: the late pack leads the prompt's context, with FACTS only when the client had no Canon
+    # the hub's side: the late pack follows the prompt's own context (its claim id here), with FACTS only when the
+    # client had no Canon
     aid = s.ensure_agent("claude")
     pl = {"project": "x", "session_id": "h", "prompt": "please carry on with the hotline work", "start_pack": True}
     with_facts = Capture(s).event(aid, "prompt", pl | {"canon_local": False})["context"]
-    assert with_facts.startswith("Commons start pack (late") and "FACTS (Canon" in with_facts
+    late = with_facts.index("\n\nCommons start pack (late")
+    assert "opened work claim" in with_facts[:late] and "FACTS (Canon" in with_facts[late:]
     without = Capture(s).event(aid, "prompt", pl | {"canon_local": True, "session_id": "h2"})["context"]
-    assert without.startswith("Commons start pack (late") and "FACTS (Canon" not in without
+    assert "Commons start pack (late" in without and "FACTS (Canon" not in without
     assert "FACTS (Canon" in Capture(s).event(aid, "session_start", {"project": "x"})["context"]
     assert "FACTS (Canon" not in Capture(s).event(aid, "session_start", {"project": "x", "canon_local": True})["context"]
 
@@ -768,3 +770,43 @@ def test_instruction_blocks_survive_a_lost_end_marker_a_bom_and_odd_files(tmp_pa
         assert "CANON day 4" in shared.read_text() and os.path.samefile(grok, shared)
     finally:
         codex.chmod(0o644)
+    # a byte that is not UTF-8 in CLAUDE.md (notes pasted from an old doc) leaves that file alone, never the others
+    claude.write_bytes(claude.read_bytes() + b"\n# notes pasted from an old doc: caf\xe9\n")
+    mine = claude.read_bytes()
+    codex.write_text("# codex notes\n" + I.BEGIN + "\nan older playbook\n" + I.END + "\n")
+    assert I.refresh() == [str(codex)] and "start_work" in codex.read_text()
+    changed = I.canon_core("CANON day 5")
+    assert sorted(changed) == sorted(map(str, (grok, gemini, codex))) and claude.read_bytes() == mine
+    assert all("CANON day 5" in f.read_text() for f in (grok, gemini, codex))
+    assert str(claude) not in I.canon_core(None)  # and when the block goes, it goes from every other file
+    assert not any(I.CANON_BEGIN in f.read_text() for f in (grok, gemini, codex))
+
+
+def test_a_late_pack_never_crowds_out_the_prompts_own_warning_and_claim(env, tmp_path, monkeypatch):
+    s = env
+    K.pull(s)
+    monkeypatch.setenv("COMMONS_URL", "http://hub.test")
+    monkeypatch.setattr(K, "spawn", lambda: None)
+    aid = s.ensure_agent("claude")
+    from commons_memory import work as W
+    W.start(s, s.ensure_agent("grok"), "Fix the Santa Wishes gift code bug in the checkout", "santawishes", None)
+    pack = "\n".join(f"- leftover {i}: finish the gift code redemption flow and its receipts" for i in range(300))
+    monkeypatch.setattr(Capture, "context", lambda self, *a, **k: "# Commons memory (santawishes)\n" + pack)
+
+    def hub(url, body, timeout):  # the real hub, too slow to answer the start
+        if body["event"] == "session_start":
+            raise TimeoutError("the hub is slow")
+        return Capture(s).event(aid, body["event"], body["payload"], body["harness"])
+    monkeypatch.setattr(CP, "_send", hub)
+    co = tmp_path / "santawishes"
+    co.mkdir()
+    for sid, prompt, own in (("lw", "fix the Santa Wishes gift code bug in the checkout",
+                              "BUSY: grok is working on this now: Fix the Santa Wishes gift code bug"),
+                             ("lc", "compare the Toastline and Storycall pricing pages for the launch",
+                              "Commons opened work claim wrk_")):
+        run_hook("claude-code", "SessionStart", json.dumps({"session_id": sid, "cwd": str(co)}))
+        assert K.session(sid)["start_pending"] is True
+        text, _ = ctx(run_hook("claude-code", "UserPromptSubmit", json.dumps({"session_id": sid, "cwd": str(co),
+                                                                               "prompt": prompt})))
+        assert own in text and text.index(own) < text.index("Commons start pack (late")  # the pack is what gets cut
+        assert len(text) <= CP.CONTEXT_MAX and "leftover 299" not in text
