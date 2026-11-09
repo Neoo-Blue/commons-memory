@@ -6,7 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-NOSTORE = {"hook", "hooks", "mcp-auth", "join", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra"}
+NOSTORE = {"hook", "hooks", "mcp-auth", "join", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra",
+           "canon"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export",
         "audit-chain", "graphiti", "approvals"} | NOSTORE
 
@@ -72,6 +73,9 @@ def add_parsers(sub) -> None:
     x.add_argument("--batch-api", action="store_true", help="curate through the Anthropic Message Batches API "
                                                             "(half price, results within ~1 h)")
     x.add_argument("--resume-batch", help="collect the results of an already submitted curator batch")
+    x = sub.add_parser("canon", help="refresh this machine's Canon cache (~/.commons/state/canon.json and canon.md) "
+                                     "from the hub at $COMMONS_URL, else the local database; the hooks run it")
+    x.add_argument("action", choices=["pull"])
     x = sub.add_parser("hook", help="(called by agent harness hooks) handle one lifecycle event from stdin; never blocks")
     x.add_argument("harness", choices=["claude-code", "codex", "gemini", "cursor", "generic"])
     x.add_argument("event")
@@ -383,6 +387,12 @@ def handle_nostore(args) -> int:
         return 0
     if c == "import":
         return _import(args)
+    if c == "canon":
+        from .canoncache import pull
+        from .store import Store
+        r = pull(None if os.environ.get("COMMONS_URL") else Store(args.db))
+        print(json.dumps({k: r.get(k) for k in ("ok", "fetched_at", "error")} | {"products": len(r.get("products") or {})}))
+        return 0 if r.get("ok") else 1
     if c == "hook":
         from .capture import run_hook
         try:

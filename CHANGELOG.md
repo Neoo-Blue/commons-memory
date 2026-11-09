@@ -28,6 +28,19 @@ All notable changes, newest first. The README describes the current release only
 - **Every agent sees it.** `pickup()` opens with FACTS (the company core, cards of the products the agent worked on in
   the last 14 days or every product's one line, the open conflict count), which the token budget never cuts; the
   SessionStart pack keeps it whole. `turn()` appends the Canon changes since that agent's last turn, once.
+- **On this machine, before the hub answers.** A detached `commons canon pull` (session start, then at most every 5
+  minutes on prompts) keeps `~/.commons/state/canon.json` (the hub's `canon()` plus `fetched_at`, `ok`, `error`; a
+  failed pull keeps the old data) and `canon.md` current. Every session start, compaction, resume and clear included,
+  opens with the core, the card of the product whose `work:<key>.repos` holds the checkout's origin, the last 7 days
+  of changes, the open conflict count and how far the checkout is behind origin as of the last fetch, all from the
+  cache; a missing, 6-hour-old or failing cache is said in one line the owner sees too. The hub's pack follows
+  without FACTS a second time. Each prompt adds one line per change since that session's watermark and, once per
+  session, the card of a product it names (Chinese names too). The core is also kept as a second managed block in
+  `CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md`. `COMMONS_HOOK_CANON=0` turns it
+  off.
+- **A missed start is retried.** 17 of 54 recent home-folder sessions started with no pack when the hub was slow, and
+  nothing retried. A start the hub does not answer is now held for its session, and the next prompt brings the pack.
+  The whole hook context stays under 9,500 characters, the size Claude Code still injects whole.
 - **Conflicts.** One on an owner-only fact is never resolved by an agent (`conflicts()` refuses it; the owner's decision
   settles it), a Canon fact is never retired by keeping the other side, and the librarian never merges Canon facts.
 - **Write path.** The librarian keeps the NEWER of two near-duplicates, so edited notes win; chat fragments the capture

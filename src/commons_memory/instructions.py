@@ -17,6 +17,10 @@ from pathlib import Path
 
 BEGIN = "<!-- commons:begin (managed by `commons instructions`; edits inside this block are overwritten) -->"
 END = "<!-- commons:end -->"
+CANON_BEGIN = ("<!-- commons:canon:begin (Canon core, written by Commons at each session start from "
+               "~/.commons/state/canon.json; edits inside this block are overwritten) -->")
+CANON_END = "<!-- commons:canon:end -->"
+CANON_FILES = ("~/.claude/CLAUDE.md", "~/.grok/AGENTS.md", "~/.gemini/GEMINI.md", "~/.codex/AGENTS.md")
 TARGETS = {
     "claude-code": ["~/.claude/CLAUDE.md", "~/.claude/skills/commons/SKILL.md"],
     "codex": ["~/.codex/AGENTS.md"],
@@ -63,8 +67,9 @@ def _render(path: str, text: str) -> str:
     return f"{BEGIN}\n{text}\n{END}"
 
 
-def _apply(path: Path, block: str | None, whole: bool) -> str:
-    """block=None removes. whole=True: the file is ours entirely (skill, .mdc)."""
+def _apply(path: Path, block: str | None, whole: bool, begin: str = BEGIN, end: str = END) -> str:
+    """block=None removes. whole=True: the file is ours entirely (skill, .mdc). begin/end mark the block (the playbook
+    by default)."""
     old = path.read_text() if path.exists() else ""
     if whole:
         if block is None:
@@ -75,7 +80,7 @@ def _apply(path: Path, block: str | None, whole: bool) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(block)
         return "updated" if old else "installed"
-    pat = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END), re.S)
+    pat = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.S)
     if block is None:
         if not pat.search(old):
             return "absent"
@@ -108,7 +113,29 @@ def install(harness: str = "all", url: str | None = None, agent: str | None = No
             done.add(path)
             whole = p.endswith(WHOLE)
             status = _apply(path, None if uninstall else _render(p, text), whole)
+            if uninstall and not whole:
+                _apply(path, None, False, CANON_BEGIN, CANON_END)
             out.append({"ai": h, "file": str(path), "status": status})
+    return out
+
+
+def canon_core(text: str | None) -> list[str]:
+    """Write the Canon core block (text, at most 20 lines) into each always-loaded file that carries the Commons
+    playbook (appended once, then updated in place), so sub-agents, peers and the woken Claude start with it too; None
+    removes it. Nothing outside the block's markers changes, and no value can close the block early. Returns the files
+    changed."""
+    block = None if text is None else "\n".join(
+        [CANON_BEGIN] + [x.replace("<!--", "") for x in text.splitlines()[:20]] + [CANON_END])
+    out = []
+    for p in CANON_FILES:
+        path = Path(os.path.expanduser(p))
+        try:
+            if block is not None and BEGIN not in path.read_text():
+                continue
+        except OSError:
+            continue
+        if _apply(path, block, False, CANON_BEGIN, CANON_END) not in ("unchanged", "absent"):
+            out.append(str(path))
     return out
 
 

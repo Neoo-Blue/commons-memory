@@ -57,9 +57,10 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_EXACT_TOKENS` | — | Use provider count-tokens APIs for exact context-pack sizes (network calls) | contextpacks.py |
 | `COMMONS_EXPORT_SECRET_REFS` | — | Include secret references (never values) in graph exports (`1`) | graphexport.py |
 | `COMMONS_GITHUB_API` | `https://api.github.com` | GitHub API base for skill discovery | skilldiscovery.py |
-| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, capture.py, cli_v7.py, cli_v8.py, expose.py, join.py, ledger.py, setup.py, wakeclient.py |
+| `COMMONS_HOME` | `computed` | Commons home for `commons expose` state (default `~/.commons`) | auditexport.py, canoncache.py, capture.py, cli_v7.py, cli_v8.py, expose.py, join.py, ledger.py, setup.py, wakeclient.py |
+| `COMMONS_HOOK_CANON` | — | Set to 0 so the hooks on this machine neither keep the Canon cache in ~/.commons/state/ nor inject it, nor write the Canon core block into the instruction files | capture.py |
 | `COMMONS_HOOK_CONTEXT_TOKENS` | `1200` | Token budget of the SessionStart context pack injected by hooks | capture.py |
-| `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | capture.py |
+| `COMMONS_HOOK_GIT` | — | Set to 0 so the hooks on this machine never send the session's git diff to Commons | canoncache.py, capture.py |
 | `COMMONS_HOOK_KEEP_WORKING` | — | Client side: 1 makes the Claude Code Stop hook keep the agent working while Commons has tasks waiting for it and quota allows | capture.py |
 | `COMMONS_HOOK_KEEP_WORKING_MAX` | `5` | Max consecutive keep-working rounds per session before a Stop is allowed (default 5) | capture.py |
 | `COMMONS_HOOK_QUEUE_MAX_MB` | `50` | Most megabytes the offline hook queue may hold before new events are dropped (default 50) | capture.py |
@@ -143,7 +144,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_TRUST_WEIGHTING` | `1` | Weight search/KB ranking by author trust (`0` off) | bench.py, store.py |
 | `COMMONS_TYPESAFE_MODEL` | `jev-latest` | TypeSafe model (default jev-latest) | typesafe.py |
 | `COMMONS_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | TypeSafe System One endpoint (default https://api.typesafe.ai/v1/systemone) | typesafe.py |
-| `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | capture.py, cli.py, cli_v8.py, infra_collect.py, wakeclient.py |
+| `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | canoncache.py, capture.py, cli.py, cli_v8.py, infra_collect.py, wakeclient.py |
 | `COMMONS_VAULT_KEY` | — | Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database | vault.py |
 | `COMMONS_VAULT_KEY_FILE` | — | File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume) | vault.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
