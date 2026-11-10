@@ -193,14 +193,15 @@ def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status
     if claim_id and not ids:
         raise CommonsError(f"{claim_id} is not your work claim")
     check = []
-    for i in ids:
-        s.x("UPDATE work_claims SET status=?, result=?, done_at=? WHERE id=?", (status, redact(result or "")[0][:4000], now(), i))
-        row = s.q("SELECT related FROM work_claims WHERE id=?", (i,))[0]
-        for rid in json.loads(row["related"] or "[]"):
-            r = s.q("SELECT id, kind, summary FROM items WHERE id=? AND superseded_by IS NULL", (rid,))
-            if r and rid not in [c["id"] for c in check]:
-                check.append({"id": rid, "kind": r[0]["kind"], "summary": (r[0]["summary"] or "")[:160]})
-                s.relate(i, rid, "may_affect", agent_id=agent_id)
+    with s.tx():  # every claim it closes, or none
+        for i in ids:
+            s.x("UPDATE work_claims SET status=?, result=?, done_at=? WHERE id=?", (status, redact(result or "")[0][:4000], now(), i))
+            row = s.q("SELECT related FROM work_claims WHERE id=?", (i,))[0]
+            for rid in json.loads(row["related"] or "[]"):
+                r = s.q("SELECT id, kind, summary FROM items WHERE id=? AND superseded_by IS NULL", (rid,))
+                if r and rid not in [c["id"] for c in check]:
+                    check.append({"id": rid, "kind": r[0]["kind"], "summary": (r[0]["summary"] or "")[:160]})
+                    s.relate(i, rid, "may_affect", agent_id=agent_id)
     if ids:
         from .status import put as status_put
         status_put(s, agent_id, "done", (result or "finished").split("\n")[0])

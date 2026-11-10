@@ -242,11 +242,17 @@ def register_v8(mcp, store, who):
         return _js(W.active(store, project or None))
 
     @mcp.tool()
-    def credentials() -> str:
+    def credentials(name: str = "") -> str:
         """The user's API keys Commons holds (names, services, where each may be sent; never values). Use one with
-        use_credential; never ask the user to paste a key."""
+        use_credential; never ask the user to paste a key. name = one key's full notes (scope, every place it is used)."""
         from . import vault as V
-        return _js(V.listing(store))
+        rows = V.listing(store)
+        if name:
+            return _js([r for r in rows if r["credential"] == name])
+        # Every key's full notes was 13,000 tokens on a hub with 70 keys: the list says what each is for, name= the rest.
+        return _js([{k: r[k] for k in ("credential", "service", "base_urls", "risk", "kind", "stored")} |
+                    {"purpose": (r.get("purpose") or "")[:140], "used_in": len(r.get("used_in") or []), "missing": r.get("missing") or []}
+                    for r in rows])
 
     @mcp.tool()
     def use_credential(credential: str, url: str, justification: str, method: str = "GET", body: str = "",
@@ -524,9 +530,14 @@ def register_v8(mcp, store, who):
         """Canon, the current truth: the company core (precedence, owner-only facts, rules), each product's customer
         facts (product:<key>) and internal state (work:<key>), vendors, the last 7 days of changes and the open
         conflict count. product = a key such as "santa"; repo = a git remote URL or "owner/name" (matched against
-        work:<key>.repos). Read it before work on a product and after a compaction; it outranks notes and docs."""
+        work:<key>.repos). Read it before work on a product and after a compaction; it outranks notes and docs.
+        Pass product or repo: with neither it returns every product's full card (about 38,000 tokens, for sync tools)."""
         from .canon import canon as _canon
-        return _js(_canon(store, product or None, repo or None))
+        out = _canon(store, product or None, repo or None)
+        if product or repo:  # for an agent: long old/new values clipped as the hooks' cache clips them (7,400 tokens -> under 3,000); fact_history has them whole
+            from .canoncache import _small
+            out["changes"] = [x | {"old": _small(x.get("old")), "new": _small(x.get("new"))} for x in out.get("changes") or []]
+        return _js(out)
 
     @mcp.tool()
     def changes(since: str | int | float = "") -> str:

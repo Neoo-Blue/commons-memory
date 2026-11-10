@@ -206,6 +206,7 @@ class AuthMiddleware:
         self.anon = allow_anon_reads if allow_anon_reads is not None else os.environ.get("COMMONS_ALLOW_ANON_READS") == "1"
         self.limiter = limiter or RateLimiter()
         self.oauth = oauth or OAuthVerifier(store)
+        self._refused: dict[tuple[str, str], float] = {}  # (client, path) -> when a refusal was last written to the audit log
 
     async def _send_json(self, send, status: int, obj: dict, extra: list | None = None):
         body = json.dumps(obj).encode()
@@ -255,7 +256,14 @@ class AuthMiddleware:
         if principal is None and not self.anon:
             www = f'Bearer resource_metadata="{self.resource_url.rstrip("/")}/.well-known/oauth-protected-resource"' \
                 if self.resource_url else 'Bearer realm="commons"'
-            self.s.audit(None, "http.unauthorized", path, {"client": (scope.get("client") or ["?"])[0]})
+            # Once an hour per client and path: an uptime probe on / wrote 1,440 audit rows a day (more than half the log),
+            # each a write under the store lock.
+            client = (scope.get("client") or ["?"])[0]
+            if now() - self._refused.get((client, path), 0) > 3600:
+                if len(self._refused) > 1000:
+                    self._refused.clear()
+                self._refused[(client, path)] = now()
+                self.s.audit(None, "http.unauthorized", path, {"client": client, "note": "at most one row an hour per client and path"})
             return await self._send_json(send, 401, {"error": "unauthorized",
                                                      "hint": "send Authorization: Bearer <agent key or OAuth token>"},
                                          [(b"www-authenticate", www.encode())])

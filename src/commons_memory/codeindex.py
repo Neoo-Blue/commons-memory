@@ -114,7 +114,7 @@ def index_repo(store: Store, root: str, project: str | None = None, agent_id: st
                         stats["calls_ambiguous" if how == "ambiguous" else "calls_resolved"] += 1
             stats["relinked"] = _relink(store, pid, kept)
             store.db.execute("COMMIT")
-        except Exception:
+        except BaseException:  # an interrupt too: an open transaction would swallow every later write
             store.db.execute("ROLLBACK")
             raise
     import subprocess

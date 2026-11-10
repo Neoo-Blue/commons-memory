@@ -35,10 +35,10 @@ def touch(s: Store, ids: list[str]) -> None:
 
 def retier(s: Store) -> dict:
     t = now()
-    s.x("UPDATE items SET tier='hot' WHERE COALESCE(pinned,0)=1 OR last_access>=? OR "
-        "(COALESCE(access_count,0)>=3 AND last_access>=?) OR (kind='decision' AND created_at>=? AND superseded_by IS NULL)",
+    s.x("UPDATE items SET tier='hot' WHERE COALESCE(tier,'')<>'hot' AND (COALESCE(pinned,0)=1 OR last_access>=? OR "
+        "(COALESCE(access_count,0)>=3 AND last_access>=?) OR (kind='decision' AND created_at>=? AND superseded_by IS NULL))",
         (t - 7 * DAY, t - 30 * DAY, t - 14 * DAY))
-    s.x("UPDATE items SET tier='cold' WHERE COALESCE(pinned,0)=0 AND COALESCE(last_access, created_at)<? AND "
+    s.x("UPDATE items SET tier='cold' WHERE COALESCE(tier,'')<>'cold' AND COALESCE(pinned,0)=0 AND COALESCE(last_access, created_at)<? AND "
         "(superseded_by IS NOT NULL OR kind IN ('observation','checkpoint') OR tags LIKE '%\"session-summary\"%' "
         "OR created_at<?)", (t - 90 * DAY, t - 180 * DAY))
     s.x("UPDATE items SET tier='warm' WHERE tier IS NULL OR (tier='hot' AND COALESCE(pinned,0)=0 AND "

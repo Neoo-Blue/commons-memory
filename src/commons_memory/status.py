@@ -67,7 +67,9 @@ def git_verify(s: Store, repo: str, branch: str, commit: str) -> str:
         return f"unverified: GitHub says {r.get('status')} for that commit"
     if branch:
         c = V.call(s, cred, "GET", f"https://api.github.com/repos/{repo}/compare/{branch}...{commit}")
-        state = json.loads(c.get("body") or "{}").get("status") if c.get("status") == 200 else None
-        if state not in ("identical", "behind"):
-            return f"commit exists but is not on {branch} ({state or c.get('status')})"
+        # branch...commit with nothing ahead means the commit is on the branch. Read as text, not JSON: the body is
+        # scrubbed and clipped by the vault (a redacted commit message once made it "Invalid \\escape").
+        ahead = re.search(r'"ahead_by":\s*(\d+)', c.get("body") or "") if c.get("status") == 200 else None
+        if not ahead or int(ahead.group(1)) != 0:
+            return f"commit exists but is not on {branch} ({ahead.group(1) + ' ahead' if ahead else c.get('status')})"
     return "verified on GitHub" + (f" (on {branch})" if branch else "")

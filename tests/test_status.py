@@ -29,10 +29,14 @@ def test_handoff_commit_is_checked_on_github_through_the_vault(store, monkeypatc
     def fake_call(s, cred, method, url, body="", content_type="", timeout=30):
         calls.append(url)
         if "/compare/" in url:
-            return {"status": 200, "body": json.dumps({"status": "behind"})}
+            # as the vault hands it over: scrubbed, so not always valid JSON (a redacted commit message left "\[")
+            return {"status": 200, "body": '{"base_commit": {"message": "x\\[REDACTED]"}, "status": "behind", "ahead_by": %d, "behind_by": 3' % ahead}
         return {"status": 200, "body": "{}"}
     monkeypatch.setattr(V, "call", fake_call)
+    ahead = 0
     assert ST.git_verify(store, "Neoo-Blue/commons-memory", "main", "abc1234") == "verified on GitHub (on main)"
+    ahead = 2
+    assert "not on main (2 ahead)" in ST.git_verify(store, "Neoo-Blue/commons-memory", "main", "abc1234")
     assert calls[0].endswith("/repos/Neoo-Blue/commons-memory/commits/abc1234")
 
 

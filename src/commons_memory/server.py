@@ -492,4 +492,8 @@ def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db:
     ssl = {}
     if os.environ.get("COMMONS_TLS_CERT"):
         ssl = {"ssl_certfile": os.environ["COMMONS_TLS_CERT"], "ssl_keyfile": os.environ.get("COMMONS_TLS_KEY")}
+    # A client that closes its stream (every reconnect, sleep or session end) is logged by the MCP transport as an
+    # ERROR with a full traceback: about 30 an hour on a live hub, 9 in 10 of its log lines, hiding real errors.
+    import logging
+    logging.getLogger("mcp.server.streamable_http").setLevel(logging.CRITICAL)
     uvicorn.run(app, host=host, port=port, log_level="warning", **ssl)
