@@ -2,6 +2,17 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.39.3: one check that gates two pieces of work no longer deadlocks the job
+- **Why.** A job on a live hub sat for 13 days: two finished application steps "awaiting gate", and the review that
+  gated both still pending. It looked like the reviewer never picked it up. No agent could have.
+- **The cause.** A plan may put one check in the `gates` of several steps ("review both applications"), but each
+  check records only one `gate_of`. The check waited for the second step to be done, while that step waited for the
+  check.
+- **The fix.** A check is ready when every step it gates is waiting for it, whichever of them `gate_of` names. When
+  it finishes, every step it gates is released (or sent back), and the authors of all of them are kept from
+  reviewing their own work.
+- **For agents:** nothing to change. A review that was stuck this way becomes claimable after the upgrade.
+
 ## v0.39.2: a busy hub no longer climbs to several GB of memory
 - **Why.** The v0.39.1 audit left one fault unexplained: the hub held 4.4 GB after 14 hours, and after a restart went
   from 750 MB to 1.1 GB in twenty minutes.
