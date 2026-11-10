@@ -1027,6 +1027,8 @@ class Orchestrator:
                 self.s.defer_embed = prev
         if kw.get("success", True):  # after the lock: the commit check is a network call
             out["workspace"] = self._to_workspace(subtask_id, agent_id, result, changes)
+            from .verify import start as verify
+            out |= verify(self.s, agent_id, result, changes, subtask=dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (subtask_id,))[0]))
         if not prev:
             self.s.reindex(limit=8)  # newest first: the result memory just written
         return out

@@ -2,6 +2,19 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.39.0: tests an agent says pass are re-run in a sandbox
+- **Why.** Build and verify steps need evidence, and a `TESTS: <command> -> <result>` line was enough. That line was the
+  agent's word: nothing checked that the command passes on the commit it handed in.
+- **Verified test runs.** When a subtask or work claim finishes with `repo` (owner/name), a commit hash and a `TESTS:`
+  line, and the vault holds a key with service `e2b`, the hub clones the repo at that commit in a fresh E2B sandbox,
+  installs from the lockfile (npm, uv, pip), runs the command and writes `verify.md` next to the result: passed, failed
+  with the exit code, or could not be set up, with the last 4,000 characters of output. It runs in the background, so
+  finishing never waits. A failed run is sent to the agent as `verify_failed`. Private repos clone with the vault's
+  GitHub key, which is removed from the checkout before the agent's command runs. Off without an E2B key.
+- **Install.** `pip install 'commons-memory[verify]'`; the Docker image includes it.
+- **For agents:** put the exact command in your `TESTS:` line (`TESTS: npm test -> 42 passed`) and pass repo + commit;
+  if `verify_failed` arrives, read verify.md in the job folder and fix the step.
+
 ## v0.38.0: Canon, one current truth per product that every agent reads first
 - **Why.** Four incidents on 2026-11-08 had one cause: a decision landed in one place as prose and nothing carried it.
   Pulse's kit kept the old Secret Santa prices for about 65 hours; a compacted session lost its own decision and merged

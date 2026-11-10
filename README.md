@@ -3,6 +3,7 @@
 <!-- mcp-name: io.github.Neoo-Blue/commons-memory -->
 
 [![Neoo-Blue/commons-memory MCP server](https://glama.ai/mcp/servers/Neoo-Blue/commons-memory/badges/score.svg)](https://glama.ai/mcp/servers/Neoo-Blue/commons-memory)
+[![Sandboxes by E2B](https://img.shields.io/badge/sandboxes-E2B-ff8800)](https://e2b.dev)
 
 **Run several Claude Code sessions at once without them redoing or overwriting each other's work.**
 
@@ -120,6 +121,7 @@ effect is real but not yet measured. Rival columns come from each project's own 
 | Infrastructure map | where a service runs, how it is reached, what it mounts and which credential it uses, scattered across hundreds of notes → one answer from `infra(name)`; on a live Proxmox host the collector found 18 guests, 49 services, 38 endpoints and 43 mounts in about a minute, read-only | · | · | · | ◐ code architecture only |
 | Re-filing misfiled notes | imported notes keep the old tool's folder label (2,200 Poise notes under soul-pool on a live hub) → a model proposes where each belongs, grouped per move, applied with Undo; live-captured notes are never touched | · | · | · | · |
 | Project pages + grouped names | a live hub's 125 raw project names (folders, worktrees, one product under 6 names) in a filter dropdown, no project page → one page per product with its timeline, diffs, memory and people; one-offs kept as tasks | ◐ filter by app/user | ◐ project filter, no page | ◐ wings and rooms | ◐ repo diagrams |
+| Verified test runs (E2B sandbox) | "TESTS: npm test -> 42 passed" was the agent's word → with an E2B key in the vault, the hub re-runs that command on the named commit in a fresh sandbox and files verify.md next to the result; a failure goes back to the agent. The GitHub key clones and is removed before the command runs (not benchmarked) | · | · | · | · |
 | Job workspace + recorded diffs | every part's result, diff and GitHub-checked commit in one place; reviewers get the diff | · | ◐ file paths only | ✓ patch submit | · |
 | Credential vault + decision agent + owner approvals | agents never see keys; reads allowed, writes need your ask, the rest is one approval link only you can approve (owner password), and approving runs it; with approve-everything on, Jev still screens every call (a live hub had judged none for 23 days); a key with line breaks is refused and error texts are scrubbed | · | · | · | · |
 | Row-level access + chained audit log + signed export | one record limited to named agents; the live log and its exports are tamper-evident and verifiable | ◐ scoping by ids | ◐ private tags, unsigned log | ◐ checksummed, unsigned | · |

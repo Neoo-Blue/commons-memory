@@ -212,6 +212,9 @@ def finish(s: Store, agent_id: str, claim_id: str = "", result: str = "", status
                                                **{k: changes.get(k) or "" for k in ("repo", "branch", "commit", "diff")})
         except Exception as e:  # noqa: BLE001 - the claim is closed either way
             out["changes"] = {"error": str(e)[:200]}
+        if status == "done":
+            from .verify import start as verify
+            out |= verify(s, agent_id, result, changes, claim=ids[0])
     if check and status == "done":
         out |= {"check_related": check,
                 "do": "Your change may have made these outdated. Update each one it affects (remember with related_ids, "
