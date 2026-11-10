@@ -3,45 +3,70 @@
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
 ## v0.39.1: fixes from an audit of a live hub
-- **Why.** A check of the NAS hub on 2026-11-10 (55,000 items, 1.1 GB, 14 hours up) found the database sound and
-  search right (10 of 10 known answers, 7 first), and these faults.
-- **Repeated sentences are kept once.** A sentence already kept in any session is not kept again: ten texts (harness
-  notices, review prompts, playbook lines) were 4,442 items, one of them 1,652 times. The files a session edited may
-  still repeat.
-- **Commit checks work again.** `finish_work` and handoffs with a commit said "unverified: Invalid \escape": the
-  check parsed the vault's scrubbed, clipped body as JSON. It now reads the one number it needs.
-- **Refused requests are logged once an hour per client and path.** An uptime probe on `/` wrote 1,440 audit rows a
-  day, more than half the log, each under the store lock. `/bus/health` is the address to probe.
-- **Quieter log.** A client closing its stream is no longer an ERROR with a traceback (about 30 an hour, 9 in 10 log
-  lines).
-- **Smaller answers.** `credentials()` lists each key with its purpose (13,000 tokens -> about 3,000 on a hub with 70
-  keys); `credentials(name)` has one key's full notes. `canon(product)` clips long old and new values in its changes
-  as the hooks' cache does; `canon()` with no product is unchanged, for sync tools.
-- **Automatic claims.** A session whose first message is injected Canon text gets no claim titled with it (1 claim in
-  10 read "CANON (current truth...").
-- **Verified runs.** The command is what stands before the first ` -> `; a `TESTS:` line the shell cannot run (prose)
-  is reported as not runnable, not as a failed test.
-- **The librarian no longer relinks all of history every 10 minutes.** Each run linked every item, session, job and
-  usage row again in one write transaction (55,000 items), though every record is linked when it is made. Other
-  writers waited or got "database is locked", and the run itself failed with it several times a day. A run now links
-  its own batch and new sessions; a first or full run still backfills, and takes the write lock up front.
+An audit of a production hub on 2026-11-10 (five agents for a month, 54,954 items, 1.1 GB, one SQLite file). The
+database was sound and search was right; the faults below were found and fixed, and the upgrade was measured again.
+
+**What was sound**
+- Integrity check passes on the live file and on the nightly backup; no foreign-key violations; no restarts.
+- Tools answer in 14 to 140 ms over HTTP. Known-answer search: 10 of 10 answers in the hit list, 7 of them first.
+- The full test suite passes on a clean Linux machine: 702 passed, 23 skipped.
+
+**Reliability**
 - **A failed index rebuild can no longer swallow later writes.** The hourly "where to find X" index ran a bare
-  `BEGIN`: if its first statement failed, the transaction stayed open, every later write on that connection joined
-  it, and nothing was committed until a restart discarded it. It now runs in `tx()`; the link and code index
-  rebuilds roll back on an interrupt too. Not seen on the live hub, found by reading the code.
+  `BEGIN`. If its first statement failed, the transaction stayed open, every later write on that connection joined
+  it, and nothing was committed until a restart discarded it. It now runs in `tx()`, and the link and code index
+  rebuilds roll back on an interrupt too. Found by reading the code; not seen on the live hub.
+- **No more "database is locked" several times a day.** Every 10 minutes the librarian relinked every item, session,
+  job and usage row (55,000 items) in one write transaction, though every record is linked when it is made. A run now
+  links its own batch and new sessions. A first or full run still backfills, and takes the write lock up front.
+- **Writers wait 60 seconds for each other, not 5.** `serve --dashboard` holds two connections to one file.
 - **Canon values and claims change atomically.** Setting a fact wrote the new value, then closed the old one in a
-  second commit (a crash between them left two current values); `finish_work` closed several claims one commit at
+  second commit, so a crash between them left two current values. `finish_work` closed several claims one commit at
   a time. Each is one transaction now. An owner's answer to a gate takes the store lock like every other write.
-- **The redactor keeps JSON valid.** A high-entropy run that began on the letter of an escape (`\n` + a signature
-  line) was cut out with that letter, leaving `\[`: the cause of the commit check error, and of the same parse in
-  the GitHub events job.
-- **At most two verified runs at a time**; a third finish says it was skipped.
-- **Writers wait for each other for 60 seconds, not 5.** `serve --dashboard` holds two connections to one file.
-- **The hourly retier writes only rows whose tier changes** (11,303 of 11,304 rewrites changed nothing).
-- **Storage.** The write-ahead file is capped at 64 MB (it sat at 128 MB), and newest-first lists of items use an
-  index (127 ms -> under 1 ms on the dashboard's activity feed).
-- **For agents:** after `TESTS:` write a command a shell can run from the repo root (`TESTS: cd backend && npm test ->
-  2107 pass`); call `credentials(name=...)` when you need a key's scope or where it is used.
+- **Commit checks work again.** `finish_work` and handoffs with a commit said "unverified: Invalid \escape". The
+  redactor cut a high-entropy run that began on the letter of an escape (`\n` + a signature line) and left `\[`,
+  which is not JSON. The redactor keeps that letter now, and the check reads the one number it needs.
+
+**Memory quality**
+- **A sentence is kept once.** A sentence already kept in any session is not kept again. Ten texts (harness notices,
+  review prompts, playbook lines) had become 4,442 items, one of them 1,652 times. The files a session edited may
+  still repeat.
+- **Automatic claims are titled with the task.** A session whose first message is injected Canon text gets no claim
+  titled with it (1 claim in 10 read "CANON (current truth...").
+
+**Size and noise**
+- **`credentials()`** lists each key with its purpose: 13,300 tokens down to 4,500 on a hub with 70 keys.
+  `credentials(name)` has one key's full notes.
+- **`canon(product)`** clips long old and new values in its changes as the hooks' cache does: 7,400 tokens down to
+  5,800. `canon()` with no product is unchanged (38,000 tokens), because sync tools read it whole.
+- **Refused requests are audited once an hour per client and path.** One uptime probe on `/` wrote 1,440 audit rows a
+  day, more than half the log, each under the store lock. Probe `/bus/health`, which needs no key.
+- **A client closing its stream is no longer an ERROR with a traceback** (about 30 an hour, 9 in 10 log lines).
+- **The write-ahead file is capped at 64 MB** (it sat at 128 MB), newest-first lists of items use an index (127 ms
+  down to under 1 ms on the dashboard's activity feed), and the hourly retier writes only rows whose tier changes
+  (11,303 of 11,304 rewrites changed nothing).
+
+**Verified runs (from v0.39.0)**
+- The command is what stands before the first ` -> `. A `TESTS:` line the shell cannot run (prose) is reported as
+  not runnable, not as a failed test. At most two runs go at a time; a third finish says it was skipped.
+
+**Measured on the same hub after the upgrade**
+- No tracebacks in the log and no background job errors; the write-ahead file sits at its 64 MB cap; two
+  refused-request rows (one per client) where one probe alone wrote a row a minute.
+- The hub re-ran its own suite on the release commit in a sandbox and filed a pass, its first on real work.
+- A one-time cleanup with the hub running removed 12,434 of 54,954 items in 30 seconds (6,754 search copies of old
+  Drive file versions, 4,490 repeat observations, 1,190 repeat decision fragments; no Canon fact). Search still
+  finds 10 of 10. Memory was 4.4 GB after 14 hours before the upgrade; after it, 750 MB at the restart and 1.1 GB
+  twenty minutes later, so it still climbs.
+
+**Still open**
+- `complete_subtask` is not one transaction. A search after any new memory reloads every vector (163 ms at 55,000).
+  The librarian still loads every live note's text on each run. An in-flight verified run is lost on restart.
+  Why memory climbs to 4.4 GB was not found.
+
+**For agents**
+- After `TESTS:` write a command a shell can run from the repo root (`TESTS: cd backend && npm test -> 2107 pass`).
+- Call `credentials(name=...)` when you need a key's scope or where it is used.
 
 ## v0.39.0: tests an agent says pass are re-run in a sandbox
 - **Why.** Build and verify steps need evidence, and a `TESTS: <command> -> <result>` line was enough. That line was the
