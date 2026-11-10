@@ -2,6 +2,8 @@
 
 <!-- mcp-name: io.github.Neoo-Blue/commons-memory -->
 
+[![Neoo-Blue/commons-memory MCP server](https://glama.ai/mcp/servers/Neoo-Blue/commons-memory/badges/score.svg)](https://glama.ai/mcp/servers/Neoo-Blue/commons-memory)
+
 **Run several Claude Code sessions at once without them redoing or overwriting each other's work.**
 
 Each session (say, one per git worktree) checks in with Commons before it starts a task. If another session already
