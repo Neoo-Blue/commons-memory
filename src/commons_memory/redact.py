@@ -84,7 +84,9 @@ def redact(text: str) -> tuple[str, list[str]]:
     if hits:
         found.append("high_entropy")
         for h in set(hits):
-            text = text.replace(h, "[REDACTED:high_entropy]")
+            # A run that starts on the letter of an escape ("\\n" + a signature line in a JSON body) keeps that letter:
+            # redacting it left "\\[", which is not JSON (git_verify's "Invalid \\escape").
+            text = text.replace("\\" + h, "\\" + h[0] + "[REDACTED:high_entropy]").replace(h, "[REDACTED:high_entropy]")
     return text, found
 
 

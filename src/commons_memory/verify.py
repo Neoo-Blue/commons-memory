@@ -13,6 +13,7 @@ import threading
 from .store import Store
 
 TIMEOUT = 900  # seconds the command may run; the sandbox lives a little longer
+_SLOTS = threading.BoundedSemaphore(2)  # sandboxes at once: each finish with a TESTS line would otherwise start one
 TAIL = 4000
 
 # ponytail: setup is guessed from lockfiles; add a per-repo setup hint if a repo needs more than this
@@ -28,7 +29,7 @@ def tests_command(result: str) -> str:
     m = re.search(r"(?im)^\W*TESTS\s*:\s*(.+)$", result or "")
     if not m:
         return ""
-    cmd = m.group(1).rsplit(" -> ", 1)[0] if " -> " in m.group(1) else m.group(1)
+    cmd = m.group(1).split(" -> ", 1)[0]
     return cmd.strip().strip("`").strip()
 
 
@@ -74,7 +75,9 @@ def run(s: Store, repo: str, commit: str, command: str, sandbox_cls=None) -> dic
         if code != 0:
             return {"ok": False, "exit_code": code, "output": out[-TAIL:], "setup_failed": True}
         code, out = sh(f'export PATH="$PWD/.venv/bin:$PWD/node_modules/.bin:$PATH"; {command}', TIMEOUT)
-        return {"ok": code == 0, "exit_code": code, "output": out[-TAIL:]}
+        # Prose after "TESTS:" ("npm test (backend), same as main") is not a failed test: the shell could not run it.
+        not_a_command = code in (126, 127) or (code == 2 and "syntax error" in out.lower())
+        return {"ok": code == 0, "exit_code": code, "output": out[-TAIL:]} | ({"setup_failed": True} if not_a_command else {})
     finally:
         try:
             sbx.kill()
@@ -110,8 +113,17 @@ def start(s: Store, agent_id: str, result: str, changes: dict | None, *, subtask
             from .messaging import emit
             emit(s, agent_id, "verify_failed", ref=ref, preview=f"your TESTS line failed when re-run: {command[:80]} (see {where}/verify.md)")
 
+    if not _SLOTS.acquire(blocking=False):
+        return {"verify": "skipped: two verified runs are already going"}
+
+    def held():
+        try:
+            go()
+        finally:
+            _SLOTS.release()
+
     if wait:
-        go()
+        held()
     else:
-        threading.Thread(target=go, name="commons-verify", daemon=True).start()
+        threading.Thread(target=held, name="commons-verify", daemon=True).start()
     return {"verify": f"started: re-running '{command[:80]}' in a fresh sandbox; outcome goes to verify.md"}

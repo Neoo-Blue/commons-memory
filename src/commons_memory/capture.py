@@ -25,6 +25,7 @@ server-side), secrets are redacted as everywhere else, and capture can be disabl
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -250,7 +251,8 @@ class Capture:
         from . import settings
         from . import work as W
         t = (text or "").strip()
-        if not settings.get(self.s, "auto_claims") or len(t.split()) < 4 or t.startswith(("/", "<")) or \
+        # Injected text is not the task: a wake prompt that opens with the Canon block made 1 claim in 10 read "CANON (current truth...".
+        if not settings.get(self.s, "auto_claims") or len(t.split()) < 4 or t.startswith(("/", "<", "CANON (", "COMPANY CORE")) or \
                 self.s.q("SELECT 1 FROM meta WHERE key=?", (f"session_claim:{skey}",)):
             return ""
         try:
@@ -376,6 +378,14 @@ class Capture:
             if self.s.q("SELECT 1 FROM observations WHERE session_key=? AND kind=? AND text=? AND processed=1 LIMIT 1",
                         (skey, o["kind"], text)):
                 continue  # consecutive Stop events resend the same transcript tail: capture each line once
+            # The same sentence in another session is a prompt, a playbook line or a harness notice, or already kept:
+            # ten such texts were 4,442 items on a live hub ("Note that this status is a snapshot in time" 1,652 times).
+            # "change" lists the files of this session, so it may repeat.
+            if o["kind"] != "change":
+                seen = "obs_seen:" + hashlib.sha1(" ".join(text.lower().split()).encode()).hexdigest()[:20]
+                if self.s.q("SELECT 1 FROM meta WHERE key=?", (seen,)):
+                    continue
+                self.s.x("INSERT OR IGNORE INTO meta VALUES(?,?)", (seen, "1"))
             meta = {"source": f"hook:{harness}", "session": skey, "via": via}
             if o["kind"] == "decision" and via == "llm" and str(o.get("why") or "").strip():
                 iid = self.s.record_decision(text, str(o["why"]), agent_id=agent_id, project=project)["id"]

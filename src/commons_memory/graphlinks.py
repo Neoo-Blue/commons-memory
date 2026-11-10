@@ -206,8 +206,8 @@ def rebuild(s: Store) -> dict:
     for w in ("plan_execute_verify", "cross_review", "debate", "consensus", "parallel"):
         workflow_id(s, w)
     with s.lock:
-        s.db.execute("BEGIN")
-        try:
+        s.db.execute("BEGIN" if s.dialect != "sqlite" else "BEGIN IMMEDIATE")  # take the write lock first: a deferred
+        try:                                                                  # one cannot upgrade after another writer
             for r in s.q("SELECT id FROM items"):
                 link_item(s, r["id"])
             for r in s.q("SELECT id FROM sessions"):
@@ -227,7 +227,7 @@ def rebuild(s: Store) -> dict:
             for r in s.q("SELECT id FROM leases"):
                 link_lease(s, r["id"])
             s.db.execute("COMMIT")
-        except Exception:
+        except BaseException:  # an interrupt too: an open transaction would swallow every later write
             s.db.execute("ROLLBACK")
             raise
     after = s.q("SELECT COUNT(*) c FROM relations")[0]["c"]

@@ -42,6 +42,7 @@ def test_tests_command_parsing():
     assert verify.tests_command("done\nTESTS: pytest -q tests/x.py -> 3 passed") == "pytest -q tests/x.py"
     assert verify.tests_command("TESTS: `npm test`") == "npm test"
     assert verify.tests_command("no evidence here") == ""
+    assert verify.tests_command("TESTS: npm test -> 52 fail, as on main; smoke -> PASS") == "npm test"
 
 
 def test_off_without_e2b_key_or_commit(store, monkeypatch):
@@ -68,3 +69,19 @@ def test_run_clones_without_leaving_the_github_key(store, monkeypatch):
     r = verify.run(store, "Neoo-Blue/x", "abc1234", "pytest -q", FakeSandbox)
     assert not r["ok"] and r["exit_code"] == 1 and "1 failed" in r["output"]
     assert "FAILED (exit 1)" in verify.report("pytest -q", "Neoo-Blue/x", "abc1234", r)
+
+
+def test_prose_after_tests_is_not_reported_as_a_failed_test(store, monkeypatch):
+    monkeypatch.setenv("COMMONS_VAULT_KEY", base64.b64encode(os.urandom(32)).decode())
+    V.add(store, "e2b-api-key", "e2b_test", "e2b", ["https://api.e2b.app"], {"header": "X-API-Key"})
+
+    class NotACommand(FakeSandbox):
+        def run(self, cmd, cwd=None, timeout=None):
+            if "npm test (backend)" in cmd:
+                e = Exception("exit 2")
+                e.exit_code, e.stdout, e.stderr = 2, "", "/bin/bash: -c: line 1: syntax error near unexpected token `('"
+                raise e
+            return self._R(0, "")
+
+    r = verify.run(store, "Neoo-Blue/x", "abc1234", "npm test (backend)", NotACommand)
+    assert not r["ok"] and r["setup_failed"] and "could not be set up" in verify.report("npm test (backend)", "Neoo-Blue/x", "abc1234", r)

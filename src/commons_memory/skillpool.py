@@ -238,7 +238,7 @@ class SkillPool:
         scored.sort(key=lambda x: -x[0])
         lines, out, used = [], [], 0
         for _, r, st, t in scored:
-            ln = (f"{r['name']} v{r['active_version'] or '-'} — {r['description'][:120]} [{', '.join(t)}] "
+            ln = (f"{r['name']} v{r['active_version'] or '-'}: {r['description'][:120]} [{', '.join(t)}] "
                   f"(uses {st['uses']}, success {st['success_rate']:.0%})")
             if used + estimate_tokens(ln) > max_tokens and lines:
                 break

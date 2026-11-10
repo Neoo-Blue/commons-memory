@@ -185,6 +185,8 @@ def test_a_session_claims_its_task_from_the_first_message_and_closes_it_at_the_e
     assert len(claim) == 1 and claim[0]["status"] == "active"
     c.event(a, "prompt", {"prompt": "also check the logout path please", "session_id": "s1"}, harness="claude-code")
     c.event(a, "prompt", {"prompt": "ok", "session_id": "s2"}, harness="claude-code")  # too short to be a task
+    c.event(a, "prompt", {"prompt": "CANON (current truth; precedence: 1 the owner's words) ... then the task", "session_id": "s2b"},
+            harness="claude-code")  # injected text is not a task title
     assert len(store.q("SELECT 1 FROM work_claims WHERE agent_id=?", (a,))) == 1         # one claim per session
     from commons_memory import typesafe
     import os
@@ -256,3 +258,38 @@ def test_a_recurring_task_can_be_switched_off_and_on(store):
     assert store.q("SELECT enabled FROM recurring")[0]["enabled"] == 0
     o.schedule("weekly-readme-audit", "@weekly", "audit the README")
     assert store.q("SELECT enabled FROM recurring")[0]["enabled"] == 1
+
+
+def test_a_sentence_kept_in_one_session_is_not_kept_again_in_another(store):
+    from commons_memory.capture import Capture
+    c = Capture(store)
+    a = store.ensure_agent("repeater")
+    line = "We decided to keep the notetaker worker on the server and move only the browser."
+    for sid in ("r1", "r2", "r3"):
+        c.event(a, "prompt", {"prompt": "please continue with the plan we agreed", "session_id": sid}, harness="claude-code")
+        c.flush(a, None, sid, "claude-code", transcript=line, final=True)
+    kept = store.q("SELECT COUNT(*) n FROM items WHERE kind IN ('observation','decision') AND content LIKE ?", ("%keep the notetaker worker%",))[0]["n"]
+    assert kept == 1
+
+
+def test_a_failed_index_rebuild_leaves_no_transaction_open(store):
+    import pytest
+    from commons_memory.librarian import Librarian
+    lib = Librarian(store)
+    store.add_item("memory", "the index rebuild must not leave a transaction open")
+    store.x("DROP TABLE librarian_index")
+    with pytest.raises(Exception):
+        lib.build_index()
+    assert not store.db.in_transaction  # open, every later write joined it and none was committed
+    store.add_item("memory", "written after the failure")
+    import sqlite3
+    other = sqlite3.connect(store.path)  # a second connection sees only what was committed
+    assert other.execute("SELECT COUNT(*) FROM items WHERE content='written after the failure'").fetchone()[0] == 1
+
+
+def test_redacting_a_token_after_an_escape_keeps_json_valid():
+    import json
+    from commons_memory.redact import redact
+    body = json.dumps({"message": "fix\nAbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd tail", "ahead_by": 0})
+    out, found = redact(body)
+    assert "high_entropy" in found and "AbCdEfGh" not in out and json.loads(out)["ahead_by"] == 0

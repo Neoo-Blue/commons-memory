@@ -95,16 +95,17 @@ class Facts:
         later = [r for r in rows if (r["valid_from"] or r["created_at"]) > vf]
         vt = min((r["valid_from"] or r["created_at"]) for r in later) if later else None
         meta = {k: v for k, v in (("decision", decision), ("evidence", evidence)) if v}
-        r = self.s.add_item("fact", f"{subject} {predicate} {value}", project=project, agent_id=agent_id, meta=meta or None,
-                            subject=subject, predicate=predicate, value=value, check_conflicts=False)
-        new = r["id"]
-        for o in cur:
-            self.s.x("UPDATE items SET valid_to=?, superseded_by=? WHERE id=?", (vf, new, o["id"]))
-            self.s.relate(new, o["id"], "supersedes", {"at": vf})
-        self.s.x("UPDATE items SET valid_from=?, valid_to=?, superseded_by=? WHERE id=?",
-                 (vf, vt, later[0]["id"] if later else None, new))
-        if decision:
-            self.s.relate(decision, new, "sets", agent_id=agent_id)
+        with self.s.tx():  # the new value and the closing of the old one: together or not at all
+            r = self.s.add_item("fact", f"{subject} {predicate} {value}", project=project, agent_id=agent_id, meta=meta or None,
+                                subject=subject, predicate=predicate, value=value, check_conflicts=False)
+            new = r["id"]
+            for o in cur:
+                self.s.x("UPDATE items SET valid_to=?, superseded_by=? WHERE id=?", (vf, new, o["id"]))
+                self.s.relate(new, o["id"], "supersedes", {"at": vf})
+            self.s.x("UPDATE items SET valid_from=?, valid_to=?, superseded_by=? WHERE id=?",
+                     (vf, vt, later[0]["id"] if later else None, new))
+            if decision:
+                self.s.relate(decision, new, "sets", agent_id=agent_id)
         if (canon or decision) and not later:  # the current value now: the conflicts on it and on what it closed end
             settle_set(self.s, subject, predicate, [o["id"] for o in cur], agent_id, decision or new)
         return {"id": new, "valid_from": iso(vf), "valid_to": iso(vt) if vt else None, "closed": [o["id"] for o in cur],

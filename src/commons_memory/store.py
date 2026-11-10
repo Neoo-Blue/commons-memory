@@ -24,6 +24,7 @@ from .redact import redact
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
+PRAGMA journal_size_limit=67108864;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS agents(
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS items(
   conflict INTEGER DEFAULT 0, superseded_by TEXT, authenticated INTEGER DEFAULT 0,
   created_at REAL, updated_at REAL);
 CREATE INDEX IF NOT EXISTS items_kind ON items(kind, created_at);
+CREATE INDEX IF NOT EXISTS items_created ON items(created_at);
 CREATE INDEX IF NOT EXISTS items_proj ON items(project_id, created_at);
 CREATE INDEX IF NOT EXISTS items_fact ON items(subject, predicate);
 CREATE INDEX IF NOT EXISTS items_sess ON items(session_id, created_at);
@@ -1439,7 +1441,7 @@ def _sqlite_connect(path: str):
             import sqlcipher3.dbapi2 as sq  # type: ignore
         except ImportError as e:
             raise CommonsError("COMMONS_DB_KEY is set but sqlcipher3 is not installed: pip install 'commons-memory[encrypt]'") from e
-        db = sq.connect(path, check_same_thread=False, isolation_level=None)
+        db = sq.connect(path, check_same_thread=False, isolation_level=None, timeout=60)
         db.execute("PRAGMA key = " + "'" + key.replace("'", "''") + "'")
         try:
             db.execute("SELECT count(*) FROM sqlite_master").fetchall()
@@ -1448,7 +1450,7 @@ def _sqlite_connect(path: str):
         db.row_factory = sq.Row
         _load_sqlite_vec(db)
         return db
-    db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+    db = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=60)
     db.row_factory = sqlite3.Row
     _load_sqlite_vec(db)
     return db

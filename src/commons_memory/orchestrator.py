@@ -741,10 +741,11 @@ class Orchestrator:
             gates = [dict(self.s.q("SELECT * FROM subtasks WHERE id=?", (x,))[0]) for x in json.loads(st["gates"] or "[]")]
             self._rework(st, gates, fb)
             return
-        won = self.s.db.execute("UPDATE subtasks SET status='done', verdict=?, result=?, updated_at=? WHERE id=? AND "
-                                "status='pending' AND type='owner'", ("approve" if yes else "reject",
-                                                                     f"the owner answered: {answer.strip()}", now(),
-                                                                     st["id"])).rowcount
+        with self.s.lock:  # the connection is shared by every thread
+            won = self.s.db.execute("UPDATE subtasks SET status='done', verdict=?, result=?, updated_at=? WHERE id=? AND "
+                                    "status='pending' AND type='owner'", ("approve" if yes else "reject",
+                                                                         f"the owner answered: {answer.strip()}", now(),
+                                                                         st["id"])).rowcount
         if won != 1:
             return
         if st["gate_of"]:

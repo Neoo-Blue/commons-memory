@@ -158,8 +158,19 @@ class Librarian:
         report["dedupe"] = self._dedupe(run_id, items)
         report["tagged"] = self._autotag(run_id, items)
         report["assigned"] = self._assign(run_id, items)
-        from .graphlinks import rebuild
-        report["links_added"] = rebuild(self.s)["added"]
+        # Every record is linked when it is made (sessions excepted), so a run links its own batch. Relinking all of
+        # history every 10 minutes was one write transaction over 55,000 items on a live hub: other writers waited or
+        # got "database is locked", and so did this run several times a day. A first or full run still backfills.
+        from .graphlinks import link_item, link_session, rebuild
+        if full or not since:
+            report["links_added"] = rebuild(self.s)["added"]
+        else:
+            before = self.s.q("SELECT COUNT(*) c FROM relations")[0]["c"]
+            for it in items:
+                link_item(self.s, it["id"])
+            for r in self.s.q("SELECT id FROM sessions WHERE created_at>? OR updated_at>?", (since, since)):
+                link_session(self.s, r["id"])
+            report["links_added"] = self.s.q("SELECT COUNT(*) c FROM relations")[0]["c"] - before
         report["contradictions"] = self._contradictions(run_id, items)
         report["flags"] = self._flags(run_id)
         report["skills_tidied"] = self._skills(run_id)
@@ -421,11 +432,11 @@ class Librarian:
                 w = 1.0 + (0.5 if nd["kind"] in ("project", "group", "workflow", "skill", "kb_section", "dir", "job") else 0)
                 for term in set(_terms(text)):
                     rows.append((term, nd["path"], nd["key"], nd.get("id"), nd["label"][:120], nd["kind"], w))
-        with self.s.lock:
-            self.s.db.execute("BEGIN")
+        # tx(), not a bare BEGIN: if the DELETE failed ("database is locked") the transaction stayed open, every later
+        # write on this connection joined it, and nothing was committed again until a restart threw it all away.
+        with self.s.tx():
             self.s.db.execute("DELETE FROM librarian_index")
             self.s.db.executemany("INSERT INTO librarian_index VALUES(?,?,?,?,?,?,?)", rows)
-            self.s.db.execute("COMMIT")
         return len(rows)
 
     def find(self, query: str, limit: int = 5, max_tokens: int = 300) -> dict:
