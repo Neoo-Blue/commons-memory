@@ -2,6 +2,21 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.39.2: a busy hub no longer climbs to several GB of memory
+- **Why.** The v0.39.1 audit left one fault unexplained: the hub held 4.4 GB after 14 hours, and after a restart went
+  from 750 MB to 1.1 GB in twenty minutes.
+- **The cause.** The first search after any new memory read every vector again (55,000 small rows), on whichever
+  worker thread took the call. glibc gives each thread its own heap and keeps what was freed in it, so each of the
+  hub's 87 threads ended up holding its own copy's worth of freed memory. Reproduced on Linux with nothing but that
+  pattern: 40 threads, each reading 55,000 rows of 1,536 bytes once and freeing them, held 662 MB, and 2 GB after
+  three more rounds; with two arenas the same run held 73 MB throughout.
+- **A new memory is appended to the vector cache.** Only the rows added since the last search are read. A
+  replacement or a delete still reloads everything. This also takes 163 ms off the first search after each write.
+- **Two malloc arenas.** The Docker image and `deploy/commons.service` set `MALLOC_ARENA_MAX=2`. Set it yourself if
+  you run `commons serve` another way on Linux.
+- **Tests.** `numpy` is in the `dev` extra, so the matrix search path runs in the suite (it was skipped without it).
+- **For agents:** nothing to change.
+
 ## v0.39.1: fixes from an audit of a live hub
 An audit of a production hub on 2026-11-10 (five agents for a month, 54,954 items, 1.1 GB, one SQLite file). The
 database was sound and search was right; the faults below were found and fixed, and the upgrade was measured again.

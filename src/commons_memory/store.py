@@ -755,12 +755,27 @@ class Store:
         c = getattr(self, "_vm", None)
         if c and c[0] == fp:
             return c[1], c[2], c[3]
+
+        def unit(rows):
+            m = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32).reshape(len(rows), -1) if rows \
+                else np.zeros((0, self.embedder.dim), dtype=np.float32)
+            norms = np.linalg.norm(m, axis=1, keepdims=True)
+            return m / np.where(norms == 0, 1, norms)
+
+        # The usual change is a new memory: read the rows added since, not every vector again. Reading all 55,000
+        # after each insert cost 163 ms a search on a live hub, and each worker thread that did it kept its own freed
+        # heap (glibc arenas): 4.4 GB resident after 14 hours. A replacement or a delete still reloads.
+        if c and c[0][1] is not None and fp[0] > c[0][0] and fp[1] > c[0][1] and c[3].shape[0]:
+            new = self.q("SELECT item_id, vec FROM embeddings WHERE rowid>? AND model=? ORDER BY rowid", (c[0][1], name))
+            if len(new) == fp[0] - c[0][0] and not any(r["item_id"] in c[2] for r in new):
+                ids = c[1] + [r["item_id"] for r in new]
+                index = c[2] | {r["item_id"]: len(c[1]) + n for n, r in enumerate(new)}
+                mat = np.vstack([c[3], unit(new)])  # ponytail: one copy of the matrix per insert; grow in blocks if 100k+ vectors make it show
+                self._vm = (fp, ids, index, mat)
+                return ids, index, mat
         rows = self.q("SELECT item_id, vec FROM embeddings WHERE model=?", (name,))
         ids = [r["item_id"] for r in rows]
-        mat = np.frombuffer(b"".join(r["vec"] for r in rows), dtype=np.float32).reshape(len(rows), -1) if rows \
-            else np.zeros((0, self.embedder.dim), dtype=np.float32)
-        norms = np.linalg.norm(mat, axis=1, keepdims=True)
-        mat = mat / np.where(norms == 0, 1, norms)
+        mat = unit(rows)
         self._vm = (fp, ids, {i: n for n, i in enumerate(ids)}, mat)
         return ids, self._vm[2], mat
 

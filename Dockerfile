@@ -44,8 +44,11 @@ COPY --from=build /opt/commons /opt/commons
 COPY --from=build /opt/models /opt/models
 COPY docker/entrypoint.sh /usr/local/bin/commons-entrypoint
 RUN chmod 0755 /usr/local/bin/commons-entrypoint
+# MALLOC_ARENA_MAX: glibc gives every thread its own heap and keeps what was freed in it. A hub with 87 threads held
+# 4.4 GB after 14 hours; the same work on two arenas holds a fraction of that (see CHANGELOG v0.39.2).
 ENV PATH=/opt/commons/bin:$PATH \
     PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2 \
     HOME=/data \
     COMMONS_HOME=/data \
     COMMONS_DB=/data/commons.db \
