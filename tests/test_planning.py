@@ -147,6 +147,24 @@ def test_a_check_step_always_waits_for_the_work_it_checks(store):
     assert o.claim(b, ids["rev"]) is None and o.claim(a, ids["rev"]) is None
 
 
+def test_one_check_that_gates_two_pieces_of_work_can_start_and_releases_both(store):
+    a, b = _agent(store, "a", code=0.9), _agent(store, "b", review=0.9)
+    o = Orchestrator(store)
+    j = o.submit("x", dag=[{"key": "one", "type": "code", "title": "apply through networks", "gates": ["rev"]},
+                           {"key": "two", "type": "code", "title": "apply directly", "gates": ["rev"]},
+                           {"key": "rev", "type": "review", "title": "review both", "deps": ["one", "two"]}])
+    ids = {x["key"]: x["id"] for x in j["subtasks"]}
+    for k in ("one", "two"):
+        o.claim(a, ids[k])
+        o.complete(ids[k], a, "applied")
+    status = lambda k: store.q("SELECT status FROM subtasks WHERE id=?", (ids[k],))[0]["status"]
+    assert status("one") == status("two") == "awaiting_gate"
+    assert o.claim(a, ids["rev"]) is None      # the author of the work does not check it
+    assert o.claim(b, ids["rev"]) is not None  # it waited for "one" to be done while "one" waited for it
+    o.complete(ids["rev"], b, "both fine\nVERDICT: approve", verdict="approve")
+    assert status("one") == status("two") == "done" and o.status(j["job_id"])["status"] == "done"
+
+
 def test_a_failed_planning_step_falls_back_to_the_rules_at_once(store):
     lead, gb = _agent(store, "lead"), _agent(store, "grok-build", live=True, plan=0.9)
     o = Orchestrator(store)

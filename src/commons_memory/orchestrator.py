@@ -591,24 +591,38 @@ class Orchestrator:
         return [self.status(r["id"]) for r in self.s.q(sql, ([status] if status else []) + [limit])]
 
     # ---------------------------------------------------------------- allocation
+    def _gated_by(self, st: dict) -> list[str]:
+        """Every subtask this check gates. gate_of names one, but a plan may put one check in the gates of several
+        ("review both applications"): read as one, the check waited for the second to finish while the second waited
+        for the check, and a live job sat like that for 13 days."""
+        out = [st["gate_of"]] if st["gate_of"] else []
+        for r in self.s.q("SELECT id, gates FROM subtasks WHERE job_id=? AND gates LIKE ?", (st["job_id"], f"%{st['id']}%")):
+            if r["id"] not in out and st["id"] in json.loads(r["gates"] or "[]"):
+                out.append(r["id"])
+        return out
+
     def _deps_ok(self, st: dict) -> bool:
+        gated = None
         for dep in json.loads(st["deps"] or "[]"):
             r = self.s.q("SELECT status, gate_of, type, verdict FROM subtasks WHERE id=?", (dep,))[0]
             if r["status"] == "done" and r["verdict"] == "reject" and (r["gate_of"] or r["type"] == "owner"):
                 return False  # a rejected check holds back the checks after it (verify before review)
             if r["status"] == "done":
                 continue
-            if r["status"] == "awaiting_gate" and st["gate_of"] == dep:
-                continue
+            if r["status"] == "awaiting_gate":
+                gated = self._gated_by(st) if gated is None else gated
+                if dep in gated:
+                    continue
             return False
         return True
 
     def _author_of_chain(self, st: dict) -> list[str]:
         """Agents who must not gate this subtask (the author of the gated work)."""
-        if not st["gate_of"]:
-            return []
-        r = self.s.q("SELECT claimed_by, assigned_agent FROM subtasks WHERE id=?", (st["gate_of"],))[0]
-        return [x for x in (r["claimed_by"], r["assigned_agent"]) if x]
+        out = []
+        for gid in self._gated_by(st):
+            r = self.s.q("SELECT claimed_by, assigned_agent FROM subtasks WHERE id=?", (gid,))[0]
+            out += [x for x in (r["claimed_by"], r["assigned_agent"]) if x and x not in out]
+        return out
 
     def allocate(self, job_id: str) -> None:
         rows = [dict(r) for r in self.s.q("SELECT * FROM subtasks WHERE job_id=? AND status='pending' AND "
@@ -749,7 +763,8 @@ class Orchestrator:
         if won != 1:
             return
         if st["gate_of"]:
-            self._evaluate_gates(st["gate_of"])
+            for gid in self._gated_by(st):
+                self._evaluate_gates(gid)
         elif not yes:
             self.cancel(st["job_id"], f"the owner said no at '{st['title']}': {answer[:200]}")
             return
@@ -1124,7 +1139,8 @@ class Orchestrator:
                                              seconds=seconds)
         else:
             self.profiles.record_outcome(agent_id, st["type"], True, subtask_id=subtask_id, tokens=tokens, seconds=seconds)
-            self._evaluate_gates(st["gate_of"])
+            for gid in self._gated_by(st):  # every piece of work this check gates, not only the one gate_of names
+                self._evaluate_gates(gid)
         self._auto(st["job_id"])
         self._wake_ready(st["job_id"])  # whoever was waiting on this subtask can start now
         from .graphlinks import link_job

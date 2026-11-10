@@ -278,6 +278,7 @@ Everything works with defaults. These are the settings people usually change:
 | Unknown-argument error from a tool | The error lists the accepted names and aliases. |
 | `database is locked` in the log or from a tool | Upgrade to v0.39.1 or later: writers wait 60 s for each other and the librarian no longer relinks all of history in one transaction. |
 | Audit log filling with `http.unauthorized` | A monitor is probing an address that needs a key. Point it at `/bus/health`, which needs none. From v0.39.1 a refused client is logged once an hour. |
+| A review or check step stays pending while the steps it gates say `awaiting_gate` | One check gated several steps and the job deadlocked. Upgrade to v0.39.3 or later; the check becomes claimable. |
 | A verified run says "could not be set up" | The `TESTS:` line was not a command a shell can run from the repo root. Write `TESTS: cd backend && npm test -> 42 passed`. |
 
 ## FAQ
