@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "commons-memory"
-version = "0.38.0"
+version = "0.39.0"
 description = "Unified cross-AI memory: one MCP hub for shared memory, code graph, handoffs, reasoning logs and safe secret references."
 dynamic = ["readme"]
 license = "MIT"
@@ -32,6 +32,7 @@ code = [
 tokens = ["tiktoken>=0.7"]
 otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
 http = ["uvicorn>=0.30"]
+verify = ["e2b>=2.0"]
 expose = ["ngrok>=1.4"]
 sftp = ["paramiko>=3"]
 smb = ["smbprotocol>=1.13"]
