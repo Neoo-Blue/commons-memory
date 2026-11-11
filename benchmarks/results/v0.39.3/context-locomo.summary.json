@@ -1,0 +1,19 @@
+{
+  "benchmark": "context-locomo",
+  "n": 1540,
+  "k": 20,
+  "neighbors": 2,
+  "tokenizer": "cl100k_base",
+  "with_commons": {
+    "mean": 3032,
+    "median": 3054,
+    "max": 4464
+  },
+  "whole_history": {
+    "mean": 24665,
+    "median": 26020,
+    "max": 28497
+  },
+  "saved_pct": 87.7,
+  "times_smaller": 8.1
+}

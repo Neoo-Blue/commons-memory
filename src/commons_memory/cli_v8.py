@@ -104,7 +104,8 @@ def add_parsers(sub) -> None:
     x.add_argument("--force", action="store_true", help="re-embed everything")
     x.add_argument("--limit", type=int)
     x = sub.add_parser("bench", help="retrieval benchmarks (LongMemEval, LoCoMo)")
-    x.add_argument("suite", choices=["longmemeval", "locomo", "self", "scale", "qa-locomo", "qa-longmemeval"],
+    x.add_argument("suite", choices=["longmemeval", "locomo", "self", "scale", "qa-locomo", "qa-longmemeval", "context-locomo",
+                            "context-longmemeval"],
                    help="self = known-item retrieval on YOUR store: a model writes questions from sampled memories")
     x.add_argument("--data", help="dataset json (longmemeval_s_cleaned.json / locomo10.json)")
     x.add_argument("--sample", type=int, default=100, help="self: memories to sample")
@@ -481,6 +482,14 @@ def handle_nostore(args) -> int:
             s = bench.qa(args.suite[3:], args.data, args.out, Store(args.db), args.model, judge=args.judge, k=args.k,
                          limit=args.limit, workers=args.workers, embedder=args.embedder, neighbors=args.neighbors,
                          batch=args.batch_api, log=lambda m: print(m, file=sys.stderr, flush=True))
+            print(json.dumps(s, indent=2))
+            return 0
+        if args.suite.startswith("context-"):  # tokens per question with Commons vs the whole history; no model
+            if not args.data:
+                print("context-* needs --data", file=sys.stderr)
+                return 2
+            s = bench.context_cost(args.suite[8:], args.data, args.out, k=args.k, limit=args.limit, embedder=args.embedder,
+                                   neighbors=args.neighbors or 2, log=lambda m: print(m, file=sys.stderr, flush=True))
             print(json.dumps(s, indent=2))
             return 0
         if args.suite == "scale":

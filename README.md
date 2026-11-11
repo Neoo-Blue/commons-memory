@@ -107,10 +107,10 @@ effect is real but not yet measured. Rival columns come from each project's own 
 
 | Feature | Without it → with it | mem0 | claude-mem | MemPalace | Archify |
 |---|---|---|---|---|---|
-| Hybrid search + neighbouring turns (short hits) + date resolution | LoCoMo QA 69.5% → **78.7%**; LongMemEval QA unchanged by neighbours (65% either way, where giving them to every hit costs points) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
+| Hybrid search + neighbouring turns (short hits) + date resolution | LoCoMo QA 69.5% → **78.7%**; LongMemEval QA unchanged by neighbours (65% either way, where giving them to every hit costs points). A question is answered from 3.0k tokens of memories instead of the 24.7k-token conversation (**87.7% fewer**), 2.6k instead of 107.5k on LongMemEval (**97.6% fewer**) | 70.3% on the same LoCoMo run (paired p = 1e-11)¹ | · no recall benchmark | LoCoMo dialog recall 0.545 vs Commons 0.708 (its metric) | · |
 | Indexed search | p50 at 30k memories 1,383 ms → **68 ms** | — | — | — | · |
 | Redesigned dashboard | answer, approve, retry, move or cancel from the page you are on instead of hunting across 32 tabs; every page works on a phone (not benchmarked) | — | — | — | — |
-| Lean tool list | tool schemas per session 39.7k → **6.3k tokens** (−84%); on a live hub with 70 keys `credentials()` 13.3k → **4.5k tokens** and `canon(product)` 7.4k → **5.8k** (v0.39.1) | — | — | 45 MCP tools | · |
+| Lean tool list | every tool listed would cost 40.4k tokens a session (v0.30) → **8.0k** for the 41 that are listed (v0.39.3, −80%); on a live hub with 70 keys `credentials()` 13.3k → **4.5k tokens** and `canon(product)` 7.4k → **5.8k** (v0.39.1) | — | — | 45 MCP tools | · |
 | Verbatim capture hooks + `turn()` for chat apps | nothing said is lost to an agent's own summary; Claude Code, Codex, Gemini, Cursor, any chat app; a sentence already kept in any session is kept once (on a live hub ten prompt and playbook lines had become 4,442 items, 8% of all memory → one each) | ◐ | ✓ (8+ harnesses) | ✓ (3 clients) | · |
 | Project board | your asks survive compaction and agent switches; asked-twice is counted | · | · | · | · |
 | Canon (one current truth per product, owner-only facts) | a week of 14 products across 5 agents had 17 inconsistency incidents traced to 14 causes (a price changed in one place only, a do-not-merge lost to compaction, a feature called missing after it shipped) → a change is one decision that every agent reads at its next session start or prompt, and copies such as Pulse kits follow within one relay run (about 30 minutes); hook cost measured with the hub down: about 90 ms at session start and 25 ms per prompt | ◐ updates a memory in place, no owner-only lock or precedence | · | · | · |
@@ -289,18 +289,22 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (v0.9.0; QA on v0.28, tool sizes on v0.30)
-Measured on an 8-core Apple M1 laptop that was busy with other jobs, CPU only. Full tables, caveats and per-question
-results are in [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
+## Benchmarks (retrieval, tokens, speed and tool sizes on v0.39.3; QA on v0.28)
+Everything that needs no AI model was run again on v0.39.3 in a fresh Linux sandbox with nothing else on it (4 vCPUs,
+8 GB; `bash benchmarks/run-clean.sh`). The two end-to-end QA rows need a reader and a judge model and are still the
+v0.28 runs, on an 8-core Apple M1 laptop. Full tables, caveats and per-question results are in
+[benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
 | What | Metric | Commons |
 |---|---|---|
-| LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.4% / 76.5%** (v0.8: 31.2 / 71.1); reproduced on v0.21.1, [results](benchmarks/results/v0.21.1/) |
+| Tokens to answer one question: Commons against the whole history in the prompt (`commons bench context-*`) | prompt tokens per question (cl100k), the QA benchmark's own context | LoCoMo: 3,032 instead of 24,665, **87.7% fewer**. LongMemEval-S: 2,612 instead of 107,523, **97.6% fewer**. That context scored the two QA rows below; what the whole history would score was not measured |
+| LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.4% / 76.5%** (v0.8: 31.2 / 71.1); reproduced to the decimal on v0.39.3, [results](benchmarks/results/v0.39.3/) |
 | LoCoMo retrieval | evidence-session any@10 | **97.4%** (v0.8: 95.8) |
+| LongMemEval-S retrieval, 470 questions | evidence-session any@5 / @10 | **94.5% / 95.5%** on v0.39.3. Five question types are at 90 to 100%; temporal-reasoning is at 81.9%. A run on v0.7.2 code scored 97.7 / 99.6 (temporal 96.1): the ranking changes of v0.9 that lifted LoCoMo cost 19 temporal questions, found only by this re-run |
 | LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.7%** with `context=2` (short hits, v0.28) and date resolution (78.5% when every hit gets neighbours, 69.5% for hits alone); no LLM at write time |
 | LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **65%** on v0.28 (67% on v0.20.1, run-to-run noise of a few points; v0.9: 62%). Since v0.28 neighbouring turns go only to short hits, so they no longer cost points on its long sessions (65% with or without them; 54.0% when every hit gets them) |
-| Search latency, 30k / 60k memories | p50 | **68 ms / 114 ms** (v0.8: 1,383 ms at 30k) |
-| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer, minus a one-tool baseline) | **6,072** for the 32 core tools in v0.30; listing all 186 would cost 40,382 |
+| Search latency, 30k / 60k memories | p50, query embedding included | **64 ms / 100 ms** on v0.39.3 (a second sandbox: 72 / 73; the M1 laptop on v0.9: 68 / 114; v0.8: 1,383 ms at 30k) |
+| Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer, minus a one-tool baseline) | **7,982** for the 41 listed tools in v0.39.3 (6,072 for 32 in v0.30); listing all 186 would have cost 40,382 in v0.30 |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
 
 **Head-to-head, rivals run here on the same LoCoMo data** (details in [benchmarks/README.md](benchmarks/README.md)):

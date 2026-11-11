@@ -1,0 +1,15 @@
+{
+  "commons": "0.39.3",
+  "tools": 41,
+  "tokenizer": "Anthropic count_tokens, claude-haiku-4-5",
+  "with_tool_list": 8519,
+  "one_tool_baseline": 537,
+  "tool_list_tokens": 7982,
+  "chars": 26561,
+  "earlier": {
+    "v0.30": {
+      "tools": 32,
+      "tool_list_tokens": 6072
+    }
+  }
+}

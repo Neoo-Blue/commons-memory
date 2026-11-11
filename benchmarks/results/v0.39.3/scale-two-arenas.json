@@ -1,0 +1,45 @@
+{
+  "embedder": "fastembed",
+  "dim": 384,
+  "env": {
+    "MALLOC_ARENA_MAX": "2"
+  },
+  "sizes": [
+    {
+      "items": 1000,
+      "search_p50_ms": 9.7,
+      "search_p95_ms": 12.3,
+      "insert_per_s": 3704,
+      "conc_qps": 111.0,
+      "db_mb": 4.9,
+      "rss_mb": 308.7
+    },
+    {
+      "items": 10000,
+      "search_p50_ms": 32.1,
+      "search_p95_ms": 60.0,
+      "insert_per_s": 3935,
+      "conc_qps": 24.3,
+      "db_mb": 39.1,
+      "rss_mb": 507.0
+    },
+    {
+      "items": 30000,
+      "search_p50_ms": 72.2,
+      "search_p95_ms": 98.4,
+      "insert_per_s": 4037,
+      "conc_qps": 11.1,
+      "db_mb": 114.0,
+      "rss_mb": 758.7
+    },
+    {
+      "items": 60000,
+      "search_p50_ms": 73.4,
+      "search_p95_ms": 91.9,
+      "insert_per_s": 4012,
+      "conc_qps": 5.9,
+      "db_mb": 226.3,
+      "rss_mb": 1192.1
+    }
+  ]
+}
