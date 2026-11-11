@@ -419,6 +419,78 @@ def _qa_prompt(s, question, as_of, k, ts_label, neighbors: int = 0) -> str:
     return f"Today is {ts_label}.\nMemories:\n" + "\n".join(ctx) + f"\n\nQuestion: {question}\nAnswer:"
 
 
+def context_cost(suite: str, data_path: str, out: str, k: int = 20, limit: int | None = None, embedder: str = "auto",
+                 seed: int = 7, neighbors: int = 2, log=lambda m: None) -> dict:
+    """What a reader is sent per question with Commons (the QA benchmark's own prompt: the top k memories, with the
+    turns around short hits) against the same question with the whole history in the prompt, which is the choice
+    without a memory. No model is called; tokens are cl100k when tiktoken is installed, else the estimate.
+    LoCoMo: every question of categories 1-4. LongMemEval-S: the QA benchmark's seeded sample of `limit` questions."""
+    import random
+    from .ids import estimate_tokens
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        tok, tokenizer = (lambda t: len(enc.encode(t, disallowed_special=()))), "cl100k_base"
+    except ImportError:
+        tok, tokenizer = estimate_tokens, "estimate"
+    os.environ["COMMONS_TRUST_WEIGHTING"] = "0"
+    rows = []
+    if suite == "locomo":
+        for conv in json.load(open(data_path))[: limit or None]:
+            s, d = _store(embedder)
+            try:
+                c, n, full = conv["conversation"], 1, []
+                while f"session_{n}" in c:
+                    ts = _locomo_date(c.get(f"session_{n}_date_time", ""))
+                    for t in c[f"session_{n}"]:
+                        line = f"{t['speaker']}: {t['text']}" + (f" [shares image: {t['blip_caption']}]" if t.get("blip_caption") else "")
+                        s.add_item("note", line, created_at=ts)
+                        full.append(f"[{_day(ts)}] {line}")
+                    n += 1
+                s.reindex()
+                ref = max(_locomo_date(c.get(f"session_{i}_date_time", "")) for i in range(1, n)) + 86400
+                label, history = time.strftime("%d %B %Y", time.gmtime(ref)), tok("\n".join(full))
+                for q in conv["qa"]:
+                    if q.get("category") in (1, 2, 3, 4) and "answer" in q:
+                        frame = tok(f"Today is {label}.\nConversation:\n\n\nQuestion: {q['question']}\nAnswer:")
+                        rows.append({"id": conv["sample_id"], "type": f"cat{q['category']}", "without": history + frame,
+                                     "with": tok(_qa_prompt(s, q["question"], ref, k, label, neighbors))})
+                log(f"{conv['sample_id']}: {len(rows)} questions")
+            finally:
+                _cleanup(d)
+    else:
+        data = json.load(open(data_path))
+        for q in random.Random(seed).sample(data, min(limit or len(data), len(data))):
+            s, d = _store(embedder)
+            try:
+                full = []
+                for date, sess in zip(q["haystack_dates"], q["haystack_sessions"]):
+                    ts = _lme_date(date)
+                    for i, t in enumerate(sess):
+                        full.append(f"[{_day(ts)}] {t['role']}: {t['content']}")
+                        if t["role"] != "user":
+                            continue
+                        reply = sess[i + 1]["content"][:300] if i + 1 < len(sess) and sess[i + 1]["role"] == "assistant" else ""
+                        s.add_item("note", f"user: {t['content']}" + (f"\nassistant: {reply}" if reply else ""), created_at=ts)
+                s.reindex()
+                frame = tok(f"Today is {q['question_date']}.\nConversation:\n\n\nQuestion: {q['question']}\nAnswer:")
+                rows.append({"id": q["question_id"], "type": q["question_type"], "without": tok("\n".join(full)) + frame,
+                             "with": tok(_qa_prompt(s, q["question"], _lme_date(q["question_date"]), k, q["question_date"], neighbors))})
+                log(f"{len(rows)} questions")
+            finally:
+                _cleanup(d)
+    w, wo = sorted(r["with"] for r in rows), sorted(r["without"] for r in rows)
+    summary = {"benchmark": f"context-{suite}", "n": len(rows), "k": k, "neighbors": neighbors, "tokenizer": tokenizer,
+               "with_commons": {"mean": round(sum(w) / len(w)), "median": w[len(w) // 2], "max": w[-1]},
+               "whole_history": {"mean": round(sum(wo) / len(wo)), "median": wo[len(wo) // 2], "max": wo[-1]},
+               "saved_pct": round(100 * (1 - sum(w) / sum(wo)), 1), "times_smaller": round(sum(wo) / sum(w), 1)}
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, f"context-{suite}.jsonl"), "w") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rows)
+    json.dump(summary, open(os.path.join(out, f"context-{suite}.summary.json"), "w"), indent=2)
+    return summary
+
+
 def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str | None = None, k: int = 20,
        limit: int | None = None, workers: int = 8, embedder: str = "auto", seed: int = 7, log=lambda m: None,
        neighbors: int = 0, batch: bool = False) -> dict:

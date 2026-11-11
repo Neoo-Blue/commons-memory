@@ -13,3 +13,8 @@ secrets/
 commons.env
 secrets/
 vault.key
+bench-out/
+.bench-venv/
+locomo10.json
+longmemeval_s_cleaned.json
+bench-ctx/

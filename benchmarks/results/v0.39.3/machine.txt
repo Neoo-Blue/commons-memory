@@ -1,0 +1,6 @@
+commons 0.39.3
+cpus 4
+model name	: Intel(R) Xeon(R) Processor @ 2.60GHz
+MemTotal:        8147620 kB
+Linux 6.1.189+
+Python 3.11.2

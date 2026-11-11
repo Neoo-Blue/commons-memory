@@ -1,0 +1,42 @@
+{
+  "embedder": "fastembed",
+  "dim": 384,
+  "sizes": [
+    {
+      "items": 1000,
+      "search_p50_ms": 13.5,
+      "search_p95_ms": 16.1,
+      "insert_per_s": 2830,
+      "conc_qps": 88.5,
+      "db_mb": 4.9,
+      "rss_mb": 315.4
+    },
+    {
+      "items": 10000,
+      "search_p50_ms": 48.0,
+      "search_p95_ms": 75.4,
+      "insert_per_s": 2941,
+      "conc_qps": 21.0,
+      "db_mb": 39.1,
+      "rss_mb": 706.2
+    },
+    {
+      "items": 30000,
+      "search_p50_ms": 64.1,
+      "search_p95_ms": 99.8,
+      "insert_per_s": 2961,
+      "conc_qps": 12.5,
+      "db_mb": 114.8,
+      "rss_mb": 923.9
+    },
+    {
+      "items": 60000,
+      "search_p50_ms": 100.2,
+      "search_p95_ms": 122.4,
+      "insert_per_s": 2940,
+      "conc_qps": 4.9,
+      "db_mb": 226.1,
+      "rss_mb": 1734.4
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "benchmark": "context-longmemeval",
+  "n": 100,
+  "k": 20,
+  "neighbors": 2,
+  "tokenizer": "cl100k_base",
+  "with_commons": {
+    "mean": 2612,
+    "median": 2634,
+    "max": 3046
+  },
+  "whole_history": {
+    "mean": 107523,
+    "median": 107750,
+    "max": 109256
+  },
+  "saved_pct": 97.6,
+  "times_smaller": 41.2
+}

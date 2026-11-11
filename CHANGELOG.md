@@ -2,6 +2,28 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.39.4: the benchmarks, run again on a clean machine, and how many tokens a memory saves
+- **Why.** The README's benchmark numbers dated from v0.9 to v0.30 and came from a laptop that was busy with other
+  work. Every benchmark that needs no AI model was run again on v0.39.3 in a fresh Linux sandbox (4 vCPUs, 8 GB).
+  The hub itself is unchanged by this release: it adds a benchmark command and corrects the published numbers.
+- **New: tokens saved.** `commons bench context-locomo` and `context-longmemeval` count the QA benchmark's own prompt
+  (the top 20 memories, with the turns around short hits) against the same question with the whole history in the
+  prompt. LoCoMo: 3,032 tokens instead of 24,665, **87.7% fewer**. LongMemEval-S: 2,612 instead of 107,523, **97.6%
+  fewer**. No model is called. What the whole history would score was not measured.
+- **LoCoMo retrieval reproduces to the decimal** (39.4 / 76.5 turn-level any@1 / @10, 97.4 session-level any@10).
+- **LongMemEval retrieval is lower than published: 94.5% any@5, not 97.7%.** The loss is all in temporal-reasoning
+  questions (81.9%, was 96.1%): 19 of 127 are no longer in the top 5. The old number was measured once, on v0.7.2
+  code. The dataset is byte-identical and v0.9.0, v0.28.0 and v0.38.0 score the same 81.9 here, so it came in with
+  the ranking work between v0.8.0 and v0.9.0 that raised LoCoMo. Switching off each ranking signal in turn (memory
+  tiers, time window, recency, entity boost) brings none of the 19 back, and reciprocal-rank fusion brings back one,
+  so the cause is in how candidates are gathered or scored. It is not found yet.
+- **Latency is where it was:** p50 64 ms at 30,000 memories and 100 ms at 60,000 (a second sandbox: 72 and 73).
+  Peak memory on Linux is higher than the macOS figure the README carried: 1.7 GB at 60,000 with ten writers and
+  searchers at once, 1.2 GB with the two arenas the Docker image now sets.
+- **The tool list grew:** 7,982 tokens for the 41 listed tools, where 32 cost 6,072 in v0.30.
+- `benchmarks/run-clean.sh` runs the whole set; results are in `benchmarks/results/v0.39.3/`.
+- **For agents:** nothing to change.
+
 ## v0.39.3: one check that gates two pieces of work no longer deadlocks the job
 - **Why.** A job on a live hub sat for 13 days: two finished application steps "awaiting gate", and the review that
   gated both still pending. It looked like the reviewer never picked it up. No agent could have.

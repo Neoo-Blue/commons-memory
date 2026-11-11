@@ -4,6 +4,67 @@ Every number below is reproducible with `commons bench ...`; per-question result
 [`results/`](results/). Measurements were taken on an 8-core Apple M1 laptop that was running other jobs at the same
 time, so latencies are conservative.
 
+## v0.39.3: every benchmark that needs no AI model, on a clean Linux machine
+
+Run on 2026-11-10 in a fresh cloud sandbox (4 vCPUs, Intel Xeon 2.6 GHz, 8 GB, Linux 6.1, Python 3.11), nothing else
+running, from the tagged v0.39.3 source: `bash benchmarks/run-clean.sh`. Results: [`results/v0.39.3/`](results/v0.39.3/).
+The end-to-end QA numbers (which need a reader and a judge model) were not re-run; they are still the v0.28 ones below.
+
+### Tokens: answering with Commons against putting the whole history in the prompt (new)
+`commons bench context-locomo` and `context-longmemeval` build the exact reader prompt of the QA benchmark (the top 20
+memories, with the two turns around each short hit) and count it against the same question with the whole
+conversation in the prompt, which is what a model without a memory is given. No model is called; tokens are cl100k.
+
+| Dataset | With Commons, per question | Whole history, per question | Tokens saved | QA accuracy with that context |
+|---|---|---|---|---|
+| LoCoMo, 1,540 questions (cat 1-4) | 3,032 (median 3,054, most 4,464) | 24,665 | **87.7%** (8.1 times smaller) | 78.7% (v0.28) |
+| LongMemEval-S, the QA run's 100 seeded questions | 2,612 (median 2,634, most 3,046) | 107,523 | **97.6%** (41 times smaller) | 65% (v0.28) |
+
+The saving is the same for every LoCoMo category (87.3% to 87.9%). It is the size of the prompt for one question.
+What full-history prompting would score on these questions was not measured here, so this table says how much
+smaller the prompt is, not that the answers are as good.
+
+### Retrieval
+| Benchmark | v0.39.3, clean machine | Published before |
+|---|---|---|
+| LoCoMo, 1,982 questions: evidence turn any@1 / @5 / @10 | 39.4 / 66.8 / 76.5 | 39.4 / 66.8 / 76.5 (v0.21.1): identical |
+| LoCoMo: evidence session any@10 | 97.4 | 97.4 |
+| LongMemEval-S, 470 questions: session any@1 / @3 / @5 / @10 | 88.3 / 93.2 / **94.5** / 95.5 | 90.4 / 96.8 / **97.7** / 99.6 (measured on v0.7.2 code) |
+| LongMemEval-S: all@5 / all@10 | 82.3 / 88.7 | 91.3 / 95.5 |
+
+LongMemEval any@5 by question type, now against then: knowledge-update 100 / 100, multi-session 100 / 99.2,
+single-session-assistant 100 / 100, single-session-user 100 / 96.9, single-session-preference 90.0 / 90.0,
+**temporal-reasoning 81.9 / 96.1**.
+
+**LongMemEval retrieval is lower than the number this page carried, and the loss is all in temporal-reasoning
+questions** ("which did I do first", "in February", "last month"): 19 of 127 that were found in the top 5 no longer
+are; every other type is equal or better. The old number was measured once, on v0.7.2 code, and never re-run. It is
+not the machine, the dataset or a recent release: the dataset file is byte-identical (sha256 `d6f21ea9...`), LoCoMo
+reproduces to the decimal on the same machine, and v0.9.0, v0.28.0 and v0.38.0 run here score exactly 81.9 on those
+127 questions too. The change came in between v0.8.0 and v0.9.0, with the ranking work that raised LoCoMo any@1 from
+31.2 to 39.4. The LongMemEval QA numbers (62% on v0.9, 65% on v0.28) were already measured with it. Switching off
+each ranking signal in turn (memory tiers, time window, recency, entity boost) brings none of the 19 questions back,
+and reciprocal-rank fusion brings back one, so the cause is in how candidates are gathered or scored. Not found yet.
+
+### Latency and footprint (`commons bench scale`)
+| Store size | search p50 | search p95 | inserts/s | DB size | peak RSS |
+|---|---|---|---|---|---|
+| 1,000 | 13.5 ms | 16.1 ms | 2,830 | 4.9 MB | 315 MB |
+| 10,000 | 48.0 ms | 75.4 ms | 2,941 | 39.1 MB | 706 MB |
+| 30,000 | 64.1 ms | 99.8 ms | 2,961 | 114.8 MB | 924 MB |
+| 60,000 | 100.2 ms | 122.4 ms | 2,940 | 226.1 MB | 1,734 MB |
+
+A second run in another sandbox with `MALLOC_ARENA_MAX=2`, as the Docker image sets it: p50 9.7 / 32.1 / 72.2 /
+73.4 ms and peak RSS 309 / 507 / 759 / 1,192 MB. Two things to read from that. Latency moves by a third between two
+sandboxes of the same size, so treat these as "tens of milliseconds, about 70 to 100 at 60,000", not as exact.
+And peak memory on Linux is far above the 415 MB measured on macOS at 60,000 (v0.9.0 table below): glibc keeps each
+thread's freed heap. Two arenas cut the peak by 31% at 60,000; it is still about 1.2 GB with ten writers and
+searchers at once.
+
+### The tool list an AI client is sent
+41 tools in the default profile: **7,982 tokens** (Anthropic's tokenizer, the list minus a one-tool baseline; 26,561
+characters). It was 6,072 for 32 tools in v0.30: nine more tools, 31% more tokens on every session.
+
 ## v0.28.0: neighbouring turns only around short hits
 
 Same protocol as below (Haiku 4.5 reader and judge, k=20, date resolution), all runs on the v0.28 code through the
