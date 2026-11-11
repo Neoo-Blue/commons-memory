@@ -289,10 +289,10 @@ Everything works with defaults. These are the settings people usually change:
 - **Can I move from SQLite to Postgres?** Yes: `commons migrate-postgres postgresql://…`.
 - **Can I stop it?** Yes. Run `commons pause` (kill switch). `commons dump` exports everything as JSONL.
 
-## Benchmarks (retrieval on v0.40.0; tokens, speed and tool sizes on v0.39.3; QA on v0.28)
+## Benchmarks (retrieval and QA on v0.40.0; tokens, speed and tool sizes on v0.39.3)
 Everything that needs no AI model was run again on v0.39.3 in a fresh Linux sandbox with nothing else on it (4 vCPUs,
-8 GB; `bash benchmarks/run-clean.sh`). The two end-to-end QA rows need a reader and a judge model and are still the
-v0.28 runs, on an 8-core Apple M1 laptop. Full tables, caveats and per-question results are in
+8 GB; `bash benchmarks/run-clean.sh`). The two end-to-end QA rows need a reader and a judge model and were run again on
+v0.40.0 (retrieval on an 8-core Apple M1 laptop, the model calls through Anthropic's batch API). Full tables, caveats and per-question results are in
 [benchmarks/README.md](benchmarks/README.md); every number is reproducible with `commons bench`.
 
 | What | Metric | Commons |
@@ -301,8 +301,8 @@ v0.28 runs, on an 8-core Apple M1 laptop. Full tables, caveats and per-question 
 | LoCoMo retrieval, 1,982 questions | evidence-turn any@1 / @10 | **39.1% / 76.4%** on v0.40.0 (39.4 / 76.5 on v0.39.3 and v0.21.1; v0.8: 31.2 / 71.1); **49.7% / 78.0%** with `--rerank`, [results](benchmarks/results/v0.40.0/) |
 | LoCoMo retrieval | evidence-session any@10 | **97.3%** (v0.8: 95.8) |
 | LongMemEval-S retrieval, 470 questions | evidence-session any@1 / @5 / @10 | **92.1% / 98.9% / 99.6%** on v0.40.0, no reranker, no model call (465 of 470 in the top 5). With the reranker 99.0% any@5 and 94.6% any@1 on the 411 questions that run finished. v0.39.3 measured 94.5% any@5 because the benchmark harness hid evidence the dataset dates after the question; fixed in v0.40.0, see [benchmarks/README.md](benchmarks/README.md) |
-| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **78.7%** with `context=2` (short hits, v0.28) and date resolution (78.5% when every hit gets neighbours, 69.5% for hits alone); no LLM at write time |
-| LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **65%** on v0.28 (67% on v0.20.1, run-to-run noise of a few points; v0.9: 62%). Since v0.28 neighbouring turns go only to short hits, so they no longer cost points on its long sessions (65% with or without them; 54.0% when every hit gets them) |
+| LoCoMo end-to-end QA, 1,540 questions (cat 1-4) | LLM-judged accuracy, Haiku 4.5 reader + judge, k=20 | **79.2%** on v0.40.0 with `context=2` (short hits) and date resolution (78.7% on v0.28; 78.5% when every hit gets neighbours, 69.5% for hits alone); no LLM at write time |
+| LongMemEval-S end-to-end QA, seeded 100 questions | same reader, judge and k | **65%** on v0.40.0, the same as v0.28 (67% on v0.20.1, run-to-run noise of a few points; v0.9: 62%). Retrieval finds the evidence for 98.9% of questions, so the reader is the limit here: temporal-reasoning questions are answered 50% of the time |
 | Search latency, 30k / 60k memories | p50, query embedding included | **64 ms / 100 ms** on v0.39.3 (a second sandbox: 72 / 73; the M1 laptop on v0.9: 68 / 114; v0.8: 1,383 ms at 30k) |
 | Tool schema an AI pays for each session | tokens, exact (Anthropic tokenizer, minus a one-tool baseline) | **7,982** for the 41 listed tools in v0.39.3 (6,072 for 32 in v0.30); listing all 186 would have cost 40,382 in v0.30 |
 | Self-check on your own data (`commons bench self`) | known-item hit@1 / @5 | 93% / 100% on a 166-memory sample |
