@@ -11,6 +11,8 @@ All notable changes, newest first. The README describes the current release only
 - **The fix.** A check is ready when every step it gates is waiting for it, whichever of them `gate_of` names. When
   it finishes, every step it gates is released (or sent back), and the authors of all of them are kept from
   reviewing their own work.
+- **Measured on that hub.** Nine minutes after the upgrade the review had been claimed and approved, both steps were
+  released and the job was done.
 - **For agents:** nothing to change. A review that was stuck this way becomes claimable after the upgrade.
 
 ## v0.39.2: a busy hub no longer climbs to several GB of memory
@@ -25,6 +27,8 @@ All notable changes, newest first. The README describes the current release only
   replacement or a delete still reloads everything. This also takes 163 ms off the first search after each write.
 - **Two malloc arenas.** The Docker image and `deploy/commons.service` set `MALLOC_ARENA_MAX=2`. Set it yourself if
   you run `commons serve` another way on Linux.
+- **Measured on the hub after the upgrade.** 609 MB ten minutes after the restart and 617 MB at twenty, where
+  v0.39.1 went from 750 MB to 1.1 GB in the same time. A full day has not been measured yet.
 - **Tests.** `numpy` is in the `dev` extra, so the matrix search path runs in the suite (it was skipped without it).
 - **For agents:** nothing to change.
 
