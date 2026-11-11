@@ -50,6 +50,20 @@ question, LoCoMo -1.4 any@10), taking every time word out of the keyword query (
 embedder (LoCoMo any@10 78.5, +2.0, but no gain in LongMemEval's top 5 and three times the embedding cost), and
 snowflake-arctic-embed s and m (LoCoMo any@10 67).
 
+**End-to-end QA, run again on v0.40.0** (same protocol as v0.28: Haiku 4.5 reader and judge, k=20, the two turns
+around short hits, Message Batches; $3.27 for both).
+
+| | v0.28 | v0.40.0 |
+|---|---|---|
+| LoCoMo, 1,540 questions | 78.7% | **79.2%** (multi-hop 63.8, temporal 79.1, open-domain 39.6, single-hop 88.8) |
+| LongMemEval-S, the same 100 seeded questions | 65% | **65%** (7 questions newly right, 7 newly wrong) |
+
+Both are within run-to-run noise of the earlier runs, so the ranking changes did not cost answers, and making the
+hidden evidence findable did not add any on LongMemEval: with the evidence session in the top 5 for 98.9% of
+questions, what limits its QA score is the reader and what it is shown, not retrieval. Temporal-reasoning questions
+are answered 50% of the time (15 of 30) and single-session-assistant ones 45% (5 of 11); the harness keeps only the
+first 300 characters of each assistant reply, which is where those answers are.
+
 **Against published claims** (theirs are their own runs and protocols, see the caveats at the end of this page):
 MemPalace reports LongMemEval R@5 of 96.6% raw and 98.4% for its hybrid mode on held-out questions, and "99% or
 more" with a reranker. Commons v0.40.0 scores 98.9% with no reranker and no model call at write or read time, and

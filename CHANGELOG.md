@@ -23,6 +23,8 @@ All notable changes, newest first. The README describes the current release only
 - **How far to trust it.** The two ranking changes were chosen by reading LongMemEval's own misses, so 98.9 is
   partly fitted (they moved 3 questions); LoCoMo is the check. What was tried and not kept is listed in
   `benchmarks/README.md`.
+- **QA, run again on v0.40.0.** LoCoMo 79.2% (78.7% on v0.28); LongMemEval-S 65% (65%). Both within noise: the
+  ranking changes did not cost answers, and LongMemEval's QA score is limited by the reader, not by retrieval.
 - `benchmarks/shard-lme.sh` runs LongMemEval in parts on several machines (13 minutes on eight, 83 on one).
 - **For agents:** nothing to change. A search with an exact time ("what did we decide 3 days ago") now leans harder
   on that day.
