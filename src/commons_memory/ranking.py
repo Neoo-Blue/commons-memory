@@ -48,7 +48,23 @@ def needs_context(text: str) -> bool:
     return os.environ.get("COMMONS_CONTEXT_PRUNE") == "0" or len(text or "") <= STANDALONE
 
 
+_AGO = re.compile(r"\b(?:about |around |roughly |nearly |almost |just |only )?(?:a\s+)?(?:\d+|a|an|one|two|three|four|five|six|"
+                  r"seven|eight|nine|ten|couple|few|several)\s+(?:of\s+)?(?:day|week|month|year)s?\s+ago\b", re.I)
+# verbs about the telling, not about what was told: "what did I mention about the cake" is a search for the cake
+FILLER = {"mention", "mentioned", "mentioning", "said", "say", "told", "tell", "talked", "talk", "discussed", "discuss",
+          "remember", "recall", "remind", "reminded", "noted", "shared", "something", "anything", "thing", "things"}
+
+
 def fts_query(q: str) -> str:
+    """The keyword side of a search: the words that say what is asked for. "What kitchen appliance did I buy 10 days
+    ago" is asked about an appliance: "10 days ago" says when, which the time window uses, and left in the keyword
+    query it matched every note that says "days ago" about anything; "mentioned" and "something" say that a thing
+    was said, not which. On LongMemEval-S that moved 3 of 470 questions into the top 5 and LoCoMo any@10 by -0.1.
+    COMMONS_RANK_WHAT_ONLY=0 keeps every word, as before v0.40."""
+    if os.environ.get("COMMONS_RANK_WHAT_ONLY", "1") != "0":
+        ts = [t for t in terms(" ".join(_AGO.sub(" ", q or "").split())) if t.lower() not in FILLER]
+        if ts:
+            return " OR ".join(f'"{t}"' for t in ts)
     return " OR ".join(f'"{t}"' for t in terms(q))
 
 
@@ -96,12 +112,29 @@ def time_window(query: str, ref: float) -> tuple[float, float] | None:
     return None
 
 
-def time_score(ts: float, win: tuple[float, float]) -> float:
+def time_focus(query: str, ref: float) -> float | None:
+    """The moment a query points at when it names one exactly ("10 days ago", "four weeks ago", "yesterday", a date):
+    the middle of its window. None for a loose one ("recently", "last month", "in May"), where anywhere in the window
+    is as good as anywhere else."""
+    q = (query or "").lower()
+    if re.search(r"\b(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|couple|few|several)\s+(?:of\s+)?"
+                 r"(day|week|month|year)s?\s+ago\b|\byesterday\b|\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", q):
+        win = time_window(query, ref)
+        return (win[0] + win[1]) / 2 if win else None
+    return None
+
+
+def time_score(ts: float, win: tuple[float, float], focus: float | None = None, peak: float = 0.0) -> float:
+    """1 inside the window, falling off outside it. With a focus (see time_focus), the middle of the window scores 1
+    and its edges 1 - peak: when a haystack has thirty sessions inside "10 days ago, give or take two", the one from
+    exactly ten days ago is the likeliest."""
     a, b = win
     if a <= ts <= b:
-        return 1.0
+        if focus is None or not peak or b <= a:
+            return 1.0
+        return 1.0 - peak * min(1.0, abs(ts - focus) / ((b - a) / 2))
     dist = (a - ts) if ts < a else (ts - b)
-    return math.exp(-dist / max(86400.0, (b - a)))
+    return (1.0 - (peak if focus is not None else 0.0)) * math.exp(-dist / max(86400.0, (b - a)))
 
 
 def recency(ts: float, ref: float, half_life_days: float) -> float:

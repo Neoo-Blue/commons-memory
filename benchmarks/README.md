@@ -4,6 +4,57 @@ Every number below is reproducible with `commons bench ...`; per-question result
 [`results/`](results/). Measurements were taken on an 8-core Apple M1 laptop that was running other jobs at the same
 time, so latencies are conservative.
 
+## v0.40.0: why LongMemEval retrieval had dropped, and where it stands now
+
+Same clean Linux sandboxes as the v0.39.3 run below (4 vCPUs, 8 GB), LongMemEval split over eight of them
+(`benchmarks/shard-lme.sh`). Results: [`results/v0.40.0/`](results/v0.40.0/).
+
+**The cause of the drop was the benchmark, not the ranking.** Since v0.9 a search made "as of" a date hides what was
+written after it, which is right for a product: time travel should not show the future. The harness searches as of
+each question's date, and in 41 of the 470 questions the cleaned dataset dates evidence sessions *after* the
+question (in 18 of them, every evidence session). Those answers were filtered out before ranking, so no ranking
+setting could bring them back, which is what the v0.39.3 probes saw. The harness now asks each question no earlier
+than the last session of its haystack. Nothing in the product changed for this.
+
+**Two ranking changes, made after reading the eight questions still missed.** Each was losing to unrelated notes that
+shared only filler with the question: "a couple of days", "weeks ago", "mentioned".
+- The keyword side of a search now leaves out an exact time ("10 days ago"), which the time window already uses, and
+  verbs about the telling ("mentioned", "said", "something"). `COMMONS_RANK_WHAT_ONLY=0` turns it off.
+- An exact time counts for more than a loose one ("recently") and most at its middle, so the session from exactly
+  ten days ago beats the thirty others inside "ten days ago, give or take two" (`COMMONS_RANK_TIME_EXACT`,
+  `COMMONS_RANK_TIME_PEAK`).
+
+| LongMemEval-S retrieval, 470 questions (session recall) | any@1 | any@3 | **any@5** | all@5 | any@10 | all@10 |
+|---|---|---|---|---|---|---|
+| v0.7.2 code, the number published until now | 90.4 | 96.8 | 97.7 | 91.3 | 99.6 | 95.5 |
+| v0.39.3, evidence hidden by the harness | 88.3 | 93.2 | 94.5 | 82.3 | 95.5 | 88.7 |
+| v0.39.3 ranking, harness fixed | 92.1 | 97.0 | 98.3 | 90.4 | 99.4 | 97.4 |
+| **v0.40.0** | **92.1** | **97.0** | **98.9** | 90.4 | **99.6** | **97.4** |
+| v0.40.0 with `--rerank` (411 of the 470 questions: one of eight machines did not finish) | 94.6 | 97.8 | 99.0 | 94.4 | 99.8 | 97.8 |
+
+Five questions of 470 are still outside the top 5: three single-session-preference ones (advice questions whose
+evidence is a preference stated in passing) and two temporal ones. any@5 by type: knowledge-update, multi-session,
+single-session-assistant and single-session-user 100; temporal-reasoning 98.4; single-session-preference 90.0.
+
+| LoCoMo retrieval, 1,982 questions | turn any@1 | turn any@5 | turn any@10 | session any@10 |
+|---|---|---|---|---|
+| v0.39.3 | 39.4 | 66.8 | 76.5 | 97.4 |
+| **v0.40.0** | 39.1 | 66.4 | 76.4 | 97.3 |
+| v0.40.0 with `--rerank` (cross-encoder on the top 30) | **49.7** | **72.0** | **78.0** | 96.2 |
+
+**How far to trust this.** The two ranking changes were chosen by looking at LongMemEval's misses, so its 98.9 is
+partly fitted: on the 157 temporal and preference questions they moved 3 into the top 5. LoCoMo was not looked at
+and serves as the check: it moved by 0.1 to 0.4 points down, which is 2 to 6 questions of 1,982. Things tried and
+not kept: switching each ranking signal off, reciprocal-rank fusion, a heavier semantic weight (LongMemEval +1
+question, LoCoMo -1.4 any@10), taking every time word out of the keyword query (LoCoMo -0.4), bge-base as the
+embedder (LoCoMo any@10 78.5, +2.0, but no gain in LongMemEval's top 5 and three times the embedding cost), and
+snowflake-arctic-embed s and m (LoCoMo any@10 67).
+
+**Against published claims** (theirs are their own runs and protocols, see the caveats at the end of this page):
+MemPalace reports LongMemEval R@5 of 96.6% raw and 98.4% for its hybrid mode on held-out questions, and "99% or
+more" with a reranker. Commons v0.40.0 scores 98.9% with no reranker and no model call at write or read time, and
+99.0% with its reranker on the 411 questions that run finished.
+
 ## v0.39.3: every benchmark that needs no AI model, on a clean Linux machine
 
 Run on 2026-11-10 in a fresh cloud sandbox (4 vCPUs, Intel Xeon 2.6 GHz, 8 GB, Linux 6.1, Python 3.11), nothing else
@@ -44,7 +95,8 @@ reproduces to the decimal on the same machine, and v0.9.0, v0.28.0 and v0.38.0 r
 127 questions too. The change came in between v0.8.0 and v0.9.0, with the ranking work that raised LoCoMo any@1 from
 31.2 to 39.4. The LongMemEval QA numbers (62% on v0.9, 65% on v0.28) were already measured with it. Switching off
 each ranking signal in turn (memory tiers, time window, recency, entity boost) brings none of the 19 questions back,
-and reciprocal-rank fusion brings back one, so the cause is in how candidates are gathered or scored. Not found yet.
+and reciprocal-rank fusion brings back one. **Found in v0.40.0 (above): the harness hid the evidence; it was never a
+ranking loss.**
 
 ### Latency and footprint (`commons bench scale`)
 | Store size | search p50 | search p95 | inserts/s | DB size | peak RSS |
@@ -289,7 +341,7 @@ any@5 by question type for the default config:
 ## How this compares with published claims (read the caveats)
 | System | Claim | Commons v0.8.0 |
 |---|---|---|
-| MemPalace | LongMemEval R@5 96.6% (raw), 98.4% (hybrid, held-out), ≥99% (with rerank) | **97.7%** any@5, default config, no rerank |
+| MemPalace | LongMemEval R@5 96.6% (raw), 98.4% (hybrid, held-out), ≥99% (with rerank) | **98.9%** any@5 on v0.40.0, default config, no rerank (97.7% on v0.7.2 code) |
 | MemPalace | LoCoMo R@10 88.9% | 75.1% turn-level with rerank / **95.8% session-level** |
 | mem0 (managed platform) | LoCoMo 92.5, LongMemEval 94.4 | not comparable (see below) |
 

@@ -32,6 +32,13 @@ def _lme_date(s: str) -> float:
     return dt.datetime(y, mo, d, h, mi, tzinfo=dt.timezone.utc).timestamp()
 
 
+def _lme_asked(q: dict) -> float:
+    """When the question is asked, for retrieval: its own date, but never before the last session of its haystack.
+    In 41 of the 470 questions the cleaned dataset dates evidence sessions after the question (in 18, all of them),
+    and a search "as of" the question date rightly hides what was written later: those answers could not be found."""
+    return max([_lme_date(q["question_date"])] + [_lme_date(d) for d in q.get("haystack_dates", [])])
+
+
 def _locomo_date(s: str) -> float:
     for fmt in ("%I:%M %p on %d %B, %Y", "%I:%M %p on %d %b, %Y"):
         try:
@@ -90,7 +97,7 @@ def _lme_one(args):
                 text = f"user: {t['content']}" + (f"\nassistant: {reply}" if reply else "")
                 group_of[s.add_item("note", text, created_at=ts)["id"]] = sid
         s.reindex()
-        top, _ = _rank_groups(s, q["question"], _lme_date(q["question_date"]), group_of, max(KS), rerank)
+        top, _ = _rank_groups(s, q["question"], _lme_asked(q), group_of, max(KS), rerank)
         gold = set(q["answer_session_ids"])
         res = {"id": q["question_id"], "type": q["question_type"], "n_gold": len(gold), "top": top[:10]}
         for k in KS:
@@ -475,7 +482,7 @@ def context_cost(suite: str, data_path: str, out: str, k: int = 20, limit: int |
                 s.reindex()
                 frame = tok(f"Today is {q['question_date']}.\nConversation:\n\n\nQuestion: {q['question']}\nAnswer:")
                 rows.append({"id": q["question_id"], "type": q["question_type"], "without": tok("\n".join(full)) + frame,
-                             "with": tok(_qa_prompt(s, q["question"], _lme_date(q["question_date"]), k, q["question_date"], neighbors))})
+                             "with": tok(_qa_prompt(s, q["question"], _lme_asked(q), k, q["question_date"], neighbors))})
                 log(f"{len(rows)} questions")
             finally:
                 _cleanup(d)
@@ -571,9 +578,9 @@ def qa(suite: str, data_path: str, out: str, llm_store, model: str, judge: str |
                 s.reindex()
                 gold = q["answer"] if not q["question_id"].endswith("_abs") else "The information is not available (abstain)."
                 if batch:
-                    return q, (_qa_prompt(s, q["question"], _lme_date(q["question_date"]), k, q["question_date"], neighbors),
+                    return q, (_qa_prompt(s, q["question"], _lme_asked(q), k, q["question_date"], neighbors),
                                gold, 0.0)
-                return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_date(q["question_date"]), k, q["question_date"],
+                return q, _qa_one(pl, model, judge, s, q["question"], gold, _lme_asked(q), k, q["question_date"],
                                   neighbors)
             finally:
                 _cleanup(d)
