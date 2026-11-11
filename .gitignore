@@ -18,3 +18,8 @@ bench-out/
 locomo10.json
 longmemeval_s_cleaned.json
 bench-ctx/
+lme-s*/
+lme-s*.stdout.json
+shard.json
+lme-*-s*/
+lme-*-s*.stdout.json

@@ -18,3 +18,30 @@ def test_context_cost_counts_the_qa_prompt_against_the_whole_history(tmp_path, m
     assert 50 < s["saved_pct"] < 100 and s["times_smaller"] > 2
     row = json.loads((tmp_path / "out" / "context-locomo.jsonl").read_text().splitlines()[0])
     assert row["with"] < row["without"] and json.loads((tmp_path / "out" / "context-locomo.summary.json").read_text())["n"] == 1
+
+
+def test_a_question_is_never_asked_before_the_last_session_of_its_haystack():
+    q = {"question_date": "2023/03/10 (Fri) 03:39", "haystack_dates": ["2023/02/01 (Wed) 10:00", "2023/03/15 (Wed) 09:00"]}
+    assert bench._lme_asked(q) == bench._lme_date("2023/03/15 (Wed) 09:00")  # the evidence is dated after the question
+    q["haystack_dates"] = ["2023/02/01 (Wed) 10:00"]
+    assert bench._lme_asked(q) == bench._lme_date("2023/03/10 (Fri) 03:39")
+
+
+def test_the_keyword_query_keeps_what_is_asked_and_drops_when_and_that_it_was_said(monkeypatch):
+    from commons_memory import ranking as R
+    assert R.fts_query("What kitchen appliance did I buy 10 days ago?") == '"kitchen" OR "appliance" OR "buy"'
+    assert R.fts_query("I mentioned cooking something for my friend a couple of days ago. What was it?") == '"cooking" OR "friend"'
+    assert '"week"' in R.fts_query("What did we decide last week about pricing?")  # only an exact "... ago" is taken out
+    assert R.fts_query("three days ago") == '"three" OR "days" OR "ago"'            # nothing else to search for: kept
+    monkeypatch.setenv("COMMONS_RANK_WHAT_ONLY", "0")
+    assert '"days"' in R.fts_query("What kitchen appliance did I buy 10 days ago?")
+
+
+def test_an_exact_time_scores_highest_at_its_middle():
+    from commons_memory import ranking as R
+    ref, day = 1_700_000_000.0, 86400.0
+    win, focus = R.time_window("what did I buy 10 days ago", ref), R.time_focus("what did I buy 10 days ago", ref)
+    assert focus == ref - 10 * day and R.time_focus("what did I do last month", ref) is None
+    at = lambda d: R.time_score(ref - d * day, win, focus, 0.5)
+    assert at(10) == 1.0 and 0.5 <= at(8.1) < at(9) < 1.0 and at(30) < at(12.5) < 0.5
+    assert R.time_score(ref - 9 * day, win) == 1.0  # no focus: flat inside the window, as before

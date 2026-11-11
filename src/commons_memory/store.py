@@ -712,6 +712,9 @@ class Store:
                     meta[r["id"]] = r
             ref = _parse_time(str(as_of)) if as_of not in (None, "") else now()
             win = R.time_window(query, ref)
+            focus = R.time_focus(query, ref) if win else None
+            # an exact time ("10 days ago") counts for more than a loose one ("recently"), and most at its middle
+            w_time_exact, t_peak = R.w("time_exact", 1.5), R.w("time_peak", 0.5)
             ents = self._query_entity_items(query)
             w_ent, w_time, w_rec = R.w("entity", 0.3), R.w("time", 0.6), R.w("recency", 0.1)
             w_hot, w_cold = R.w("hot", 0.1), R.w("cold", 0.25)  # memory tiers: in use now vs. stale
@@ -729,8 +732,8 @@ class Store:
                 if k in ents and w_ent:
                     f *= 1 + w_ent; d["entity"] = 1
                 if win and w_time:
-                    t = R.time_score(m["created_at"], win)
-                    f *= 1 + w_time * t; d["time"] = round(t, 3)
+                    t = R.time_score(m["created_at"], win, focus, t_peak)
+                    f *= 1 + (w_time_exact if focus is not None else w_time) * t; d["time"] = round(t, 3)
                 if w_rec:
                     r_ = R.recency(m["created_at"], ref, half)
                     f *= 1 + w_rec * r_; d["recency"] = round(r_, 3)

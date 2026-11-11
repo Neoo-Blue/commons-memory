@@ -153,3 +153,4 @@ COMMONS_STILL_NEEDED_AFTER	Seconds a job may wait before a claim on it first ask
 COMMONS_STILL_NEEDED_WAIT	Seconds a claim waits for the poster's answer to "still needed?" (a later no still cancels the job); default 90
 COMMONS_THREADS	Worker threads for sync tool calls and long-polls on the HTTP hub (the default executor is only cpus+4); default 64
 COMMONS_DASHBOARD_TOKENS	Per-user dashboard tokens are optional: `0` turns them off on this hub (they stay stored), leaving the private-address, Host and owner-password checks; default `1` (on once a dashboard user exists)
+COMMONS_RANK_WHAT_ONLY	Keyword side of a search keeps what is asked: an exact time ("10 days ago", used by the time window) and verbs about the telling ("mentioned", "something") are left out. `0` keeps every word, as before v0.40

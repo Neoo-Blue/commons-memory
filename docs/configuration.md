@@ -107,6 +107,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_QUOTA_TASK_PCT` | `5` | Assumed % of a window one subtask uses until Commons has learned that agent/task type (default 5) | quota.py |
 | `COMMONS_RANK_FUSION` | `score` | How keyword and vector candidates are fused: `score` (default; normalised-score sum, keeps how much better a match is) or `rrf` (reciprocal-rank fusion, the v0.8 behaviour; `COMMONS_RANK_RRF_K` sets k) | ranking.py |
 | `COMMONS_RANK_SIM_FLOOR` | `0.3` | Minimum cosine similarity for a vector hit (non-hash embedders) | store.py |
+| `COMMONS_RANK_WHAT_ONLY` | `1` | Keyword side of a search keeps what is asked: an exact time ("10 days ago", used by the time window) and verbs about the telling ("mentioned", "something") are left out. `0` keeps every word, as before v0.40 | ranking.py |
 | `COMMONS_RATE_PER_MIN` | `600` | Per-principal HTTP request limit per minute (excess gets 429) | auth.py |
 | `COMMONS_RECURRING_MIN_GAP` | `900` | A recurring task whose cron fires more often than this many seconds is held (with one notification) instead of starting a job each time; default 900 | orchestrator.py |
 | `COMMONS_REINDEX_BATCH` | `512` | Items re-embedded per background tick after an embedder change | background.py |

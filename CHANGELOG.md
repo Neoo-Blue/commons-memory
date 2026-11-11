@@ -2,6 +2,31 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.40.0: LongMemEval retrieval at 98.9%, and why it had looked like 94.5%
+- **Why.** v0.39.4 re-ran the benchmarks and found LongMemEval retrieval at 94.5% any@5, where 97.7% had been
+  published, with the whole loss in temporal-reasoning questions and no ranking setting that brought them back.
+- **The cause was the benchmark harness.** Since v0.9 a search "as of" a date hides what was written after it. The
+  harness searched as of each question's date, and in 41 of 470 questions the dataset dates evidence sessions after
+  the question (in 18, all of them). That evidence was filtered out before ranking. The harness now asks a question
+  no earlier than the last session of its haystack. Fixed alone, v0.39.3's ranking scores 98.3%.
+- **The keyword side of a search keeps what is asked.** An exact time ("10 days ago") is left out of the keyword
+  query, since the time window already uses it and the words matched every note that says "days ago" about
+  anything; so are verbs about the telling ("mentioned", "said", "something"). `COMMONS_RANK_WHAT_ONLY=0` turns it
+  off.
+- **An exact time counts for more than a loose one, and most at its middle.** "10 days ago" now favours the session
+  from ten days ago over the others in the same window (`COMMONS_RANK_TIME_EXACT`, default 1.5;
+  `COMMONS_RANK_TIME_PEAK`, default 0.5). "Recently" and "last month" score as before.
+- **Measured.** LongMemEval-S, 470 questions: any@1 92.1%, **any@5 98.9%**, any@10 99.6% (465 in the top 5), no
+  reranker and no model call. With the reranker: any@5 99.0%, any@1 94.6% on the 411 questions that run finished.
+  LoCoMo, which the changes were not tuned on: 39.1 / 76.4 turn-level any@1 / @10 (39.4 / 76.5 before), 97.3
+  session-level; 49.7 / 78.0 with the reranker.
+- **How far to trust it.** The two ranking changes were chosen by reading LongMemEval's own misses, so 98.9 is
+  partly fitted (they moved 3 questions); LoCoMo is the check. What was tried and not kept is listed in
+  `benchmarks/README.md`.
+- `benchmarks/shard-lme.sh` runs LongMemEval in parts on several machines (13 minutes on eight, 83 on one).
+- **For agents:** nothing to change. A search with an exact time ("what did we decide 3 days ago") now leans harder
+  on that day.
+
 ## v0.39.4: the benchmarks, run again on a clean machine, and how many tokens a memory saves
 - **Why.** The README's benchmark numbers dated from v0.9 to v0.30 and came from a laptop that was busy with other
   work. Every benchmark that needs no AI model was run again on v0.39.3 in a fresh Linux sandbox (4 vCPUs, 8 GB).

@@ -1,0 +1,88 @@
+{
+  "benchmark": "longmemeval",
+  "dataset": "longmemeval_s_cleaned.json",
+  "granularity": "turn",
+  "embedder": "fastembed",
+  "rerank": false,
+  "commons_version": "0.40.0",
+  "n": 470,
+  "run": "8 shards on 4-vCPU Linux sandboxes (benchmarks/shard-lme.sh)",
+  "metrics": {
+    "any@1": 0.9213,
+    "all@1": 0.3234,
+    "any@3": 0.9702,
+    "all@3": 0.8468,
+    "any@5": 0.9894,
+    "all@5": 0.9043,
+    "any@10": 0.9957,
+    "all@10": 0.9745
+  },
+  "by_type": {
+    "knowledge-update": {
+      "n": 72,
+      "any@1": 0.9861,
+      "all@1": 0.0,
+      "any@3": 1.0,
+      "all@3": 0.9722,
+      "any@5": 1.0,
+      "all@5": 0.9861,
+      "any@10": 1.0,
+      "all@10": 1.0
+    },
+    "multi-session": {
+      "n": 121,
+      "any@1": 0.9339,
+      "all@1": 0.0,
+      "any@3": 0.9835,
+      "all@3": 0.7025,
+      "any@5": 1.0,
+      "all@5": 0.8264,
+      "any@10": 1.0,
+      "all@10": 0.9752
+    },
+    "single-session-assistant": {
+      "n": 56,
+      "any@1": 1.0,
+      "all@1": 1.0,
+      "any@3": 1.0,
+      "all@3": 1.0,
+      "any@5": 1.0,
+      "all@5": 1.0,
+      "any@10": 1.0,
+      "all@10": 1.0
+    },
+    "single-session-preference": {
+      "n": 30,
+      "any@1": 0.6333,
+      "all@1": 0.6333,
+      "any@3": 0.8,
+      "all@3": 0.8,
+      "any@5": 0.9,
+      "all@5": 0.9,
+      "any@10": 0.9667,
+      "all@10": 0.9667
+    },
+    "single-session-user": {
+      "n": 64,
+      "any@1": 0.9688,
+      "all@1": 0.9688,
+      "any@3": 1.0,
+      "all@3": 1.0,
+      "any@5": 1.0,
+      "all@5": 1.0,
+      "any@10": 1.0,
+      "all@10": 1.0
+    },
+    "temporal-reasoning": {
+      "n": 127,
+      "any@1": 0.8819,
+      "all@1": 0.1181,
+      "any@3": 0.9528,
+      "all@3": 0.7795,
+      "any@5": 0.9843,
+      "all@5": 0.8425,
+      "any@10": 0.9921,
+      "all@10": 0.937
+    }
+  }
+}
