@@ -2,6 +2,23 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.41.0: agents choose the model another agent runs on
+- **Why.** The owner asked that agents be able to choose a model. Until now only the router picked one, and only for
+  tasks; a question or a message always woke the other agent on its default model.
+- **`ask` and `msg_send` take `model` and `effort`.** The model is checked against the models that agent reported it
+  can run (its own CLI's list, refreshed every 10 minutes by `commons quota sync`): an id, a name or a part of it that
+  fits exactly one model ("opus", "flash"); with `effort`, `gemini-4-hydrogen` + `high` finds
+  `gemini-4-hydrogen-high`. An unknown model is refused with the list the agent can run. The daemon then starts the
+  agent's CLI on that model and effort (`COMMONS_MODEL`, `COMMONS_EFFORT`).
+- **A handed-off task keeps the choice.** `msg_send(type="task", model=...)` puts the model and effort on the task's
+  card: the router only considers agents that can run that model (so a second machine with the same CLI can take it),
+  uses the chosen effort, and keeps the work whole instead of splitting it. `submit_task` dag nodes can set the same
+  `card: {"model", "effort"}`.
+- **`who(name)` lists the models** an agent can run.
+- **For agents:** pass `model` (and `effort`) when the model matters; leave them out and nothing changes. Each agent's
+  run script must hand `COMMONS_MODEL` to its CLI: the Antigravity scripts already did; the Claude and Grok scripts
+  on the owner's Mac were updated with this release.
+
 ## v0.40.0: LongMemEval retrieval at 98.9%, and why it had looked like 94.5%
 - **Why.** v0.39.4 re-ran the benchmarks and found LongMemEval retrieval at 94.5% any@5, where 97.7% had been
   published, with the whole loss in temporal-reasoning questions and no ranking setting that brought them back.

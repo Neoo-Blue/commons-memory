@@ -1246,7 +1246,7 @@ class Orchestrator:
                 pass
 
     def delegate(self, sender: str, recipient: str, body: str, title: str = "", project: str | None = None,
-                 reroute: bool = True, plan: bool = True) -> dict:
+                 reroute: bool = True, plan: bool = True, model: str = "", effort: str = "") -> dict:
         """A task one agent hands another becomes a tracked job (it shows as running, has a lease, and is reassigned if
         it stalls). It goes to the recipient when the recipient is live; otherwise to the best live agent, so it never
         waits on an agent that only runs when its user opens it. reroute=False: only the recipient, retries included.
@@ -1256,7 +1256,10 @@ class Orchestrator:
         from .messaging import LIVE_MODES, presence
         rec = self.s.get_agent(recipient)
         title = (title or body.split("\n", 1)[0])[:120]
-        if plan and reroute and P.looks_big(body):  # several parts or a long brief: plan it across the team, recipient first
+        want = model.split("/", 1)[-1] if model else ""
+        can_run = lambda aid: not want or any(  # noqa: E731
+            r["model_id"].split("/", 1)[-1] == want for r in self.s.q("SELECT model_id FROM agent_models WHERE agent_id=?", (aid,)))
+        if plan and reroute and not want and P.looks_big(body):  # a chosen model keeps the work whole, on that model  # several parts or a long brief: plan it across the team, recipient first
             dag, how = self._plan(body, rec["id"] if rec else None)
             if dag:
                 job = self.submit(body, pattern=how, project=project, agent_id=sender, title=title, dag=dag,
@@ -1272,11 +1275,13 @@ class Orchestrator:
         to = rec["id"] if rec and (live(rec["id"]) or not reroute) else None
         if not to:
             for _sc, a in self.profiles.rank("general", {sender, rec["id"] if rec else ""}):
-                if live(a["id"]):
+                if live(a["id"]) and can_run(a["id"]):
                     to = a["id"]
                     break
         to = to or (rec["id"] if rec else None)
         node = {"key": "only", "type": "general", "title": title, "body": body, "deps": []}
+        if want or effort:
+            node["card"] = {k: v for k, v in (("model", model), ("effort", effort)) if v}
         if to:  # chosen before submit: allocate() would otherwise route it and wake someone else first
             node["assign" if reroute else "agent"] = to
         job = self.submit(body, pattern="parallel", project=project, agent_id=sender, title=title, dag=[node])
