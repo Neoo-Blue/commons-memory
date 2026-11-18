@@ -42,24 +42,41 @@ def register_v7(mcp, store, who):
         return _js(_summon(store, me(agent, api_key), agents or None, reason, wait=min(max(wait, 0), 30),
                            project=project or None))
 
+    def _chosen(to: str, model: str, effort: str) -> tuple[str, str, dict | None]:
+        """A model and effort the sender picked for one agent: checked against what that agent can run."""
+        from .routing import LEVELS, resolve_model
+        if not (model or effort):
+            return "", "", None
+        if effort and effort not in LEVELS:
+            raise CommonsError(f"effort must be one of {', '.join(LEVELS)}")
+        if model and to in ("*", "any"):
+            raise CommonsError("pick a model for one agent by name, not for everyone")
+        mid = resolve_model(store, to, model, effort) if model else ""
+        return mid, effort, {k: v for k, v in (("model", mid), ("effort", effort)) if v}
+
     @mcp.tool()
     def msg_send(to: str, body: str, type: str = "message", subject: str = "", thread: int = 0, reply_to: int = 0,
-                 project: str = "", reroute: bool = True, agent: str = "", api_key: str = "") -> str:
-        """Message one agent (to=name) or all (to='*'). type: message|task|question|review|fyi. type=task becomes a tracked job (routed to a live agent if the recipient isn't, unless reroute=false; a big task is split across the team, favouring the recipient; result returned to you). The reply also shows what Commons already knows about it."""
+                 project: str = "", reroute: bool = True, model: str = "", effort: str = "", agent: str = "",
+                 api_key: str = "") -> str:
+        """Message one agent (to=name) or all (to='*'). model/effort: wake that agent on one of its models (who(name) lists them) at minimal|low|medium|high|max effort. type: message|task|question|review|fyi. type=task becomes a tracked job (routed to a live agent if the recipient isn't, unless reroute=false; a big task is split across the team, favouring the recipient; result returned to you). The reply also shows what Commons already knows about it."""
         from .messaging import recipient_status
         sender = me(agent, api_key)
+        model, effort, chosen = _chosen(to, model, effort)
         if type == "task" and to != "*" and store.get_agent(to):  # a hand-off is tracked work, not just mail
             from .orchestrator import Orchestrator
-            d = Orchestrator(store).delegate(sender, to, body, subject, project or None, reroute=reroute)
+            d = Orchestrator(store).delegate(sender, to, body, subject, project or None, reroute=reroute, model=model,
+                                             effort=effort)
             out = {"delegated": d}
             if not d["rerouted"] and not d.get("split"):
                 out |= msg.send(sender, to, body + f"\n\n(Tracked as job {d['job_id']}: claim_subtask "
                                 f"{d['subtask_id']}, then complete_subtask with the result.)", mtype=type,
                                 subject=subject, thread=thread or None, reply_to=reply_to or None,
-                                project=project or None)
+                                project=project or None, meta=chosen)
         else:
-            out = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None,
-                           reply_to=reply_to or None, project=project or None) | recipient_status(store, to, sender)
+            out = msg.send(sender, to, body, mtype=type, subject=subject, thread=thread or None, reply_to=reply_to or None,
+                           project=project or None, meta=chosen) | recipient_status(store, to, sender)
+        if chosen:
+            out["model"] = chosen
         if to != "*":  # handing work off? show what Commons already knows, so the sender can often just do it
             from .capture import Capture
             known = Capture(store).recall(f"{subject} {body}"[:2000], project or None, max_tokens=400)
@@ -80,12 +97,16 @@ def register_v7(mcp, store, who):
         return _js(msg.recv(aid, wait=min(wait, 25), limit=limit, ack=ack, types=types))
 
     @mcp.tool()
-    def ask(to: str, question: str, wait: float = 60, subject: str = "", project: str = "", agent: str = "",
-            api_key: str = "") -> str:
+    def ask(to: str, question: str, wait: float = 60, subject: str = "", project: str = "", model: str = "",
+            effort: str = "", agent: str = "", api_key: str = "") -> str:
         """Ask one agent and get its answer in this same call, like a chat: no inbox round trip. Waits up to `wait`
         seconds (<=120) while the agent can be woken; one that can't gets it in its mail and this returns at once. Reply
-        to a question with msg_send(to=<asker>, reply_to=<id>)."""
-        return _js(msg.ask(me(agent, api_key), to, question, wait=wait, subject=subject, project=project or None))
+        to a question with msg_send(to=<asker>, reply_to=<id>). model/effort: run it on one of that agent's models
+        (who(name) lists them; a unique part of the name is enough) at minimal|low|medium|high|max effort."""
+        sender = me(agent, api_key)
+        model, effort, chosen = _chosen(to, model, effort)
+        out = msg.ask(sender, to, question, wait=wait, subject=subject, project=project or None, meta=chosen)
+        return _js(out | ({"model": chosen} if chosen else {}))
 
     @mcp.tool(name="who")
     def who_is(name: str = "", agent: str = "", api_key: str = "") -> str:

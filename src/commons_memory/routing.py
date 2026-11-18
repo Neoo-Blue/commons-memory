@@ -54,6 +54,47 @@ CREATE TABLE IF NOT EXISTS routing_stats(task_type TEXT, difficulty TEXT, model 
 
 
 # ------------------------------------------------------------------ effort + provider/CLI mapping
+def agent_catalog(s: Store, agent_id: str) -> list[dict]:
+    """The models an agent reported it can run (its own CLI's list), as {id, model, name}; unavailable ones left out."""
+    out = []
+    for r in s.q("SELECT am.model_id, m.model, m.status, m.meta FROM agent_models am LEFT JOIN models m ON m.id=am.model_id "
+                 "WHERE am.agent_id=? ORDER BY am.model_id", (agent_id,)):
+        if r["status"] == "unavailable":
+            continue
+        meta = json.loads(r["meta"] or "{}") if r["meta"] else {}
+        model = r["model"] or r["model_id"].split("/", 1)[-1]
+        out.append({"id": r["model_id"], "model": model, "name": meta.get("name") or model})
+    return out
+
+
+def resolve_model(s: Store, agent: str, wanted: str, effort: str = "") -> str:
+    """The model one agent was asked to use, as its catalog id (<agent>/<model>). Matched by id, model, name, or a part
+    of them that fits exactly one model; `effort` also tries <wanted>-<effort> (gemini-4-hydrogen + high). An agent that
+    never reported a catalog gets the name as given. An unknown model is refused with the list it can run."""
+    a = s.get_agent(agent)
+    if not a:
+        raise CommonsError(f"unknown agent {agent}")
+    cat = agent_catalog(s, a["id"])
+    w = (wanted or "").strip()
+    if not cat:
+        return w
+    low = w.lower().split("/", 1)[-1] if w.lower().startswith(a["name"].lower() + "/") else w.lower()
+    tries = [f"{low}-{effort.lower()}", low] if effort else [low]
+    for t in tries:
+        exact = [c for c in cat if t in (c["id"].lower(), c["model"].lower(), c["name"].lower())]
+        if exact:
+            return exact[0]["id"]
+    for t in tries:
+        part = [c for c in cat if t in c["model"].lower() or t in c["name"].lower()]
+        if len(part) == 1:
+            return part[0]["id"]
+        if len(part) > 1:
+            raise CommonsError(f"{w!r} fits several of {a['name']}'s models: "
+                               + ", ".join(c["model"] for c in part[:12]) + ". Name one exactly.")
+    raise CommonsError(f"{a['name']} has no model {w!r}. It can run: " + ", ".join(c["model"] for c in cat)
+                       + ". who(name) lists them too.")
+
+
 def effort_spec(level: str, tools: str | None = None) -> dict:
     if level not in LEVELS:
         raise CommonsError(f"effort must be one of {', '.join(LEVELS)}")
@@ -295,7 +336,8 @@ class Router:
         if diff != "medium":
             why.append(f"difficulty {diff} ({how}) -> {level}")
         from .sdlc import card
-        crit = card(self.s, st["id"]).get("criticality") if st.get("id") else None
+        cd = card(self.s, st["id"]) if st.get("id") else {}
+        crit = cd.get("criticality")
         if crit in ("low", "high"):  # boilerplate to the cheap tier, merges and architecture to the top tier
             tier, level = CRITICALITY[(diff, crit)]
             p = dict(p, tier=tier)
@@ -303,6 +345,9 @@ class Router:
         level, note = self.learned_level(tt, diff, level)
         if note:
             why.append(note)
+        if cd.get("effort") in LEVELS:  # the sender chose it: it replaces the policy's level (retries still climb)
+            level = cd["effort"]
+            why.append(f"effort {level}, chosen by the sender")
         attempt = int(st.get("attempts") or 0)
         prev = self.s.q("SELECT model, level, outcome FROM routing_decisions WHERE subtask_id=? ORDER BY created_at DESC LIMIT 1",
                         (st["id"],))
@@ -375,6 +420,14 @@ class Router:
                     notes.append("failed this task before")
                 cands.append({"agent": a, "model": m, "util": util, "quality": round(q, 3), "price": round(price, 3),
                               "est_cost": est_cost, "presence": rnote, "notes": notes})
+        if cd.get("model"):  # the sender chose a model: only candidates that can run it (any agent that lists it)
+            want = str(cd["model"]).split("/", 1)[-1]
+            keep = [c for c in cands if c["model"] and c["model"].split("/", 1)[-1] == want]
+            if keep:
+                cands = keep
+                why.append(f"model {want}, chosen by the sender")
+            else:
+                why.append(f"model {want} was chosen by the sender, but no agent here can run it: routed as usual")
         cands.sort(key=lambda c: -c["util"])
         best = cands[0]
         why.append(f"mode {mode}: {self.s.label(best['agent']['id'])[1]} / {best['model'] or 'its default model'} "

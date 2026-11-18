@@ -57,6 +57,7 @@ def resolve(s: Store, name: str) -> dict | None:
 def card(s: Store, name: str) -> dict:
     from . import quota as Q
     from .messaging import presence
+    from .routing import agent_catalog
     a = resolve(s, name)
     if not a:
         raise CommonsError(f"no teammate called {name!r}; who() lists the team")
@@ -72,6 +73,7 @@ def card(s: Store, name: str) -> dict:
     return {
         "name": a["name"], "display": shown(a), "what": a.get("platform") or a.get("vendor") or "",
         "model": a.get("model") or "", "joined": iso(a["created_at"]) if a.get("created_at") else None,
+        "models": [c["model"] for c in agent_catalog(s, a["id"])],
         "key": _key(s, a),
         "presence": {"state": p.get("state"), "woken_by": p.get("wake_mode"), "last_seen": iso(a["last_seen"]) if a["last_seen"] else None},
         "headroom": {"can_take_work": ok, "waits_until": iso(until) if until else None, "blocking": blocking,
