@@ -417,3 +417,32 @@ def test_a_sync_drops_windows_that_no_longer_map_to_the_agent(store):
     names = {w["window"] for w in Q.windows(store, bot)}
     assert names == {"grok:product:grokchat", "weekly"}                # the dropped mapping is gone; its own report stays
     assert Q.can_take(store, bot)[0]
+
+
+def test_a_takeover_nobody_finished_in_a_day_is_closed_so_the_next_run_gets_one(store):
+    o = Orchestrator(store)
+    owner, *_ = _agents(store, o, "grok", "muse", "checker")
+    SC.register(store, owner, "periodic-proactive", "34 * * * *", "Check the feeds", tz="UTC")
+    SC.ran(store, owner, "periodic-proactive", "ok", "checked")
+    hour = 3600
+    slot = (time.time() // hour + 3) * hour + 34 * 60
+    Q.report(store, owner, [{"window": "weekly", "used_pct": 100, "resets_at": slot + 100 * hour}])
+    first = SC.watch(store, slot + 60)[0]["job_id"]
+    store.x("UPDATE jobs SET created_at=? WHERE id=?", (slot + 60, first))
+    assert SC.watch(store, slot + 23 * hour + 60) == []            # still inside the day: it covers these runs
+    again = SC.watch(store, slot + 25 * hour + 60)                 # a day on and still open: closed, a fresh one starts
+    assert len(again) == 1 and again[0]["job_id"] != first
+    assert store.q("SELECT status FROM jobs WHERE id=?", (first,))[0]["status"] == "cancelled"
+
+
+def test_the_ladder_tries_every_agent_before_it_tells_the_user(store):
+    from commons_memory.escalation import Escalator
+    o = Orchestrator(store)
+    store.ensure_agent("first")
+    store.ensure_agent("second")
+    jid = o.submit("find x", dag=[{"key": "a", "type": "research", "title": "Find X", "body": "find it"}])["job_id"]
+    sid = store.q("SELECT id FROM subtasks WHERE job_id=?", (jid,))[0]["id"]
+    got = [Escalator(store, after=0).run()[0] for _ in range(2)]    # the first one never claims it: the other gets it
+    assert [g["action"] for g in got] == ["reassigned", "reassigned"] and {g["to"] for g in got} == {"first", "second"}
+    assert Escalator(store, after=0).run()[0]["action"] == "notified"   # both had their turn: now the user hears
+    assert not Escalator(store, after=0).run() and sid

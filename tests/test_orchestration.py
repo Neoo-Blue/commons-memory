@@ -185,3 +185,18 @@ def test_cron():
     assert next_cron("*/15 * * * *", datetime(2026, 1, 1, 10, 7)) == datetime(2026, 1, 1, 10, 15)
     assert next_cron("0 9 * * 1", datetime(2026, 10, 11, 12, 0)) == datetime(2026, 10, 12, 9, 0)  # next Monday
     assert next_cron("@daily", datetime(2026, 1, 1, 10, 0)) == datetime(2026, 1, 2, 0, 0)
+
+
+def test_claim_stops_at_the_agents_capacity(store):
+    o = Orchestrator(store)
+    a = store.ensure_agent("solo")
+    o.profiles.set(a, expertise={"code": 0.9}, max_concurrent=1)
+    for i in range(2):
+        store.x("INSERT INTO jobs(id,title,body,pattern,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (f"job_c{i}", "t", "t", "manual", "running", time.time(), time.time()))
+        store.x("INSERT INTO subtasks(id,job_id,key,type,title,status,assigned_agent,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (f"sub_c{i}", f"job_c{i}", "k", "code", "t", "pending", a, time.time()))
+    first = o.claim(a)
+    assert first and o.claim(a) is None  # one at a time: the second waits
+    o.complete(first["subtask_id"], a, "done")
+    assert o.claim(a)

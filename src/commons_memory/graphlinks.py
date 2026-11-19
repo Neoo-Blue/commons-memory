@@ -235,35 +235,54 @@ def rebuild(s: Store) -> dict:
 
 
 # ------------------------------------------------------------------ scoped views
-def subgraph(s: Store, scope: str, ident: str, depth: int = 2, limit: int = 600) -> dict:
+def subgraph(s: Store, scope: str, ident: str, depth: int = 2, limit: int = 600,
+             exclude_usage: bool = False, since: str | None = None) -> dict:
     """Graph view centred on a project | job | workflow | node (any id) | schedule."""
+    from .store import _parse_time
+    since_ts = _parse_time(since) if since else None
     if scope == "project":
-        root = s.project_id(ident) if not ident.startswith("prj_") else ident
+        root = ident if ident.startswith("prj_") else s.find_project(ident)  # a read never creates a project
+        if not root:
+            return {"root": None, "scope": scope, "nodes": {}, "edges": []}
+        s.check_project(root)
     elif scope == "workflow":
         root = workflow_id(s, ident) if not ident.startswith("ent_") else ident
     else:
         root = ident
     if scope == "project":
         # everything inside the project + one hop out (agents, workflows, code links)
-        members = {r["src"] for r in s.q("SELECT src FROM relations WHERE dst=? AND type IN ('in_project','contains',"
-                                         "'billed_to','applies_to')", (root,))}
-        members |= {r["dst"] for r in s.q("SELECT dst FROM relations WHERE src=? AND type='contains'", (root,))}
+        extra_sql = (" AND src NOT LIKE 'usg_%' AND dst NOT LIKE 'usg_%'" if exclude_usage else "") + \
+                    (" AND created_at>=?" if since_ts is not None else "")
+        extra_args = [since_ts] if since_ts is not None else []
+        members = {r["src"] for r in s.q(
+            f"SELECT src FROM relations WHERE dst=? AND type IN ('in_project','contains','billed_to','applies_to'){extra_sql} "
+            "ORDER BY created_at DESC LIMIT ?", [root] + extra_args + [limit * 2])}
+        members |= {r["dst"] for r in s.q(
+            f"SELECT dst FROM relations WHERE src=? AND type='contains'{extra_sql} ORDER BY created_at DESC LIMIT ?",
+            [root] + extra_args + [limit * 2])}
         members.add(root)
         nodes = set(members)
         edges = []
-        for m in list(members)[: limit * 2]:
-            for r in s.q("SELECT src,dst,type FROM relations WHERE src=?", (m,)):
+        ml = list(members)[: limit * 2]
+        for i in range(0, len(ml), 400):
+            ch = ml[i:i + 400]
+            for r in s.q(f"SELECT src,dst,type FROM relations WHERE src IN ({','.join('?' * len(ch))}){extra_sql}",
+                         ch + extra_args):
                 if r["dst"] in members or depth > 1:
                     edges.append(dict(r))
                     nodes.add(r["dst"])
             if len(edges) > limit * 3:
                 break
     else:
-        nb = s.neighbors(root, depth=depth, limit=limit * 3)
+        nb = s.neighbors(root, depth=depth, limit=limit * 3, since=since_ts)
         nodes, edges = set(nb["nodes"]), nb["edges"]
-    nodes = list(nodes)[: limit]
-    keep = set(nodes)
+        if exclude_usage:
+            nodes = {n for n in nodes if not n.startswith("usg_")}
+            edges = [e for e in edges if not e["src"].startswith("usg_") and not e["dst"].startswith("usg_")]
+    ordered = ([root] if root in nodes else []) + sorted(nodes - {root})
+    keep = set(ordered[:limit])
     edges = [e for e in edges if e["src"] in keep and e["dst"] in keep]
     uniq = {(e["src"], e["dst"], e["type"]): e for e in edges}
-    return {"root": root, "scope": scope, "nodes": {n: dict(zip(("type", "name"), s.label(n))) for n in keep},
+    lbls = s.labels(keep)
+    return {"root": root, "scope": scope, "nodes": {n: {"type": lbls[n][0], "name": lbls[n][1]} for n in keep},
             "edges": list(uniq.values())}

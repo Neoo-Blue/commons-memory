@@ -125,6 +125,8 @@ class Librarian:
         if not r:
             raise CommonsError("unknown proposal")
         p = r[0]
+        if p["status"] != "proposed":
+            raise CommonsError(f"that proposal was already {p['status']}")
         out = {"proposal": proposal_id, "status": "rejected"}
         if approve:
             pay = json.loads(p["payload"])
@@ -310,7 +312,8 @@ class Librarian:
         def durable(tags):
             return not any(t in (tags or "") for t in ('"subtask"', '"conversation"', '"observation"'))
         self._dismiss_capture_conflicts()
-        new = [i for i in items if i["kind"] in kinds and durable(i.get("tags"))]
+        from .canon import pinned  # a Canon decision is corrected, never "resolved": such a conflict could not be closed
+        new = [i for i in items if i["kind"] in kinds and durable(i.get("tags")) and not pinned(i)]
         q = ("Do note A and note B contradict each other, so that both cannot be true at the same time about the "
              "same thing?")
         same = ("Are note A and note B about the same specific thing (the same system, setting, price, date, plan or "
@@ -453,8 +456,11 @@ class Librarian:
                 meta[k] = dict(r)
         ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0].count(".")))
         lines, out, used = [], [], 0
+        hid = self.s.hidden_ids([m["rid"] for m in meta.values() if m["rid"]]) | set(self.s.denied_projects())
         for path, sc in ranked:
             m = meta[path]
+            if m["rid"] in hid:
+                continue
             if any(path.startswith(o["path"] + ".") for o in out) or (m["rid"] and m["rid"] in {o["rid"] for o in out}):
                 continue  # one entry per area / per record
             summ = self.s.q("SELECT summary FROM node_summaries WHERE key=?", (m["key"],))
@@ -472,7 +478,8 @@ class Librarian:
 
     def suggested_queries(self, project: str | None = None, n: int = 8) -> list[str]:
         pid = self.s.project_id(project) if project else None
-        rows = self.s.q("SELECT tags FROM items WHERE project_id IS ? AND superseded_by IS NULL", (pid,))
+        rows = self.s.q("SELECT tags FROM items WHERE superseded_by IS NULL" + (" AND project_id=?" if pid else ""),
+                        (pid,) if pid else ())
         c = Counter(t for r in rows for t in json.loads(r["tags"] or "[]") if t not in ("subtask", "research", "source"))
         return [t for t, _ in c.most_common(n)]
 
@@ -511,6 +518,8 @@ class Librarian:
             it = self.s.q("SELECT * FROM items WHERE id=?", (a,))
             if op in ("PROJECT", "MERGE") and _pinned(self.s, a if op == "PROJECT" else b.split()[0]):
                 continue  # a Canon fact, or the decision that set one, is never filed in a project or merged away
+            if op != "SUMMARY" and self.s.hidden_ids([a] + ([b.split()[0]] if op == "MERGE" else []), "write"):
+                continue  # the agent that finished the step can't write that record
             if op == "TAG" and it:
                 new = [t.strip().lower() for t in b.split(",") if t.strip()][:6]
                 self._log(run_id, "tag", a, {"tags": json.loads(it[0]["tags"] or "[]")}, {"tags": new})
@@ -519,6 +528,8 @@ class Librarian:
                 done["tag"] += 1
             elif op == "PROJECT" and it and self.s.q("SELECT 1 FROM projects WHERE name=?", (b.strip(),)):
                 pid = self.s.project_id(b.strip())
+                if pid in self.s.denied_projects("write"):
+                    continue
                 self._log(run_id, "assign_project", a, {"project_id": it[0]["project_id"]}, {"project_id": pid})
                 self.s.x("UPDATE items SET project_id=? WHERE id=?", (pid, a))
                 self.s.relate(a, pid, "in_project", agent_id=actor)

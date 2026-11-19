@@ -412,14 +412,16 @@ def _main(argv: list[str] | None = None) -> int:
             os.environ["COMMONS_TLS_CERT"], os.environ["COMMONS_TLS_KEY"] = args.tls_cert, args.tls_key or ""
         os.environ.setdefault("COMMONS_MCP_HOST", args.host or "127.0.0.1")
         os.environ.setdefault("COMMONS_MCP_PORT", str(args.port))
+        store = None
         if args.dashboard:
             from .dashboard import serve_dashboard
             from .store import Store as _S
+            store = _S(args.db)
             dhost = args.dashboard_host or (args.host if args.transport == "http" and args.host else "127.0.0.1")
-            serve_dashboard(_S(args.db), host=dhost, port=args.dashboard_port, background=True,
+            serve_dashboard(store, host=dhost, port=args.dashboard_port, background=True,
                             tls_cert=args.tls_cert, tls_key=args.tls_key)
             print(f"dashboard: {'https' if args.tls_cert else 'http'}://{dhost}:{args.dashboard_port}/", file=sys.stderr)
-        run(args.transport, args.host, args.port, args.db, req)
+        run(args.transport, args.host, args.port, args.db, req, store=store)
         return 0
     if args.cmd == "install-skill":
         from .skills import PLATFORMS, install

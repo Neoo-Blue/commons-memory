@@ -188,3 +188,93 @@ def test_dashboard_v04_endpoints(store):
     m = api.mcp({})
     assert m["catalog"] and m["servers"] == []
     assert api.skills({})[0]["name"] == "commons" and "routing" in api.models_page({})
+
+
+def test_tree_team_flows_real_delegation_reviews_messages(store):
+    from commons_memory.dashboard import API
+    from commons_memory.messaging import Messaging
+    lead = store.ensure_agent("lead")
+    builder = store.ensure_agent("builder")
+    rev = store.ensure_agent("qa-agent")
+    store.ensure_agent("cli")
+    store.ensure_agent("librarian")
+    store.x("INSERT INTO jobs(id,title,body,pattern,status,submitted_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("job_f1", "Ship API", "Ship API", "manual", "done", lead, 1700000000.0, 1700000000.0))
+    store.x("INSERT INTO subtasks(id,job_id,key,type,title,status,assigned_agent,claimed_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("sub_b1", "job_f1", "build", "implement", "Build API", "done", builder, builder, 1700000060.0))
+    store.x("INSERT INTO subtasks(id,job_id,key,type,title,status,assigned_agent,claimed_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("sub_s1", "job_f1", "sub1", "implement", "Split task", "done", rev, rev, 1700000120.0))
+    store.x("INSERT INTO relations(src,dst,type,created_at) VALUES(?,?,?,?)",
+            ("sub_s1", "sub_b1", "split_from", 1700000120.0))
+    store.x("INSERT INTO subtasks(id,job_id,key,type,title,status,assigned_agent,claimed_by,gate_of,verdict,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("sub_r1", "job_f1", "rev", "review", "Review build", "done", rev, rev, "sub_b1", "approve", 1700000180.0))
+    Messaging(store).send("lead", "builder", "please start")
+    Messaging(store).send("builder", "lead", "done")
+
+    t = Tree(store)
+    top = t.children("flows")
+    names = [c["agent_name"] for c in top]
+    assert set(names) == {"lead", "builder", "qa-agent"}
+    assert "cli" not in names and "librarian" not in names
+
+    by_name = {c["agent_name"]: c for c in top}
+    lead_groups = {g["label"]: g for g in t.children(by_name["lead"]["key"])}
+    assert "Delegates work to" in lead_groups and "Messages and asks" in lead_groups
+    del_edges = t.children(lead_groups["Delegates work to"]["key"])
+    assert any(e["agent_name"] == "builder" and "1 task" in e["label"] for e in del_edges)
+
+    qa_groups = {g["label"]: g for g in t.children(by_name["qa-agent"]["key"])}
+    assert "Reviews work of" in qa_groups and "Receives work from" in qa_groups
+    rev_edges = t.children(qa_groups["Reviews work of"]["key"])
+    assert any(e["agent_name"] == "builder" and "1 ok, 0 rej" in e["label"] for e in rev_edges)
+
+    # Path resolution and dashboard endpoint both work on the flows root
+    key, path = t.resolve("flows/1.1.1")
+    assert key.startswith("fedge:") and path == "1.1.1"
+    res = API(store).tree_children({"ref": "flows"})
+    assert len(res["children"]) == 3 and res["children"][0]["path"] == "flows/1"
+
+
+def test_tree_children_batched_and_org_stage_id(store):
+    from commons_memory.dashboard import API, PAGE
+    pid = store.project_id("bigproj")
+    rows = [(f"mem_{i:012x}", pid, "memory", f"Item {i}", f"Body {i}", "[]", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            for i in range(400)]
+    store.db.executemany(
+        "INSERT INTO items(id,project_id,kind,title,content,tags,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", rows)
+    store.db.commit()
+    api = API(store)
+    calls = [0]
+    orig_q = store.q
+
+    def counted_q(*a, **kw):
+        calls[0] += 1
+        return orig_q(*a, **kw)
+
+    store.q = counted_q
+    try:
+        res = api.tree_children({"ref": f"mk:{pid}:memory"})
+    finally:
+        store.q = orig_q
+    assert len(res["children"]) == 300 and res["more"] == 100
+    assert calls[0] <= 5, f"expected batched queries, got {calls[0]}"
+    assert 'id="ocs"' in PAGE and 'id="ols"' not in PAGE
+
+
+def test_workspace_shows_biggest_projects_first_with_stable_paths(store):
+    from commons_memory.dashboard import API
+    small, big = store.project_id("small"), store.project_id("big")
+    store.db.executemany("INSERT INTO items(id,project_id,kind,title,content,tags,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                         [(f"mem_big{i:09x}", big, "memory", "t", "b", "[]", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z") for i in range(3)])
+    store.db.commit()
+    res = API(store).tree_children({"ref": "workspace", "limit": 1})
+    assert [c["label"] for c in res["children"]] == ["big"] and res["more"] >= 1
+    assert res["children"][0]["path"] == "2" and Tree(store).resolve("2")[0] == f"prj:{big}"  # the path is its creation place
+
+
+def test_research_refuses_to_read_inside_the_network(store):
+    from commons_memory.research import fetch
+    for url in ("http://127.0.0.1:8771/api/overview", "http://169.254.169.254/latest/meta-data/", "file:///etc/passwd"):
+        with pytest.raises(CommonsError):
+            fetch(url)

@@ -89,18 +89,27 @@ class Scheduler:
         for j in jobs:
             self.s.x("UPDATE jobs SET status='preempted', updated_at=? WHERE id=?", (now(), j))
             if requeue:
-                rq += len(self.s.q("SELECT id FROM subtasks WHERE job_id=? AND status='claimed'", (j,)))
+                sids = [r["id"] for r in self.s.q("SELECT id FROM subtasks WHERE job_id=? AND status='claimed'", (j,))]
+                rq += len(sids)
                 self.s.x("UPDATE subtasks SET status='pending', claimed_by=NULL, lease_expires=NULL, attempts=MAX(attempts-1,0) "
                          "WHERE job_id=? AND status='claimed'", (j,))
+                for sid in sids:
+                    self.s.x("DELETE FROM meta WHERE key LIKE ?", (f"woke:{sid}:%",))
             self.s.audit(None, "job.preempt", j, reason)
         return {"preempted": jobs, "requeued": rq}
 
     def resume(self, job_id: str | None = None) -> dict:
+        jids = [r["id"] for r in self.s.q(
+            "SELECT id FROM jobs WHERE status='preempted'" + (" AND id=?" if job_id else ""),
+            (job_id,) if job_id else ())]
         sql = "UPDATE jobs SET status='running', updated_at=? WHERE status='preempted'" + (" AND id=?" if job_id else "")
-        n = self.s.q("SELECT COUNT(*) n FROM jobs WHERE status='preempted'" + (" AND id=?" if job_id else ""),
-                     (job_id,) if job_id else ())[0]["n"]
         self.s.x(sql, (now(), job_id) if job_id else (now(),))
-        return {"resumed": n}
+        if jids:
+            from .orchestrator import Orchestrator
+            o = Orchestrator(self.s)
+            for jid in jids:
+                o.allocate(jid)
+        return {"resumed": len(jids)}
 
     # ---- claim ordering
     def inflight(self) -> dict[str | None, int]:

@@ -218,6 +218,23 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
         else:
             msg.ack(aid, ids)
 
+    if not args.once:
+        # One wake service per agent on a machine. Two (a hand-made unit beside the installed one) both received
+        # every message and ran the agent twice. The second waits here and takes over if the first one dies.
+        try:
+            import fcntl
+            d = os.path.join(os.environ.get("COMMONS_HOME") or os.path.expanduser("~/.commons"), "daemon")
+            os.makedirs(d, exist_ok=True)
+            lock = open(os.path.join(d, re.sub(r"[^\w.-]", "_", args.agent) + ".lock"), "w")  # noqa: SIM115 - held for life
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                log(f"another wake service already runs for {args.agent} here: standing by")
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                log(f"the other wake service for {args.agent} is gone: taking over")
+        except (ImportError, OSError) as e:  # Windows, or a read-only home: run as before
+            log(f"no single-instance lock: {e}")
+
     import concurrent.futures as cf
     pool = cf.ThreadPoolExecutor(max_workers=max(1, getattr(args, "parallel", 2)))
     busy: set = set()
@@ -292,8 +309,11 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                    + ", ".join(f"#{m['id']} with msg_send(to='{m['from']}', reply_to={m['id']}, body=...)" for m in asks)
                    + " as soon as you have it (your final output goes back to them if you don't)" if asks else
                    "; answer questions with msg_send(reply_to=<id>)") +
-                  "; finish with handoff() and report_usage(). Be concise.")
-        ok, out, answer = True, "", ""
+                  "; finish with handoff() and report_usage(). Be concise." +
+                  (f"\n\nYou are stopped after {int(args.timeout // 60)} minutes and whatever you have not sent by then "
+                   "is lost. On long work, send what you have found with msg_send (or complete_subtask) as you go, "
+                   "well before that limit." if args.agent_cmd else ""))
+        ok, out, answer, timed_out = True, "", "", False
         tgt = next((m["meta"] for m in msgs if (m.get("meta") or {}).get("model") or (m.get("meta") or {}).get("effort")), {})
         model = tgt.get("model") or ""
         env = os.environ | {"COMMONS_MODEL_FULL": model, "COMMONS_EFFORT": tgt.get("effort") or "",
@@ -303,16 +323,27 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
         if suffix:  # the model id carries its own effort (agy's claude-opus-5-5-medium): a second, different one is refused
             env["COMMONS_EFFORT"] = suffix.group(1)
         if args.agent_cmd:
-            log(f"waking {args.agent}: {len(msgs)} message(s) -> {args.agent_cmd}"
+            from .routing import LEVELS, cli_target, effort_spec
+            eff_spec = effort_spec(env["COMMONS_EFFORT"]) if env["COMMONS_EFFORT"] in LEVELS else None
+            cmd_line, extra_env = cli_target(args.agent_cmd, env["COMMONS_MODEL"], eff_spec)
+            run_env = env | extra_env
+            log(f"waking {args.agent}: {len(msgs)} message(s) -> {cmd_line}"
                 + (f" (model {env['COMMONS_MODEL']}, effort {env['COMMONS_EFFORT']})" if model or env["COMMONS_EFFORT"] else ""))
             for attempt, pause in enumerate((30, 120, 0)):  # provider blips (a 503) shouldn't park work for the lease
                 try:
-                    r = subprocess.run(shlex.split(args.agent_cmd), input=prompt, text=True, capture_output=True,
-                                       timeout=args.timeout, env=env)
+                    r = subprocess.run(shlex.split(cmd_line), input=prompt, text=True, capture_output=True,
+                                       timeout=args.timeout, env=run_env)
                     ok = r.returncode == 0
                     out, answer = (r.stdout or "") + (r.stderr or ""), (r.stdout or "").strip()
                     log(out[-2000:])
-                except (OSError, subprocess.TimeoutExpired) as e:
+                except subprocess.TimeoutExpired as e:
+                    # Keep what it had printed: a 28-minute review used to vanish here, three times in a row.
+                    part = b"".join(x if isinstance(x, bytes) else (x or "").encode() for x in (e.stdout, e.stderr))
+                    out = part.decode(errors="replace") + f"\n[stopped at the {int(args.timeout)} s time limit]"
+                    log(f"agent command timed out after {int(args.timeout)} s")
+                    ok, timed_out = False, True
+                    break  # the same work would only hit the same limit again
+                except OSError as e:
                     log(f"agent command failed: {e}")
                     ok = False
                 if ok or not pause or (out and QUOTA_ERR.search(out)):  # a usage limit won't clear in 30 s
@@ -333,13 +364,15 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
             settled = [m for m in msgs if (m.get("meta") or {}).get("subtask") in claimed]
             for m in msgs:
                 if m not in settled:
-                    if int(m.get("attempts") or 0) >= 1:  # delivered before (the count excludes this delivery): 2nd try
+                    if timed_out or int(m.get("attempts") or 0) >= 1:  # 2nd try (the count excludes this delivery)
                         settled.append(m)
                         if asker(m):
                             try:
                                 hub("msg_send", to=m["from"], reply_to=m["id"], subject=f"Re: {m.get('subject') or 'your message'}",
-                                    body=f"Automatic reply from {args.agent}'s wake service: {args.agent} failed twice on "
-                                         f"your message and won't retry it. Last output: {tail[-300:]}")
+                                    body=f"Automatic reply from {args.agent}'s wake service: {args.agent} "
+                                         + ("ran out of time on your message; ask for a smaller piece. "
+                                            if timed_out else "failed twice on your message and won't retry it. ")
+                                         + f"Last output: {out[-3000:].strip() if timed_out else tail[-300:]}")
                             except Exception as e:  # noqa: BLE001
                                 log(f"could not tell {m['from']}: {e}")
             gone_ids = [i for i in every if i not in {m["id"] for m in msgs}]
@@ -391,10 +424,12 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
                     try:
                         if remote:
                             McpClient(args.url.rstrip("/") + "/mcp", args.api_key)._call(
-                                "msg_send", {"to": frm, "body": note, "subject": f"Re: {m.get('subject') or 'your message'}"})
+                                "msg_send", {"to": frm, "body": note, "reply_to": m["id"],
+                                             "subject": f"Re: {m.get('subject') or 'your message'}"})
                         else:
                             from .messaging import Messaging
-                            Messaging(store).send(aid, frm, note, subject=f"Re: {m.get('subject') or 'your message'}")
+                            Messaging(store).send(aid, frm, note, subject=f"Re: {m.get('subject') or 'your message'}",
+                                                  reply_to=m["id"])
                     except Exception as e:  # noqa: BLE001 - the parking already happened
                         log(f"could not tell {frm}: {e}")
             except Exception as e:  # noqa: BLE001
@@ -416,10 +451,16 @@ def daemon(args, store=None, log=lambda m: print(m, file=sys.stderr, flush=True)
             time.sleep(2)
             continue
         if msgs:
+            groups: dict[tuple[str, str], list] = {}
+            for m in msgs:
+                mt = m.get("meta") or {}
+                groups.setdefault((mt.get("model") or "", mt.get("effort") or ""), []).append(m)
             if args.once:
-                run(msgs)
+                for grp in groups.values():
+                    run(grp)
                 return 0
-            busy.add(pool.submit(run, msgs))
+            for grp in groups.values():
+                busy.add(pool.submit(run, grp))
         if args.once:
             return 0
 

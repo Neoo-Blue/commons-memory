@@ -70,6 +70,7 @@ def register_v8(mcp, store, who):
                          agent: str = "", api_key: str = "") -> str:
         """Per-project auto-capture switches (hooks): enabled/tools/prompts/inject = on|off; empty = unchanged."""
         me(agent, api_key)
+        store.check_project(store.find_project(project), "write")
         kw = {k: (v == "on") if v else None for k, v in
               (("enabled", enabled), ("tools", tools), ("prompts", prompts), ("inject", inject))}
         return _js(cap.configure(project, **kw))
@@ -267,10 +268,13 @@ def register_v8(mcp, store, who):
         already run the request: `result` holds its response, so don't call again."""
         import time as _t
         from .approvals import details
-        me(agent, api_key)
+        aid = me(agent, api_key)
+        from .auth import PRINCIPAL
         end = _t.time() + min(max(float(wait or 0), 0), 120)
         while True:
             d = details(store, question_id)
+            if PRINCIPAL.get() is not None and d.get("agent_id") not in (None, aid):
+                raise CommonsError("that approval belongs to another agent's request")
             if (d["status"] not in ("open", "doing", "blocked") and not d.get("running")) or _t.time() >= end:
                 return _js({k: d.get(k) for k in ("id", "status", "answer", "result", "running", "approve_url")} |
                            {"waiting": d["status"] in ("open", "doing", "blocked")})
@@ -339,7 +343,7 @@ def register_v8(mcp, store, who):
         return _js(_wn(store, me(agent, api_key)))
 
     @mcp.tool()
-    def judge_answer(request_id: str, legit: float, destructive: float = 0.0, user_backed: float = 0.0, reason: str = "",
+    def judge_answer(request_id: str, legit: float, destructive: float | None = None, user_backed: float | None = None, reason: str = "",
                      agent: str = "", api_key: str = "") -> str:
         """Answer a credential-request judgment Commons sent you (you are the decision agent for it): the probability
         (0-1) that each answer is yes. Pass the questions you were asked; reason = one line."""
@@ -347,7 +351,7 @@ def register_v8(mcp, store, who):
         sc = {"legit": legit, "destructive": destructive, "user_backed": user_backed}
         r = store.q("SELECT questions FROM vault_judgments WHERE id=?", (request_id,))
         asked = json.loads(r[0]["questions"]) if r else {}
-        return _js(V.judge_answer(store, me(agent, api_key), request_id, {k: sc[k] for k in asked}, reason))
+        return _js(V.judge_answer(store, me(agent, api_key), request_id, {k: sc[k] for k in asked if sc[k] is not None}, reason))
 
     @mcp.tool()
     def vault_deposit(name: str, value: str, service: str, purpose: str = "", scope: str = "",
@@ -434,6 +438,8 @@ def register_v8(mcp, store, who):
         if rerank:
             from .rerank import rerank_ids
             ids = rerank_ids(store, query, ids, how="cross-encoder")[:limit]
+        hid = store.hidden_ids(ids)
+        ids = [i for i in ids if i not in hid]
         rows = {}
         for i in range(0, len(ids), 500):
             ch = ids[i:i + 500]
@@ -463,7 +469,8 @@ def register_v8(mcp, store, who):
                       f"ORDER BY created_at LIMIT ?", [a["created_at"]] + args + [after])
         me_ = store.q("SELECT id, kind, summary, created_at FROM items WHERE id=?", (anchor,))
         from .store import iso
-        rows = list(reversed(prev)) + me_ + nxt
+        hid = store.hidden_ids([r["id"] for r in prev + nxt])
+        rows = [r for r in list(reversed(prev)) + me_ + nxt if r["id"] not in hid]
         return "\n".join(f"{'>' if r['id'] == anchor else ' '} {r['id']} {iso(r['created_at'])[:16]} [{r['kind']}] "
                          f"{(r['summary'] or '')[:140]}" for r in rows)
 

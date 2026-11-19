@@ -65,6 +65,11 @@ def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
     """bearer | basic:USER | header:NAME | header:NAME:PREFIX | query:PARAM"""
     kind, _, rest = (spec or "bearer").partition(":")
     name, _, prefix = rest.partition(":")
+    if kind not in ("bearer", "query", "basic", "header") or (kind != "bearer" and not name) or \
+            any(c in (spec or "") + "".join(extra_headers or []) for c in "\r\n") or \
+            any(":" not in h for h in extra_headers or []):
+        raise CommonsError("auth is bearer | basic:USER | header:NAME | header:NAME:PREFIX | query:PARAM; "
+                           "extra headers are 'Name: value', one line each")
     auth = {"bearer": True} if kind == "bearer" else {"query": name} if kind == "query" else \
         {"basic": name} if kind == "basic" else {"header": name, **({"prefix": prefix} if prefix else {})}
     if extra_headers:
@@ -376,7 +381,7 @@ def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
     if d["verdict"] == "deny":
         return {"verdict": "denied", "reason": d["reason"]}
     if d["verdict"] == "ask_user":
-        return {"verdict": "waiting_for_user", "question_id": qid, "reason": d["reason"]}
+        return _waiting(s, did, qid, d["reason"])
     if g:
         s.x("UPDATE vault_grants SET uses=uses+1 WHERE id=?", (g["id"],))
     return {"verdict": "allowed", "credential": name, "username": cred["username"], "password": _value(s, name),
@@ -402,14 +407,18 @@ def listing(s: Store) -> list[dict]:
 
 # ------------------------------------------------------------------------------------------------ decision agent
 def _context(s: Store, agent_id: str) -> str:
-    asks = [r["text"][:200] for r in s.q("SELECT text FROM board WHERE kind IN ('ask','question') "
-                                         "ORDER BY updated_at DESC LIMIT 12")]
+    rows = s.q("SELECT text, agent_id FROM board WHERE kind IN ('ask','question') ORDER BY updated_at DESC LIMIT 12")
+    owner_asks = [r["text"][:200] for r in rows if not r["agent_id"]]
+    # an agent can post an "ask" itself, so those are shown to the judge as its own report, never as the owner's word
+    reported = [r["text"][:200] for r in rows if r["agent_id"]]
     work = [r["what"][:160] for r in s.q("SELECT what FROM work_claims WHERE agent_id=? AND status='active' "
                                          "ORDER BY started_at DESC LIMIT 5", (agent_id,))]
     said = [r["content"][:200] for r in s.q("SELECT content FROM items WHERE agent_id=? AND tags LIKE ? AND created_at>? "
                                             "ORDER BY created_at DESC LIMIT 6", (agent_id, '%"user"%', now() - 7200))]
-    asks = said + asks  # what the user said to this agent in the last two hours (captured verbatim), then the board
-    return ("User's recent requests:\n" + "\n".join(f"- {a}" for a in asks or ["(none recorded)"])
+    return ("Owner-verified requests (entered directly on the board by the owner):\n"
+            + "\n".join(f"- {a}" for a in owner_asks or ["(none recorded)"])
+            + "\nWhat the owner asked for, as agents' sessions recorded it:\n"
+            + "\n".join(f"- {a}" for a in said + reported or ["(none recorded)"])
             + "\nThis agent's current work:\n" + "\n".join(f"- {w}" for w in work or ["(none declared)"]))
 
 
@@ -572,11 +581,28 @@ def judge_answer(s: Store, agent_id: str, request_id: str, scores: dict, reason:
     return {"request_id": request_id, "recorded": clean}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):  # never forward vault credentials across redirects
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _in_scope(cred: dict, url: str) -> bool:
-    p = urllib.parse.urlparse(url)
-    if p.scheme not in ("http", "https") or "@" in p.netloc or ".." in p.path:
+    if "\\" in (url or ""):
         return False
-    return any(url.startswith(b) or url.rstrip("/") + "/" == b for b in json.loads(cred["base_urls"]))
+    p = urllib.parse.urlparse(url)
+    decoded = urllib.parse.unquote(urllib.parse.unquote(p.path or "/"))
+    if p.scheme not in ("http", "https") or "@" in p.netloc or ".." in decoded.split("/"):
+        return False
+    for b in json.loads(cred["base_urls"]):
+        bp = urllib.parse.urlparse(b)
+        bpath = (bp.path or "/").rstrip("/")  # /v1 covers /v1 and /v1/..., never /v1-admin
+        if p.scheme == bp.scheme and p.netloc.lower() == bp.netloc.lower() and (
+                decoded.rstrip("/") == bpath or decoded.startswith(bpath + "/")):
+            return True
+    return False
 
 
 def _grant(s: Store, agent_id: str, cred: str, method: str, url: str) -> dict | None:
@@ -599,29 +625,41 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
         raise CommonsError(f"{cred['name']} has line breaks, so it can't be sent as a key; nothing was sent. A "
                            "service-account JSON file needs a signed token exchange, done by the service that owns it")
     headers = {"Accept": "application/json", "User-Agent": "commons-vault"} | (auth.get("extra_headers") or {})
+    needles = [value]
     if auth.get("query"):
         url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode({auth["query"]: value})
+        needles += [urllib.parse.quote(value, safe=""), urllib.parse.quote_plus(value)]
     elif auth.get("bearer"):
         headers["Authorization"] = "Bearer " + value
     elif auth.get("basic"):
         import base64
-        headers["Authorization"] = "Basic " + base64.b64encode(f"{auth['basic']}:{value}".encode()).decode()
+        tok = base64.b64encode(f"{auth['basic']}:{value}".encode()).decode()
+        headers["Authorization"] = "Basic " + tok
+        needles.append(tok)
     else:
         headers[auth["header"]] = auth.get("prefix", "") + value
     if content_type:
         headers["Content-Type"] = content_type
+
+    def _scrub(text: str) -> str:
+        for n in needles:
+            if n:
+                text = text.replace(n, "[credential]")
+        return text
+
     req = urllib.request.Request(url, data=body.encode() if body else None, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             status, raw = r.status, r.read(400_000)
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read(20_000)
     except Exception as e:  # noqa: BLE001 - any failure, but its text must never carry the key
         from .redact import redact
-        return {"status": 0, "error": redact(str(getattr(e, "reason", e)).replace(value, "[credential]"))[0][:300]}
+        return {"status": 0, "error": redact(_scrub(str(getattr(e, "reason", e))))[0][:300]}
     from .redact import redact
-    text = raw.decode("utf-8", "replace").replace(value, "[credential]")
-    return {"status": status, "body": redact(text)[0][:60_000], "truncated": len(raw) >= 400_000}
+    text = _scrub(raw.decode("utf-8", "replace"))
+    clean = redact(text)[0]
+    return {"status": status, "body": clean[:60_000], "truncated": len(raw) >= 400_000 or len(clean) > 60_000}
 
 
 _HOST = contextvars.ContextVar("commons_request_host", default="")  # the hub address the agent used: links reuse it

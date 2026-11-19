@@ -131,8 +131,10 @@ class ContextStore:
         a section with text None is removed)."""
         if not gist or not gist.strip():
             raise CommonsError("gist (L0) is required")
-        if parent == "auto":
-            r = self.s.q("SELECT id FROM context_packs WHERE name=? ORDER BY created_at DESC LIMIT 1", (name,))
+        self.s.check_project(self.s.find_project(project), "write")
+        if parent == "auto":  # the newest pack of this name in the same project, never another project's
+            r = self.s.q("SELECT id FROM context_packs WHERE name=? AND project_id IS ? ORDER BY created_at DESC LIMIT 1",
+                         (name, self.s.find_project(project)))
             parent = r[0]["id"] if r else None
         par = self._pack(parent) if parent else None
         if isinstance(sections, dict):
@@ -193,6 +195,7 @@ class ContextStore:
             r = self.s.q("SELECT * FROM context_packs WHERE name=? ORDER BY created_at DESC LIMIT 1", (pid,))
         if not r:
             raise CommonsError(f"unknown context pack {pid}")
+        self.s.check_project(r[0]["project_id"])
         return dict(r[0])
 
     @staticmethod
@@ -202,7 +205,7 @@ class ContextStore:
 
     # ------------------------------------------------------------------ load / fit
     def load(self, pack: str, layer: str = "L1", max_tokens: int = 4000, model: str | None = None,
-             sections: list[str] | None = None, agent_id: str | None = None) -> dict:
+             sections: list[str] | None = None, agent_id: str | None = None, record: bool = True) -> dict:
         if layer not in LAYERS:
             raise CommonsError("layer must be L0, L1, L2 or L3")
         p = self._pack(pack)
@@ -239,9 +242,10 @@ class ContextStore:
                 body += txt
                 used += count_tokens(txt, model, self.s)
         if used > budget and layer != "L0":  # even the brief doesn't fit -> fall back to L0
-            return self.load(pack, "L0", max_tokens, model, agent_id=agent_id) | {"fallback": "L0"}
-        self.s.x("INSERT INTO context_loads(pack_id,agent_id,layer,model,tokens,full_tokens,ts) VALUES(?,?,?,?,?,?,?)",
-                 (p["id"], agent_id, layer, model, used, st["full_tokens"], now()))
+            return self.load(pack, "L0", max_tokens, model, agent_id=agent_id, record=record) | {"fallback": "L0"}
+        if record:  # a dashboard preview is not a load: it would inflate the savings figure on every refresh
+            self.s.x("INSERT INTO context_loads(pack_id,agent_id,layer,model,tokens,full_tokens,ts) VALUES(?,?,?,?,?,?,?)",
+                     (p["id"], agent_id, layer, model, used, st["full_tokens"], now()))
         return {"pack_id": p["id"], "name": p["name"], "layer": layer, "tokens": used, "budget": budget,
                 "full_tokens": st["full_tokens"], "prefix": prefix, "prefix_hash": p["prefix_hash"] if prefix else None,
                 "text": prefix + body, "included": included, "omitted": omitted,

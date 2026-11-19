@@ -101,6 +101,7 @@ function qCard(x, inDrawer = false) {
         + `<button type="button" class="hm-ghost" data-hm="ans-toggle" data-id="${E(x.id)}" aria-expanded="${!!st.open}">Answer differently</button>`
         + free
       : free;
+    if (!inDrawer) acts += `<button type="button" class="hm-ghost" data-hm="board" data-id="${E(x.id)}">Details</button>`;
   }
   return `<article class="hm-q${m ? " is-approval" : ""}" data-qid="${E(x.id)}">
 <div class="hm-q-head">${m ? `<span class="hm-av hm-av-sys" aria-hidden="true">${ic(m[1] === "vault" ? "key" : m[1] === "mcp" ? "plug" : "layers")}</span>` : av(who)}
@@ -213,7 +214,7 @@ V["Overview"] = async function () {
     S.agents.filter(a => !SYS.includes(a.name) && !S.team.some(t => t.agent === a.name)).forEach(a => teamRows.push([a.name, a, null]));
     const live = teamRows.filter(([, a, t]) => presenceOf(a, t).live).length;
     const subs = runJobs.flatMap(j => arr(j.subtasks)), inProg = subs.filter(s => s.status === "claimed").length, queued = subs.filter(s => s.status === "pending").length;
-    const asks = arr(bd && bd.items).filter(x => x.kind === "ask"), openAsks = asks.filter(x => OPEN.includes(x.status)).length, rep = asks.reduce((a, x) => a + (x.repeats || 0), 0);
+    const asks = arr(bd && bd.items).filter(x => x.kind === "ask"), openAsks = asks.filter(x => OPEN.includes(x.status)).length, rep = asks.filter(x => x.repeats > 0).length;
     const tokens = arr(us && us.tokens), tokToday = tokens.length ? tokens[tokens.length - 1] : 0;
     const spark = cost.length ? `<span class="hm-kpi-spark" title="Daily spend, last ${days} days">${K.spark(cost, { w: 132, h: 36 })}</span>` : "";
     const minis = [["Memories", o.items, "Memory"], ["Graph entities", o.entities, "Graph"], ["Relations", o.relations, "Graph"], ["Conflicts", o.conflicts, "Memory", "conflicts"],
@@ -299,7 +300,7 @@ async function agentBody(name) {
 function agentDrawer(name) {
   const a = S.agents.find(x => x.name === name);
   openDrawer({ id: "agent:" + name, title: name, subtitle: (a && [a.platform, a.model].filter(Boolean).join(" · ")) || (SYS.includes(name) ? "System agent" : "Agent"),
-    build: () => agentBody(name), actions: [{ label: "Open the Agents page", run: () => { K.drawer.close(); go("Agents"); } }] });
+    build: () => agentBody(name), actions: [{ label: "Open the Agents page", run: () => go("Agents") }] });
 }
 
 async function jobBody(id) {
@@ -339,7 +340,7 @@ ${canRetry || canMove ? `<div class="hm-step-acts">${canRetry ? `<button type="b
 function jobDrawer(id) {
   const cached = arr(S.lastJobs).find(j => j.job_id === id);
   openDrawer({ id: "job:" + id, title: (cached && cached.title) || "Job", subtitle: id, build: () => jobBody(id),
-    actions: [{ label: "Open Orchestration", run: () => { K.drawer.close(); go("Orchestration"); } }] });
+    actions: [{ label: "Open Orchestration", run: () => go("Orchestration") }] });
 }
 async function ownerPost(path, body, okMsg) {
   const r = await postRaw(path, body);
@@ -405,7 +406,9 @@ function composer() {
   return `<form class="hm-compose" data-hm-form="compose" aria-label="New ask"><textarea id="hm-c-text" rows="2" required placeholder="What was asked, in your exact words" aria-label="What was asked">${E(c.text)}</textarea>
 <div class="hm-compose-row"><label class="hm-fld"><span>Kind</span><select id="hm-c-kind">${KINDS.map(k => `<option${k === c.kind ? " selected" : ""}>${k}</option>`).join("")}</select></label>
 <label class="hm-fld"><span>Project</span><input id="hm-c-proj" list="hm-c-pl" value="${E(c.project || S.pj)}" placeholder="none" autocomplete="off"></label><datalist id="hm-c-pl">${projects.map(p => `<option>${E(p)}</option>`).join("")}</datalist>
-<label class="hm-fld"><span>Layer</span><input id="hm-c-path" value="${E(c.path)}" placeholder="e.g. ui/dashboard" autocomplete="off"></label><span class="hm-sp"></span>
+<label class="hm-fld"><span>Layer</span><input id="hm-c-path" value="${E(c.path)}" placeholder="e.g. ui/dashboard" autocomplete="off"></label>
+<label class="hm-fld" data-hm-tg${c.kind === "target" ? "" : " hidden"}><span>Metric</span><input id="hm-c-metric" placeholder="what is measured" autocomplete="off"></label>
+<label class="hm-fld" data-hm-tg${c.kind === "target" ? "" : " hidden"}><span>Goal</span><input id="hm-c-goal" placeholder="the number to reach" autocomplete="off"></label><span class="hm-sp"></span>
 <button type="button" class="hm-ghost" data-hm="compose-cancel">Cancel</button><button type="submit" class="pri">Add to the board</button></div></form>`;
 }
 function compose(on) {
@@ -420,7 +423,7 @@ function compose(on) {
 async function addItem() {
   const v = id => (($(id) || {}).value || "").trim(), text = v("#hm-c-text");
   if (!text) { K.toast("Write what was asked first", { kind: "err" }); return; }
-  const r = await postRaw("board/add", { kind: v("#hm-c-kind") || "ask", text, project: v("#hm-c-proj"), path: v("#hm-c-path") });
+  const r = await postRaw("board/add", { kind: v("#hm-c-kind") || "ask", text, project: v("#hm-c-proj"), path: v("#hm-c-path"), metric: v("#hm-c-metric"), goal: v("#hm-c-goal") });
   if (!r || r.error) { K.toast((r && r.error) || "Could not add it", { kind: "err" }); return; }
   K.toast(r.repeated ? `Already on the board: now asked ${(r.repeats || 0) + 1} times` : "Added to the board", { kind: "ok", action: { label: "Open", run: () => boardDrawer(r.id) } });
   S.cd = { kind: S.cd.kind, text: "", project: S.cd.project, path: S.cd.path }; S.compose = false;
@@ -430,7 +433,7 @@ function setStatus(id, status) {
   const x = arr(S.board && S.board.items).find(i => i.id === id);
   if (!x) return;
   const typed = (($("#hm-ev-" + id) || {}).value || "").trim();
-  const body = { id, status, evidence: "" };
+  const body = { id, status, evidence: typed };
   if (status === "done") body.evidence = typed || (x.evidence ? "" : "Marked done by the owner on the dashboard");
   if (status === "dropped") body.evidence = typed || "Dropped by the owner on the dashboard";
   const words = { doing: "Started", done: "Marked done", dropped: "Dropped", open: "Reopened" }[status];
@@ -459,7 +462,7 @@ function boardPage() {
   const d = S.board;
   if (S.pj && !d.projects.includes(S.pj)) S.pj = "";
   const by = Object.fromEntries(d.items.map(x => [x.id, x]));
-  const asks = d.items.filter(x => x.kind === "ask"), tg = d.items.filter(x => x.kind === "target"), rep = asks.reduce((a, x) => a + (x.repeats || 0), 0);
+  const asks = d.items.filter(x => x.kind === "ask"), tg = d.items.filter(x => x.kind === "target"), rep = asks.filter(x => x.repeats > 0).length;
   const qs = d.items.filter(x => x.kind === "question" && OPEN.includes(stOf(x)) && (!S.pj || x.project === S.pj))
     .map(x => Object.assign({}, x, { blocks: x.parent && by[x.parent] ? by[x.parent].text.slice(0, 120) : null }));
   const stat = (l, v, cls = "") => `<div class="hm-bstat"><span class="hm-bstat-v ${cls}">${v}</span><span class="hm-bstat-l">${l}</span></div>`;
@@ -569,7 +572,7 @@ document.addEventListener("input", e => {
 });
 document.addEventListener("change", e => {
   if (e.target.id === "hm-bpj") { S.pj = e.target.value; redraw(); }
-  if (e.target.id === "hm-c-kind") S.cd.kind = e.target.value;
+  if (e.target.id === "hm-c-kind") { S.cd.kind = e.target.value; document.querySelectorAll("[data-hm-tg]").forEach(l => { l.hidden = S.cd.kind !== "target"; }); }
 });
 document.addEventListener("submit", e => {
   if (e.target.dataset && e.target.dataset.hmForm === "compose") { e.preventDefault(); addItem(); }

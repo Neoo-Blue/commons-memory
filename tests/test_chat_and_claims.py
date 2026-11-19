@@ -293,3 +293,18 @@ def test_redacting_a_token_after_an_escape_keeps_json_valid():
     body = json.dumps({"message": "fix\nAbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd tail", "ahead_by": 0})
     out, found = redact(body)
     assert "high_entropy" in found and "AbCdEfGh" not in out and json.loads(out)["ahead_by"] == 0
+
+
+def test_a_timed_out_wake_sends_what_the_agent_had_found(store, tmp_path):
+    m = Messaging(store)
+    asker = store.ensure_agent("asker")
+    m.send(asker, "slow", "review everything", mtype="question")
+    cmd = _script(tmp_path, "agent.sh", "cat > /dev/null; echo 'finding one: the palette is unstyled'; exec sleep 20\n")
+    args = _args("slow", cmd)
+    args.timeout = 2
+    t0 = time.time()
+    assert daemon(args, store, log=lambda *_: None) == 0
+    assert time.time() - t0 < 15                      # one run, no 30 s and 120 s retries of the same long work
+    got = m.recv(asker)
+    assert got and "ran out of time" in got[0]["text"] and "finding one" in got[0]["text"]
+    assert not m.recv(store.ensure_agent("slow"))     # settled: the message is not delivered again

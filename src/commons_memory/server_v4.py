@@ -282,11 +282,13 @@ def register_v4(mcp, store, who):
         return _js(lib.proposals(status))
 
     @mcp.tool()
-    def librarian_approve(proposal_id: str, approve: bool = True) -> str:
+    def librarian_approve(proposal_id: str, approve: bool = True, agent: str = "", api_key: str = "") -> str:
         """Approve (apply) or reject a librarian proposal."""
+        admin(None, agent, api_key)  # merges and deletions: the owner or an admin agent decides, not whoever asks
         return _js(lib.decide(proposal_id, approve))
 
     @mcp.tool()
-    def librarian_undo(log_id: str) -> str:
+    def librarian_undo(log_id: str, agent: str = "", api_key: str = "") -> str:
         """Undo one librarian change (tags, project assignment, merge, summary)."""
+        admin(None, agent, api_key)
         return _js(lib.undo(log_id))

@@ -50,7 +50,7 @@ INBOX_TTL = float(os.environ.get("COMMONS_INBOX_TTL_HOURS", "48")) * 3600  # unr
 BACKOFF = [2, 8, 30, 120, 600, 1800]
 # events that target one agent and carry mailbox work (v0.9.3 instant wake adds assignment, lease, debate and mentions)
 FETCH_EVENTS = ("message", "task", "review", "handoff", "task_assigned", "lease_expired", "debate_turn", "board_mention",
-                "escalation")  # seconds between webhook attempts; then dead-letter
+                "escalation", "verify_failed")  # seconds between webhook attempts; then dead-letter
 
 SCHEMA_V7 = """
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, ext_id TEXT, sender TEXT, recipient TEXT,
@@ -440,10 +440,11 @@ class Messaging:
         the call returns at once, saying so; a later answer arrives in msg_recv as usual."""
         if to in ("*", "any"):
             raise CommonsError("ask one agent by name; msg_send(to='*') reaches everyone")
+        sid, rid = self._aid(sender), self._aid(to)
+        p = presence(self.s, rid)  # check before send(): waking a client='recv' poller drops HUB.pollers to 0
+        seq = HUB.seq
         sent = self.send(sender, to, question, mtype="question", subject=subject or question[:80], meta=meta,
                          project=project)
-        sid, rid = self._aid(sender), self._aid(to)
-        p = presence(self.s, rid)
         out = {"id": sent["id"], "thread": sent["thread"], "to": sent["to"], "wake_mode": p["wake_mode"]}
         if p["wake_mode"] not in LIVE_MODES:
             return out | {"answer": None, "status": "queued",
@@ -451,7 +452,6 @@ class Messaging:
                                   "when it next checks in. who() shows who is live."}
         t0 = time.time()
         deadline = t0 + min(max(float(wait or 0), 0), 120)
-        seq = HUB.seq
         while True:
             # its thread only: any other message the recipient sends (an fyi, a hand-off) stays in the asker's mail
             r = self.s.q("SELECT id, body FROM messages WHERE id>? AND sender=? AND thread_id=? ORDER BY id LIMIT 1",
@@ -895,11 +895,12 @@ def deliver(s: Store, chan: dict, payload: dict) -> None:
             code = 200  # debounce: a wake process was just started; it will see this message too
         else:
             s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (lock, str(now())))
-            log = open(os.path.expanduser(cfg.get("log", "~/.commons/wake-command.log")), "a")  # noqa: SIM115
-            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT, env=env,
-                                 cwd=os.path.expanduser(cfg.get("cwd", "~")), start_new_session=True, text=True)
+            with open(os.path.expanduser(cfg.get("log", "~/.commons/wake-command.log")), "a") as log:
+                p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT, env=env,
+                                     cwd=os.path.expanduser(cfg.get("cwd", "~")), start_new_session=True, text=True)
             p.stdin.write(stdin)
             p.stdin.close()
+            threading.Thread(target=p.wait, daemon=True).start()
             code = 200
     else:
         raise CommonsError(kind)

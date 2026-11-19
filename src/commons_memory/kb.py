@@ -62,7 +62,7 @@ def _clean(text: str) -> str:
     return re.sub(r"(?m)^\[[\w.-]+\] [\w_]+: ", "", text).strip()
 
 
-@functools.lru_cache(maxsize=16384)  # most items are unchanged between rebuilds: split each text once per process
+@functools.lru_cache(maxsize=2048)  # most items are unchanged between rebuilds; each entry keeps its whole text, so stay small
 def _sentences(text: str) -> tuple[str, ...]:
     text = re.sub(r"\s+", " ", _clean(text)).strip()
     return tuple(s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9`\[])", text) if len(s.strip()) > 12)

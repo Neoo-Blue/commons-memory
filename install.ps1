@@ -60,12 +60,7 @@ if ($Method -eq 'pip') {
 if (-not (Have 'commons')) { throw "installed, but 'commons' is not on PATH; add $env:USERPROFILE\.local\bin to PATH" }
 Say "installed $(commons --version)"
 if ($env:COMMONS_NO_INIT -ne '1') { commons init | Out-Null; Say 'database ready: ~\.commons\commons.db' }
-@'
-
-Next steps
-  1. Connect an AI:      commons connect claude --platform claude-code     (or cursor, codex, gemini, generic)
-  2. Try it:             commons remember "Commons is installed"; commons search "installed"
-  3. Dashboard:          commons dashboard            -> http://127.0.0.1:8766
-  4. Team / other boxes: commons serve --transport http --host <tailnet-ip> --port 8770
-  5. Paste PROMPT.md into any AI: https://github.com/Neoo-Blue/commons-memory/blob/main/PROMPT.md
-'@ | Write-Host
+if ($env:COMMONS_NO_UP -ne '1' -and $env:COMMONS_NO_INIT -ne '1') {
+  commons up
+  if ($LASTEXITCODE -ne 0) { Say "setup did not finish; run 'commons up' again, or 'commons doctor' to see what is wrong" }
+} else { Say "CLI only. Run 'commons up' to start the hub here and connect this machine's AIs." }

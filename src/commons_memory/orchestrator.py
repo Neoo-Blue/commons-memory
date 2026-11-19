@@ -294,6 +294,9 @@ class Orchestrator:
                     by_key[g]["deps"] = by_key[g]["deps"] + [d["key"]]
         chosen = {}
         for d in dag:
+            tt = str(d.get("type") or "general")
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", tt):
+                raise CommonsError(f"subtask {d['key']}: invalid type {tt!r}")
             for field in ("assign", "agent"):
                 if d.get(field):
                     a = self.s.get_agent(d[field])
@@ -705,12 +708,15 @@ class Orchestrator:
             kind = "review" if st["gate_of"] or st["type"] in ("review", "red_team") else "task"
             ev = "debate_turn" if st["type"] == "debate" else None
             from .routing import Router
+            from .sdlc import card
             tgt = Router(self.s).current(st["id"]) or {}  # the daemon starts the CLI on the routed model and effort
+            cd = card(self.s, st["id"])
+            mdl = tgt.get("model") or cd.get("model")
+            eff = (tgt.get("effort") or {}).get("level") or cd.get("effort")
             Messaging(self.s).send(None, st["assigned_agent"], f"{'debate turn' if ev else kind} ready: {st['title']} "
                                    f"(job {job_id}). Claim it with claim_subtask(subtask_id=\"{st['id']}\").", mtype=kind,
                                    subject=st["title"][:80], meta={"job": job_id, "subtask": st["id"],
-                                                                    "model": tgt.get("model"),
-                                                                    "effort": (tgt.get("effort") or {}).get("level"),
+                                                                    "model": mdl, "effort": eff,
                                                                     "by": "the job scheduler: work assigned to you"},
                                    event=ev)
 
@@ -814,17 +820,31 @@ class Orchestrator:
         if not self._still_needed(agent_id, st):  # may wait on the poster's answer: never while holding the store lock
             return None
         with self.s.lock:
+            if self.paused():
+                return None
             job = self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0]
+            if job["status"] != "running":
+                return None
+            if not subtask_id:
+                prof = json.loads((self.s.q("SELECT profile FROM agents WHERE id=?", (agent_id,)) or [{"profile": "{}"}])[0]["profile"] or "{}")
+                cap = int(prof.get("max_concurrent") or os.environ.get("COMMONS_AGENT_DEFAULT_CAPACITY", 4))
+                if self.profiles.load(agent_id) >= cap:
+                    return None
+            fresh = self.s.q("SELECT excluded_agents FROM subtasks WHERE id=?", (st["id"],))
+            if not fresh or agent_id in json.loads(fresh[0]["excluded_agents"] or "[]"):
+                return None
             if self._over_budget(job):
                 self.s.x("UPDATE jobs SET status='budget_exceeded', updated_at=? WHERE id=?", (now(), job["id"]))
                 self.s.x("UPDATE subtasks SET status='cancelled', updated_at=? WHERE job_id=? AND status IN "
                          "('pending','ready')", (now(), job["id"]))  # nothing left dangling as 'pending' forever
                 return None
+            t = now()
             cur = self.s.db.execute(
                 "UPDATE subtasks SET status='claimed', claimed_by=?, lease_expires=?, attempts=attempts+1, "
-                "started_at=?, updated_at=? WHERE id=? AND status='pending'",
-                (agent_id, now() + lease_seconds, now(), now(), st["id"]))
-            if cur.rowcount != 1:  # someone else won the race: no duplicate work
+                "started_at=?, updated_at=? WHERE id=? AND status='pending' "
+                "AND (assigned_agent=? OR assigned_agent IS NULL) AND COALESCE(not_before,0)<=?",
+                (agent_id, t + lease_seconds, t, t, st["id"], agent_id, t))
+            if cur.rowcount != 1:  # someone else won the race or reassigned it: no duplicate work
                 return None
         from . import quota as Q
         snap = Q.snapshot(self.s, agent_id)
@@ -904,6 +924,13 @@ class Orchestrator:
         checkpoint = st.get("checkpoint")
         from . import sdlc
         cd = sdlc.card(self.s, st["id"])
+        if not model and cd.get("model"):
+            model = cd["model"]
+        if not target and cd.get("effort"):
+            from .routing import LEVELS, effort_spec
+            if cd["effort"] in LEVELS:
+                target = {"model": model, "effort": effort_spec(cd["effort"]), "decision_id": None,
+                          "difficulty": None, "mode": None, "rationale": "chosen by the sender"}
         extra = {"card": cd} if cd else {}
         if job["pattern"] == "sdlc" and cd.get("stage") in ("verify", "review"):
             extra["traceability"] = sdlc.trace(self.s, job["id"])
@@ -988,8 +1015,10 @@ class Orchestrator:
 
     def heartbeat(self, subtask_id: str, agent_id: str, lease_seconds: int = DEFAULT_LEASE) -> dict:
         with self.s.lock:  # conditional: a late heartbeat must not extend a lease someone else now holds
-            ok = self.s.db.execute("UPDATE subtasks SET lease_expires=?, updated_at=? WHERE id=? AND claimed_by=? "
-                                   "AND status='claimed'", (now() + lease_seconds, now(), subtask_id, agent_id)).rowcount
+            exp = now() + lease_seconds  # never shorten: the wake daemon pre-claims with the CLI's whole time limit
+            ok = self.s.db.execute("UPDATE subtasks SET lease_expires=CASE WHEN COALESCE(lease_expires,0)>? THEN "
+                                   "lease_expires ELSE ? END, updated_at=? WHERE id=? AND claimed_by=? "
+                                   "AND status='claimed'", (exp, exp, now(), subtask_id, agent_id)).rowcount
         if ok != 1:
             raise CommonsError("not your active claim")
         return {"subtask_id": subtask_id, "lease_expires": iso(now() + lease_seconds)}
@@ -1077,43 +1106,48 @@ class Orchestrator:
         from .sdlc import card
         is_gate = st["gate_of"] is not None or st["type"] in ("vote",) or card(self.s, subtask_id).get("level") == "gate"
         v = (verdict or parse_verdict(result)) if is_gate and success else None
-        if success:
-            won = self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND "
-                                    "claimed_by=? AND status='claimed'", ("awaiting_gate" if gates else "done", result, v,
-                                                                          now(), subtask_id, agent_id)).rowcount
-        else:  # out of attempts: straight to failed (_fail below also fails the job), else back in the queue
-            pin = self._pin(subtask_id)  # pinned work is retried by the agent the submitter chose, never moved
-            won = self.s.db.execute("UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=?, result=?, "
-                                    "excluded_agents=?, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
-                                    ("failed" if st["attempts"] >= st["max_attempts"] else "pending", pin, result,
-                                     _j(json.loads(st["excluded_agents"] or "[]") + ([] if pin else [agent_id])),
-                                     now(), subtask_id, agent_id)).rowcount
-        if won != 1:
-            raise CommonsError("subtask claim expired or was reassigned before completion")
-        snap = self.s.q("SELECT value FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
-        if snap:
-            from . import quota as Q
-            Q.record_cost(self.s, agent_id, st["type"], json.loads(snap[0]["value"]))
-            self.s.x("DELETE FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
-        seconds = now() - (st["started_at"] or now())
-        tokens = tokens if tokens is not None else estimate_tokens(result)
-        job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
-        used = json.loads(job["used"] or "{}")
-        used["tokens"] = used.get("tokens", 0) + tokens
-        used["seconds"] = used.get("seconds", 0) + seconds
-        from .usage import Usage
-        u = Usage(self.s).report(agent_id, tokens_in=tokens_in or 0, tokens_out=tokens, model=model, cost=cost,
-                                 seconds=seconds, job_id=job["id"], subtask_id=subtask_id, note=st["type"])
-        used["cost"] = round(used.get("cost", 0) + u["cost"], 6)
-        used["tokens"] += tokens_in or 0
-        self.s.x("UPDATE jobs SET used=?, updated_at=? WHERE id=?", (_j(used), now(), job["id"]))
-        project = self.s.project_name(job["project_id"])
-        for lo in leftovers or []:
-            self.add_leftover(lo, task_type=st["type"], project=project, source_id=subtask_id,
-                              recurring_id=job["recurring_id"], agent_id=agent_id)
-        for p in preferences or []:
-            self.prefs.observe(p, project=project, source=f"agent:{self.s.label(agent_id)[1]}", confidence=0.6,
-                               evidence=f"from subtask {subtask_id}")
+        with self.s.tx():
+            if success:
+                won = self.s.db.execute("UPDATE subtasks SET status=?, result=?, verdict=?, updated_at=? WHERE id=? AND "
+                                        "claimed_by=? AND status='claimed'", ("awaiting_gate" if gates else "done", result, v,
+                                                                              now(), subtask_id, agent_id)).rowcount
+            else:  # out of attempts: straight to failed (_fail below also fails the job), else back in the queue
+                pin = self._pin(subtask_id)  # pinned work is retried by the agent the submitter chose, never moved
+                won = self.s.db.execute("UPDATE subtasks SET status=?, claimed_by=NULL, assigned_agent=?, result=?, "
+                                        "excluded_agents=?, updated_at=? WHERE id=? AND claimed_by=? AND status='claimed'",
+                                        ("failed" if st["attempts"] >= st["max_attempts"] else "pending", pin, result,
+                                         _j(json.loads(st["excluded_agents"] or "[]") + ([] if pin else [agent_id])),
+                                         now(), subtask_id, agent_id)).rowcount
+            if won != 1:
+                raise CommonsError("subtask claim expired or was reassigned before completion")
+            snap = self.s.q("SELECT value FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
+            if snap:
+                from . import quota as Q
+                Q.record_cost(self.s, agent_id, st["type"], json.loads(snap[0]["value"]))
+                self.s.x("DELETE FROM meta WHERE key=?", (f"qsnap:{subtask_id}",))
+            seconds = now() - (st["started_at"] or now())
+            tokens = tokens if tokens is not None else estimate_tokens(result)
+            job = dict(self.s.q("SELECT * FROM jobs WHERE id=?", (st["job_id"],))[0])
+            used = json.loads(job["used"] or "{}")
+            used["tokens"] = used.get("tokens", 0) + tokens
+            used["seconds"] = used.get("seconds", 0) + seconds
+            from .usage import Usage
+            u = Usage(self.s).report(agent_id, tokens_in=tokens_in or 0, tokens_out=tokens, model=model, cost=cost,
+                                     seconds=seconds, job_id=job["id"], subtask_id=subtask_id, note=st["type"])
+            used["cost"] = round(used.get("cost", 0) + u["cost"], 6)
+            used["tokens"] += tokens_in or 0
+            self.s.x("UPDATE jobs SET used=?, updated_at=? WHERE id=?", (_j(used), now(), job["id"]))
+            project = self.s.project_name(job["project_id"])
+            for lo in leftovers or []:
+                self.add_leftover(lo, task_type=st["type"], project=project, source_id=subtask_id,
+                                  recurring_id=job["recurring_id"], agent_id=agent_id)
+            for p in preferences or []:
+                self.prefs.observe(p, project=project, source=f"agent:{self.s.label(agent_id)[1]}", confidence=0.6,
+                                   evidence=f"from subtask {subtask_id}")
+            if success and (result or "").strip():
+                item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
+                                       agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
+                self.s.relate(subtask_id, item["id"], "produced")
         if not success:
             self.profiles.record_outcome(agent_id, st["type"], False, subtask_id=subtask_id, tokens=tokens, seconds=seconds)
             if st["attempts"] >= st["max_attempts"]:
@@ -1121,9 +1155,6 @@ class Orchestrator:
             else:
                 self.allocate(st["job_id"])
             return self.status(st["job_id"], brief=True)
-        item = self.s.add_item("memory", result, title=f"[{st['type']}] {st['title']}", project=project,
-                               agent_id=agent_id, tags=["subtask", st["type"]], related_ids=[subtask_id, job["id"]])
-        self.s.relate(subtask_id, item["id"], "produced")
         if self.s.q("SELECT 1 FROM meta WHERE key=?", (f"planfor:{subtask_id}",)):  # before _auto closes the job
             self._expand_plan(st, result)
         if st["type"] == "librarian":
@@ -1262,6 +1293,9 @@ class Orchestrator:
         if plan and reroute and not want and P.looks_big(body):  # a chosen model keeps the work whole, on that model  # several parts or a long brief: plan it across the team, recipient first
             dag, how = self._plan(body, rec["id"] if rec else None)
             if dag:
+                if effort:
+                    for d in dag:
+                        d["card"] = dict(d.get("card") or {}, effort=effort)
                 job = self.submit(body, pattern=how, project=project, agent_id=sender, title=title, dag=dag,
                                   prefer=rec["id"] if rec else None)
                 parts = [{"subtask_id": x["id"], "title": x["title"], "assigned_to": x.get("agent")}

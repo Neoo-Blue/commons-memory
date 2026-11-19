@@ -140,3 +140,80 @@ def test_source_badges_and_architecture_delta(tmp_path):
     assert d["summary"]["files_added"] == 1 and "c.py" in d["nodes"] and d["nodes"]["c.py"]["type"] == "added file"
     assert any(e["type"] == "added dependency" for e in d["edges"])
     assert "Architecture delta" in make(s, "delta", "app")
+
+
+def test_export_graph_batched_recent_filters_and_labels(tmp_path):
+    from commons_memory import board, drive
+    from commons_memory.graphlinks import subgraph
+    from commons_memory.messaging import Messaging
+    from commons_memory.store import Store
+
+    s = Store(str(tmp_path / "g.db"), embedder="hash")
+    pid = s.project_id("alpha")
+    ag = s.ensure_agent("claude")
+    m = Messaging(s).send("claude", "gemini", "deploy check", subject="release")
+    b = board.add(s, "ask", "Ship dashboard", project="alpha")
+    s.db.executescript(drive.SCHEMA)
+    s.x("INSERT INTO drive_files(id,project,path,size,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        ("fil_demo01", "alpha", "docs/spec.md", 42, time.time(), time.time()))
+    s.x("INSERT INTO usage(agent_id,model,tokens_in,tokens_out,cost,ts) VALUES(?,?,?,?,?,?)",
+        (ag, "claude-opus", 100, 50, 0.01, time.time()))
+    usg_id = f"usg_{s.q('SELECT id FROM usage LIMIT 1')[0]['id']}"
+
+    now_ts = time.time()
+    old_ts = now_ts - 86400 * 10
+    rows = [(f"mem_{i:012x}", pid, "memory", f"Note {i}", f"Body {i}", "[]", old_ts + i, old_ts + i)
+            for i in range(120)]
+    s.db.executemany(
+        "INSERT INTO items(id,project_id,kind,title,content,tags,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", rows)
+    rels = [(f"rel_{i:012x}", f"mem_{i:012x}", pid, "in_project", "{}", ag, old_ts + i) for i in range(120)]
+    rels.append(("rel_recent_msg", f"msg:{m['id']}", pid, "mentions", "{}", ag, now_ts))
+    rels.append(("rel_recent_brd", b["id"], pid, "in_project", "{}", ag, now_ts))
+    rels.append(("rel_recent_fil", "fil_demo01", pid, "in_project", "{}", ag, now_ts))
+    rels.append(("rel_recent_usg", usg_id, pid, "billed_to", "{}", ag, now_ts))
+    s.db.executemany("INSERT INTO relations(id,src,dst,type,meta,agent_id,created_at) VALUES(?,?,?,?,?,?,?)", rels)
+    s.db.commit()
+
+    # Label resolution covers messages, board, drive files, projects and usage
+    lbls = s.labels([f"msg:{m['id']}", b["id"], "fil_demo01", pid, usg_id])
+    assert lbls[f"msg:{m['id']}"][0] == "message" and "release" in lbls[f"msg:{m['id']}"][1]
+    assert lbls[b["id"]][0] == "board" and "Ship dashboard" in lbls[b["id"]][1]
+    assert lbls["fil_demo01"] == ("drive_file", "docs/spec.md")
+    assert lbls[pid] == ("project", "alpha")
+    assert lbls[usg_id][0] == "usage"
+
+    # export_graph returns newest first, filters usage + time window, and avoids N+1 queries
+    calls = [0]
+    orig_q = s.q
+
+    def counted_q(*a, **kw):
+        calls[0] += 1
+        return orig_q(*a, **kw)
+
+    s.q = counted_q
+    try:
+        g_recent = s.export_graph(limit=20, exclude_usage=True, since="24h")
+        g_trunc = s.export_graph(limit=50, exclude_usage=True)
+        sg = subgraph(s, "project", "alpha", depth=1, limit=40, exclude_usage=True)
+    finally:
+        s.q = orig_q
+
+    assert usg_id not in g_recent["nodes"]
+    assert f"msg:{m['id']}" in g_recent["nodes"] and "fil_demo01" in g_recent["nodes"]
+    assert "mem_000000000000" not in g_recent["nodes"]
+    assert g_trunc.get("truncated") is True and g_trunc["total_edges"] > 50
+    assert pid in sg["nodes"] and usg_id not in sg["nodes"]
+    assert calls[0] <= 65, f"expected batched O(1) queries across 3 calls, got {calls[0]}"
+
+
+def test_render_theme_back_overview_idle_loop_and_routing():
+    from commons_memory.dashboard import PAGE
+    g = make_two_cliques()
+    html_out = render(g, title="Themed", theme="light")
+    assert '<html lang="en" data-theme="light">' in html_out
+    assert 'id="btn-back-overview"' in html_out
+    assert "scheduleLoop" in html_out and "placedBoxes" in html_out
+    assert "touch-action: none" in html_out and "commons:theme" in html_out
+    urls = re.findall(r"https?://[^\s\"'<>]+", html_out)
+    assert urls == ["http://www.w3.org/2000/svg"]
+    assert "d.nodeType" in PAGE and "commons:theme" in PAGE

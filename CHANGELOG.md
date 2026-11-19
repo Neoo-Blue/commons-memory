@@ -2,6 +2,54 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.42.0: one line installs everything, agents make themselves wakeable, and a full review with a second model family
+- **Why.** The owner asked for three things: a one click install after which everything is automatic unless you want
+  to look at the dashboard; that an agent Commons can't wake fixes that itself instead of the owner carrying a
+  sentence to it; and a tab by tab, function by function review with antigravity-lxc (Gemini, highest effort) of both
+  flaws and features, the graph and the org chart included.
+- **`commons up`, run by the installer.** `install.sh` and `install.ps1` now end with `commons up`: the hub and the
+  dashboard become a login service (launchd, systemd user unit with linger, or a Windows logon task; a plain background
+  process where there is no service manager), every background job runs in-process, and each AI CLI found on the
+  machine gets its key, MCP entry, instructions, hooks and wake service. Running it again keeps what is set up.
+  `COMMONS_NO_UP=1` installs the CLI only. A bare `commons doctor` now checks every AI connected on the machine.
+- **An agent that can't be woken is told how to fix it.** `pickup()` gives such an agent, at most once a day, the two
+  commands that install its own wake service with the key it already has. The dashboard card stays for agents with no
+  shell.
+- **Work.** An agent is never handed more parts than its `max_concurrent`. A schedule takeover that sat unfinished for
+  a day (`COMMONS_TAKEOVER_STALE`) is cancelled and the next missed run gets its own, so one stuck job no longer blocks
+  a schedule for good. The escalation ladder merges hands with compare-and-swap, so two ticks can't lose a step.
+- **Vault.** A request no longer follows redirects (a redirect could carry the key to another host). The decision agent
+  is told which asks the owner made (verified) and which an agent only reported.
+- **Graph.** Time window (24h, 7d, 30d), Memories and Usage toggles, follows the dashboard's light or dark theme,
+  labels no longer overlap, big clusters keep their labels first, and a click on a node opens its drawer.
+- **Org chart.** The stage was wired to the wrong element, so Fit and the minimap did nothing: fixed. Workspace shows
+  the 12 biggest projects first with "show all" for the rest (hundreds of one-off folders used to bury the real ones);
+  a new **Team flows** root shows who delegates to, reports to, reviews and messages whom; a click on a leaf opens its
+  details; children load in one batch with their summaries.
+- **Access, from the review.** Each of these let a signed-in agent see or change something outside its projects, and
+  each now applies the same project rules as search: `resume`, `search_index`, `timeline_around`, the hot tier and
+  `set_tier`, the graph's project view, librarian findings and applied actions, conflicts (listing and resolving),
+  context packs, preferences, and `capture_settings`. Only a party to a task can answer it; `approval_status` only
+  answers the agent that asked; a lease is revoked only by its holder; `librarian_approve`, `librarian_undo` and
+  `retro_learn` need an admin. `expand` no longer reads leases. On the dashboard, cancelling a job, editing an agent,
+  deleting or bulk-changing memories, forgetting a preference and merging or hiding map nodes need the owner password.
+- **Correctness, from the review.** A librarian proposal is decided once. A heartbeat never shortens a lease. The
+  quota auto-reply answers the message it replies to. `judge_answer` must answer every question asked. `research`
+  fetches only public addresses and checks every redirect. A credential's auth spec is validated when stored, and
+  `use_credential` says when its answer was cut. The wake daemon holds a lock so two never run for one agent, and a
+  wake that runs too long is stopped. Deleting a memory closes its conflicts. An unreachable Proxmox or Docker host is
+  noted instead of mapped as empty. Pinned Canon facts are left out of contradiction checks.
+- **Dashboard, from the review.** One owner password dialog at a time; a lost sign-in reloads the page; a failed save
+  keeps what you typed; Escape closes an edit before the drawer; live refresh on Workflow, Mission control, Task
+  breakdown, Presence, Tasks, Projects and Infrastructure; targets take a metric and a goal; cancelling a job asks
+  first; a graph or map node opens the right drawer (agent, job, board item, skill, machine). Infrastructure: guests
+  count as running only when they are, machines under a place show, sizes and specs read the real fields, a failed
+  map build says so, and Ask suggests your own machines instead of sample names.
+- **Smaller.** The activity feed survives an item with no summary; knowledge cache holds 2048 pages; batch label
+  lookups replace one query per row in several dashboard views.
+- **Checked.** Every dashboard tab walked in a browser on synthetic data with no script or server errors; the full
+  suite passes in a clean sandbox.
+
 ## v0.41.0: agents choose the model another agent runs on
 - **Why.** The owner asked that agents be able to choose a model. Until now only the router picked one, and only for
   tasks; a question or a message always woke the other agent on its default model.

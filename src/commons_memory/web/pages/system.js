@@ -532,7 +532,7 @@ V["Setup"] = async function () {
                       <div class="sys-check-desc">${E(x.detail)}</div>
                     </div>
                     ${!x.done && /Owner password/i.test(x.step) ? `
-                      <button type="button" class="btn sm pri" onclick="pinUnlock()">Set password</button>
+                      <a class="btn sm pri" href="/approve/pin">Set password</a>
                     ` : ""}
                   </div>
                 `).join("")}
@@ -559,7 +559,7 @@ V["Setup"] = async function () {
                   </div>
                 </div>
                 <div class="sys-setting-control">
-                  <button type="button" class="btn sm" onclick="pinUnlock()">${owner.set ? "Change password" : "Set password"}</button>
+                  <a class="btn sm" href="/approve/pin">${owner.set ? "Change password" : "Set password"}</a>
                   ${owner.set ? `<button type="button" class="btn sm bad" onclick="suSignOut()">Sign out</button>` : ""}
                 </div>
               </div>

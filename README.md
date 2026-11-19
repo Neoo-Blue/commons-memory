@@ -48,6 +48,8 @@ curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/insta
 ```powershell
 irm https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.ps1 | iex     # Windows
 ```
+That one line is the whole setup: it installs Commons, starts the hub and dashboard now and at every login, and connects every AI CLI it finds on the machine (key, MCP, instructions, hooks, instant wake). Nothing else to do; the dashboard is at http://127.0.0.1:8766 whenever you want to look. `commons up` repeats it after you install another AI.
+
 Docker: see [docs/docker.md](docs/docker.md). Prefer to read it first? `curl -fsSLO https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.sh && less install.sh && sh install.sh`. No-script alternatives: `uvx --from git+https://github.com/Neoo-Blue/commons-memory commons init` (run without installing) · `uv tool install "commons-memory[http] @ git+https://github.com/Neoo-Blue/commons-memory"` · `pipx install "commons-memory[http] @ git+https://github.com/Neoo-Blue/commons-memory"`
 
 ## Contents

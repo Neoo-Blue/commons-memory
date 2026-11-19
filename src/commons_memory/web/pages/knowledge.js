@@ -709,10 +709,23 @@ V["Graph"] = async function () {
   const g = window.gs || { scope: "", id: "" };
   const opt = (scope, v, t) => '<option value="' + scope + "|" + E(v) + '"' + (g.scope === scope && g.id === v ? " selected" : "") + ">" + E(t) + "</option>";
   const depth = String(window.gd || 2);
-  const src = g.scope
-    ? "/graph.html?scope=" + encodeURIComponent(g.scope) + "&id=" + encodeURIComponent(g.id || "") + "&depth=" + encodeURIComponent(depth)
-    : "/graph.html?items=1";
+  const since = String(window.gsince || "");
+  const showItems = window.gitems !== false;
+  const showUsage = !!window.gusage;
+  const th = document.documentElement.dataset.theme || "";
+  const qs = [];
+  if (g.scope) {
+    qs.push("scope=" + encodeURIComponent(g.scope), "id=" + encodeURIComponent(g.id || ""), "depth=" + encodeURIComponent(depth));
+  } else {
+    qs.push("items=" + (showItems ? "1" : "0"));
+  }
+  qs.push("usage=" + (showUsage ? "1" : "0"));
+  if (since) qs.push("since=" + encodeURIComponent(since));
+  if (th) qs.push("theme=" + encodeURIComponent(th));
+  const src = "/graph.html?" + qs.join("&");
   const depths = ["1", "2", "3"].map(d => '<button type="button" class="' + (d === depth ? "on" : "") + '" data-kn="depth" data-d="' + d + '" aria-pressed="' + (d === depth ? "true" : "false") + '">' + d + "</button>").join("");
+  const times = [["", "All"], ["24h", "24h"], ["7d", "7d"], ["30d", "30d"]].map(([v, label]) =>
+    '<button type="button" class="' + (v === since ? "on" : "") + '" data-kn="gsince" data-v="' + v + '" aria-pressed="' + (v === since ? "true" : "false") + '">' + label + "</button>").join("");
   return '<div class="kn kn-graph">' + knLead("Entities and the links between them.")
     + '<div class="card"><div class="kn-controls"><label>Scope<select aria-label="Graph scope" onchange="const p=this.value.split(&#39;|&#39;);window.gs={scope:p[0],id:p.slice(1).join(&#39;|&#39;)};render()">'
     + '<option value="|">Everything</option>'
@@ -722,7 +735,10 @@ V["Graph"] = async function () {
     + "<optgroup label=\"Schedules\">" + (sc.schedules || []).map(s => opt("schedule", s.id, s.title)).join("") + "</optgroup>"
     + (g.scope === "node" ? opt("node", g.id, "Node " + g.id) : "")
     + "</select></label>"
-    + '<div><span class="kn-filter-label">Depth</span><div class="seg" role="group" aria-label="Depth">' + depths + "</div></div>"
+    + '<div><span class="kn-filter-label">Time</span><div class="seg" role="group" aria-label="Time window">' + times + "</div></div>"
+    + (g.scope ? '<div><span class="kn-filter-label">Depth</span><div class="seg" role="group" aria-label="Depth">' + depths + "</div></div>" : "")
+    + (!g.scope ? '<label class="kn-check"><input type="checkbox"' + (showItems ? " checked" : "") + ' onchange="window.gitems=this.checked;render()"> Memories</label>' : "")
+    + '<label class="kn-check"><input type="checkbox"' + (showUsage ? " checked" : "") + ' onchange="window.gusage=this.checked;render()"> Usage</label>'
     + '<a href="' + src + '" target="_blank" rel="noopener">Full screen</a>'
     + '<button type="button" class="pri" onclick="post(\'graph/rebuild\',{})">Rebuild links</button></div></div>'
     + '<iframe title="Graph" src="' + src + '"></iframe></div>';
@@ -749,6 +765,18 @@ V["Preferences"] = async function () {
     + "</div>";
 };
 
+function knOcOpen(kind, id, agentName) {
+  if (kind === "agent" && agentName && window.K && K.drawer) { K.drawer.openId("agent:" + agentName); return true; }
+  if (kind === "job" && id && window.K && K.drawer) { K.drawer.openId("job:" + id); return true; }
+  if (id && ["memory", "decision", "fact", "handoff", "observation", "note", "checkpoint"].includes(kind)) {
+    window.mopen = id; window.mfocus = id; window.medit = null;
+    if (window.K && K.drawer) K.drawer.openId("mem:" + id);
+    else go("Memory");
+    return true;
+  }
+  return false;
+}
+
 V["Org chart"] = async function () {
   knBegin("Org chart");
   const qel = document.getElementById("ocq");
@@ -760,31 +788,43 @@ V["Org chart"] = async function () {
   if (window.oc_jump) {
     const j = window.oc_jump;
     window.oc_jump = null;
+    window.oc_all = 1;
     window.oc_center = 1;
     const parts = j.replace(/^\w+\//, "").split(".");
-    const pre = j.includes("/") ? j.split("/")[0] + "/" : "";
+    const pre = j.includes("/") ? j.split("/")[0] + "/" : (root === "workspace" ? "" : root + "/");
     for (let i = 1; i < parts.length; i++) oc_open[pre + parts.slice(0, i).join(".")] = 1;
-    window.oc_sel = j;
+    window.oc_sel = pre + parts.join(".");
   }
-  const top = knNeed(await api("tree_children?ref=" + encodeURIComponent(root)));
-  const kids = async ref => (await api("tree_children?ref=" + encodeURIComponent(ref))).children || [];
+  const top = knNeed(await api("tree_children?ref=" + encodeURIComponent(root) + (window.oc_all ? "" : "&limit=12")));
+  const kids = async ref => await api("tree_children?ref=" + encodeURIComponent(ref));
   async function nodeHtml(c) {
     const open = !!oc_open[c.path];
     let sub = "";
     if (open && c.count) {
-      const ch = await kids(c.path);
-      sub = "<ul>" + (await Promise.all(ch.map(nodeHtml))).join("") + "</ul>";
+      const res = await kids(c.path);
+      const ch = res.children || [];
+      const extra = res.more ? '<li><div class="oc group" role="treeitem"><span class="cnt">+' + E(knNum(res.more)) + ' more</span><div class="mut" style="font-size:10px">use Find to jump</div></div></li>' : "";
+      sub = "<ul>" + (await Promise.all(ch.map(nodeHtml))).join("") + extra + "</ul>";
     }
-    const mark = c.count ? ' <span class="cnt">' + (open ? "v " : "> ") + c.count + "</span>" : "";
-    return '<li><div class="oc ' + E(c.kind || "") + (oc_sel === c.path ? " sel" : "") + '" tabindex="0" role="treeitem" aria-expanded="' + (open ? "true" : "false") + '" onkeydown="if(event.key===\'Enter\')ocT(' + J(c.path) + ')" onclick="ocT(' + J(c.path) + ')">'
+    const mark = c.count ? ' <span class="cnt">' + (open ? "\u25be " : "\u25b8 ") + c.count + "</span>" : "";
+    const agentHandle = c.agent_name || (c.kind === "agent" ? c.label : "");
+    const canOpen = (c.kind === "agent" && agentHandle) || (c.id && ["job", "memory", "decision", "fact", "handoff", "observation", "note", "checkpoint"].includes(c.kind));
+    const clickAct = !c.count && canOpen
+      ? 'knOcOpen(' + J(c.kind || "") + ',' + J(c.id || "") + ',' + J(agentHandle) + ')'
+      : 'ocT(' + J(c.path) + ')';
+    const openBtn = canOpen
+      ? '<div style="margin-top:8px"><button type="button" class="small" onclick="event.stopPropagation();knOcOpen(' + J(c.kind || "") + ',' + J(c.id || "") + ',' + J(agentHandle) + ')">Open details</button></div>'
+      : "";
+    return '<li><div class="oc ' + E(c.kind || "") + (oc_sel === c.path ? " sel" : "") + '" tabindex="0" role="treeitem" aria-expanded="' + (open ? "true" : "false") + '" onkeydown="if(event.key===\'Enter\')' + clickAct + '" onclick="' + clickAct + '">'
       + '<span class="ix">' + E(String(c.path || "").replace(/^\w+\//, "")) + "</span> " + E(String(c.label || "").slice(0, 38)) + mark
       + '<div class="mut" style="font-size:10px">' + E(c.kind || "") + "</div>"
       + '<div class="hc"><b>' + E(c.label || "") + '</b><div class="mut">' + E(c.kind || "") + " · path <code>" + E(c.path || "") + "</code>" + (c.id ? " · <code>" + E(String(c.id).slice(0, 16)) + "</code>" : "") + "</div>"
       + (c.summary ? '<div style="margin-top:6px">' + E(c.summary) + "</div>" : "")
       + (c.count ? '<div class="mut" style="margin-top:6px">' + c.count + " children</div>" : "")
+      + openBtn
       + "</div></div>" + sub + "</li>";
   }
-  const names = { workspace: "Workspace", agents: "Agents", skills: "Skill library" };
+  const names = { workspace: "Workspace", agents: "Agents", flows: "Team flows", skills: "Skill library" };
   const crumbs = String(window.oc_sel || "").replace(/^\w+\//, "").split(".").filter(Boolean);
   let bc = '<a href="#" data-kn="ocsel" data-path="">' + E(names[root] || root) + "</a>";
   crumbs.forEach((part, i) => {
@@ -793,6 +833,7 @@ V["Org chart"] = async function () {
   });
   const roots = [
     ["workspace", "Workspace / projects"],
+    ["flows", "Team flows"],
     ["agents", "Agent / model / tasks"],
     ["skills", "By skill"],
   ].map(([r, label]) => '<button type="button" class="' + (r === root ? "on" : "") + '" data-kn="ocroot" data-root="' + r + '">' + label + "</button>").join("");
@@ -805,11 +846,12 @@ V["Org chart"] = async function () {
     body = '<pre class="outline">' + E(o.text || "") + "</pre>";
   } else {
     const nodes = await Promise.all(top.children.map(nodeHtml));
+    const topMore = top.more ? '<li><div class="oc group" role="treeitem" tabindex="0" onkeydown="if(event.key===\'Enter\')this.click()" onclick="window.oc_all=1;render()"><span class="cnt">+' + E(knNum(top.more)) + ' more</span><div class="mut" style="font-size:10px">' + (window.oc_all ? "use Find to jump" : "show all") + "</div></div></li>" : "";
     body = '<div class="ocwrap" id="ocw"><div class="zoombar"><button type="button" onclick="ocZoom(1.2)" aria-label="Zoom in">+</button><button type="button" onclick="ocZoom(1/1.2)" aria-label="Zoom out">-</button><button type="button" onclick="ocFit()">Fit</button></div>'
-      + '<div class="ocstage" id="ols"><ul class="orgchart" role="tree"><li><div class="oc root">' + E(names[root] || root) + ' <span class="cnt">' + top.children.length + "</span></div><ul>"
-      + nodes.join("") + '</ul></li></ul></div><div class="minimap" aria-hidden="true"><div class="mm" id="ocmm"></div><div class="vp" id="ocvp"></div></div></div>';
+      + '<div class="ocstage" id="ocs"><ul class="orgchart" role="tree"><li><div class="oc root">' + E(names[root] || root) + ' <span class="cnt">' + (top.children.length + (top.more || 0)) + "</span></div><ul>"
+      + nodes.join("") + topMore + '</ul></li></ul></div><div class="minimap" aria-hidden="true"><div class="mm" id="ocmm"></div><div class="vp" id="ocvp"></div></div></div>';
   }
-  return '<div class="kn kn-org">' + knLead("How projects, agents and skills relate. Drag to pan, scroll to zoom.")
+  return '<div class="kn kn-org">' + knLead("How projects, agents, work flows and skills relate. Drag to pan, scroll to zoom.")
     + '<div class="card"><div class="seg" role="group" aria-label="Root">' + roots + "</div> "
     + '<div class="seg" role="group" aria-label="Mode">' + modes + "</div> "
     + '<input id="ocq" aria-label="Search the chart" placeholder="Search and jump" value="' + E(window._ocq || "") + '" oninput="window._ocq=this.value" onkeydown="if(event.key===\'Enter\')ocFind()"> '
@@ -959,6 +1001,7 @@ function knRetroDecide(ids, ok) {
     async commit() {
       const r = await postRaw("retro/decide", { ids, approve: !!ok });
       if (!r || r.error) return r || { error: "could not decide" };
+      if (r.errors && r.errors.length) return { error: r.errors[0].error || "could not apply" };
       ids.forEach(id => delete window._rhide[id]);
       render();
       return {};
@@ -1121,6 +1164,7 @@ document.addEventListener("click", e => {
   }
   if (act === "pack") { window.cxs = window.cxs === id ? "" : id; window._packSig = ""; render(); return; }
   if (act === "depth") { window.gd = el.dataset.d || "2"; render(); return; }
+  if (act === "gsince") { window.gsince = el.dataset.v || ""; render(); return; }
   if (act === "pref-save") {
     const row = el.closest(".kn-pref");
     const input = row && row.querySelector("input");
@@ -1132,7 +1176,7 @@ document.addEventListener("click", e => {
     K.menu(el, [{ label: "Forget every preference", danger: true, run: () => post("prefs/forget", { everything: true }) }]);
     return;
   }
-  if (act === "ocroot") { window.oc_root = el.dataset.root; window.oc_open = {}; window.oc_sel = ""; render(); return; }
+  if (act === "ocroot") { window.oc_root = el.dataset.root; window.oc_open = {}; window.oc_sel = ""; window.oc_all = 0; render(); return; }
   if (act === "ocmode") { window.oc_mode = el.dataset.mode; render(); return; }
   if (act === "ocsel") { window.oc_sel = el.dataset.path || ""; render(); return; }
   if (act === "oc-collapse") { window.oc_open = {}; render(); return; }
@@ -1140,6 +1184,7 @@ document.addEventListener("click", e => {
   if (act === "lib-no") { knLibDecide(id, false); return; }
   if (act === "lib-undo") { knLibUndo(id); return; }
   if (act === "lib-auto") {
+    if (e.target.tagName !== "INPUT") return;  // the label re-fires the click on its checkbox: post once
     const input = el.querySelector("input");
     setTimeout(() => post("librarian/config", { auto_approve: !!(input && input.checked) }), 0);
     return;
@@ -1178,4 +1223,3 @@ K.drawer.on("pack:", function (raw) {
   else render();
 });
 
-if (["Memory", "Knowledge", "Context", "Graph", "Preferences", "Org chart", "Librarian", "Import", "Retro learning"].includes(tab)) render();

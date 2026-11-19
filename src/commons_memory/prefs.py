@@ -47,6 +47,7 @@ class Preferences:
         evidence, _ = redact(evidence or "")
         if not statement:
             raise CommonsError("empty preference")
+        self.s.check_project(self.s.find_project(project), "write")
         pid = self.s.project_id(project)
         norm = _norm(statement)
         r = self.s.q("SELECT * FROM preferences WHERE norm=? AND project_id IS ? AND task_type IS ? AND status<>'forgotten'",
@@ -109,8 +110,9 @@ class Preferences:
 
     def get(self, project: str | None = None, task_type: str | None = None, query: str = "",
             max_tokens: int = 300, min_confidence: float = 0.3, include_all: bool = False) -> dict:
-        pid = self.s.project_id(project) if project else None
-        rows = self.s.q("SELECT * FROM preferences WHERE status='active'")
+        pid = self.s.find_project(project)  # a read never creates the project
+        denied = set(self.s.denied_projects())
+        rows = [r for r in self.s.q("SELECT * FROM preferences WHERE status='active'") if r["project_id"] not in denied]
         t = now()
         scored = []
         for r in rows:

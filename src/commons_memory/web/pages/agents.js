@@ -233,8 +233,8 @@ async function agentBody(name, ctx) {
       <div class="ag-dr-badges">${badge(u.can_take_work ? "Can take work" : "Waiting for quota", u.can_take_work ? "ok" : "warn")}${p.wake_mode ? `<span class="badge" title="${E(WAKE[p.wake_mode] || "")}">wake: ${E(p.wake_mode)}</span>` : ""}${d.unread ? badge(d.unread + " unread", "info") : ""}</div></div></div>
     ${p.status ? `<p class="ag-dr-status">${E(p.status)}</p>` : ""}
     ${identity}
-    ${idn && !p.wakeable ? `<div class="ag-wakewarn" role="status">${ico("warn")}<div><b>Commons can't wake ${E(d.display || name)}</b><p class="ag-sub">Work and messages wait until it checks in on its own. Give it one sentence and it installs what lets Commons wake it, keeping its key.</p>
-      <div id="ag-wakefix">${S.wakefix && S.wakefix.name === name ? copyBox(S.wakefix.bot) : `<button type="button" onclick="AG.wakeable(${J(name)},this)">Make it wakeable</button>`}</div></div></div>` : ""}
+    ${idn && !p.wakeable ? `<div class="ag-wakewarn" role="status">${ico("warn")}<div><b>Commons can't wake ${E(d.display || name)}</b><p class="ag-sub">Work and messages wait until it checks in on its own. Commons asks it to install its own wake service at its next check-in, keeping its key. In a hurry? Give it the sentence yourself.</p>
+      <div id="ag-wakefix">${S.wakefix && S.wakefix.name === name ? copyBox(S.wakefix.bot) : `<button type="button" onclick="AG.wakeable(${J(name)},this)">Show the sentence</button>`}</div></div></div>` : ""}
     <section class="ag-dr-sec"><h4>Presence</h4><dl class="ag-facts">
       ${fact("Wake mode", E(WAKE[p.wake_mode] || p.wake_mode || "unknown"))}
       ${fact("Live connections", E(p.live_connections || 0))}
