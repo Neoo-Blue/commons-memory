@@ -998,7 +998,10 @@ def collect_proxmox(ssh_alias: str = "pve") -> dict:
         snap.note(f"refusing ssh alias {alias!r}")
         return snap.as_dict()
     host = (_try(snap, ["hostname"], alias) or "").strip().split()[:1]
-    hostname = host[0] if host else alias
+    if not host:  # no answer at all: say so, rather than record an empty machine that marks its guests stale
+        snap.note(f"{alias} unreachable")
+        return snap.as_dict()
+    hostname = host[0]
     ips = _parse_ips(_try(snap, ["ip", "-j", "addr"], alias) or "")
     os_name = _os_pretty(_try(snap, ["cat", "/etc/os-release"], alias) or "")
     nodes = _try(snap, ["pvesh", "get", "/nodes", "--output-format", "json"], alias)
@@ -1178,7 +1181,10 @@ def collect_docker(ssh_alias: str) -> dict:
         snap.note(f"refusing ssh alias {alias!r}")
         return snap.as_dict()
     host = (_try(snap, ["hostname"], alias) or "").strip().split()[:1]
-    hostname = host[0] if host else alias
+    if not host:  # no answer at all: say so, rather than record an empty machine that marks its guests stale
+        snap.note(f"{alias} unreachable")
+        return snap.as_dict()
+    hostname = host[0]
     ips = _parse_ips(_try(snap, ["ip", "-j", "addr"], alias) or "")
     os_name = _os_pretty(_try(snap, ["cat", "/etc/os-release"], alias) or "")
     machine = snap.ent(alias, "machine", hostname, {"hostname": hostname, "ips": ips, "os": os_name})

@@ -31,19 +31,23 @@ def tracer():
     from . import __version__
     provider = TracerProvider(resource=Resource.create({"service.name": "commons", "service.version": __version__}))
     mode = os.environ.get("COMMONS_OTEL")
+    exported = False
     if mode == "console":
         from opentelemetry.sdk.trace.export import ConsoleSpanExporter
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+        exported = True
     elif os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
             provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            exported = True
         except ImportError:
             pass
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    _memory = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(_memory))
+    if not exported or mode == "memory":
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        _memory = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(_memory))
     _tracer = provider.get_tracer("commons")
     return _tracer
 

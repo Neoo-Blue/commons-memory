@@ -140,9 +140,8 @@ def test_basic_auth_header(store, svc, monkeypatch):
     base, seen = svc
     V.add(store, "dsh", "pw-123456", "dsh", [base], {"basic": "aerkin"})
     captured = {}
-    import urllib.request
-    real = urllib.request.urlopen
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=30: captured.setdefault("h", req.headers) and real(req, timeout=timeout))
+    real = V._OPENER.open
+    monkeypatch.setattr(V._OPENER, "open", lambda req, timeout=30: captured.setdefault("h", req.headers) and real(req, timeout=timeout))
     V.call(store, dict(store.q("SELECT * FROM vault_creds WHERE name='dsh'")[0]), "GET", base + "/x")
     assert captured["h"]["Authorization"] == "Basic " + base64.b64encode(b"aerkin:pw-123456").decode()
 
@@ -393,3 +392,12 @@ def test_truncated_or_json_escaped_private_keys_are_redacted():
     for text in (cut, "-----BEGIN RSA " + mark + "\n" + body + "\n-----END RSA " + mark):
         clean, kinds = redact(text)
         assert "MIIEvQ" not in clean and "private_key" in kinds
+
+
+def test_scope_stops_at_a_path_boundary():
+    c = {"base_urls": '["https://api.example.com/v1", "https://b.example.com/x/", "https://c.example.com"]'}
+    ok = ["https://api.example.com/v1", "https://api.example.com/v1/", "https://api.example.com/v1/keys",
+          "https://b.example.com/x", "https://b.example.com/x/y", "https://c.example.com", "https://c.example.com/any"]
+    bad = ["https://api.example.com/v1-admin/keys", "https://api.example.com/v10", "https://b.example.com/xy",
+           "https://api.example.com/v1/../v2"]
+    assert all(V._in_scope(c, u) for u in ok) and not any(V._in_scope(c, u) for u in bad)

@@ -12,12 +12,20 @@ import uuid
 from .redact import redact
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):  # prevent redirect-based SSRF
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def fetch_agent_card(base_url: str, timeout: float = 10) -> dict:
     base = base_url.rstrip("/")
     last = None
     for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
         try:
-            with urllib.request.urlopen(base + path, timeout=timeout) as r:  # noqa: S310
+            with _OPENER.open(base + path, timeout=timeout) as r:  # noqa: S310
                 return json.loads(r.read())
         except Exception as e:  # noqa: BLE001
             last = e
@@ -33,7 +41,7 @@ def send_message(url: str, text: str, context_id: str | None = None, timeout: fl
                                       **({"contextId": context_id} if context_id else {})}}}
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - user-configured endpoint
+    with _OPENER.open(req, timeout=timeout) as r:  # noqa: S310 - user-configured endpoint
         return json.loads(r.read())
 
 
@@ -41,7 +49,7 @@ def _rpc(url: str, method: str, params: dict, timeout: float = 30, headers: dict
     payload = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers={"Content-Type": "application/json", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+    with _OPENER.open(req, timeout=timeout) as r:  # noqa: S310
         return json.loads(r.read())
 
 

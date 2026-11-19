@@ -466,7 +466,7 @@ function action(a) { const id = a.id || a.label; ACTIONS.set(id, a); return () =
 const PAGEKEYS = { Overview: "g o", Board: "g b", Agents: "g a", Workflow: "g w", Memory: "g m", Setup: "g s" };
 const groupOf = t => typeof wsOf === "function" ? wsOf(t)[0] : (GROUPS.find(g => g[1].includes(t)) || [""])[0];
 function paletteSections(q) {
-  const pages = T.map((t, i) => ({ label: t, sub: groupOf(t), icon: ICON[t], kbd: PAGEKEYS[t] || (i < 9 ? String(i + 1) : ""), run: () => nav(t) }));
+  const pages = T.map((t, i) => ({ label: t, sub: groupOf(t), icon: t, kbd: PAGEKEYS[t] || (i < 9 ? String(i + 1) : ""), run: () => nav(t) }));
   const acts = [...ACTIONS.values()].map(a => ({ label: a.label, kw: a.keywords, icon: a.icon || BOLT, kbd: a.kbd, sub: "action", run: a.run }));
   if (!q) {
     const rec = recent().filter(t => t !== tab && T.includes(t)).slice(0, 5).map(t => Object.assign({}, pages[T.indexOf(t)], { sub: "recent" }));
@@ -598,7 +598,7 @@ const prefixOf = (a, b) => a.length < b.length && a.every((x, i) => x === b[i]);
 let buf = [], bufAt = 0;
 function onKey(e) {  // window capture: runs before legacy's document handler, so a key handled here stops there
   if (e.defaultPrevented || e.isComposing || e.repeat || /^(Shift|Control|Alt|Meta)$/.test(e.key)) return;
-  if (D.el && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dClose(); return; }
+  if (D.el && e.key === "Escape" && !window.medit) { e.preventDefault(); e.stopPropagation(); dClose(); return; }
   if (P.el || M.el || D.el || typing(e.target)) return;  // palette, menu and drawer own their keys; never fire while typing
   const st = fromEvent(e), now = Date.now();
   let seq = (now - bufAt < 1500 ? buf : []).concat(st);

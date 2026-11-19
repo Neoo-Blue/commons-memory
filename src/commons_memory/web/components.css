@@ -1319,3 +1319,27 @@ button.kv-v.kv-more:hover { color: var(--acc); }
 .toast > .progress { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: 2px; border-radius: 0; background: var(--acc); opacity: .55; }
 html[data-theme="light"] .toast { background: var(--bg-card); box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-default); }
 aside.drawer.open ~ .menu { z-index: 70; }  /* a menu opened from inside a drawer (Move to agent) sits above it */
+
+/* Classes the kit actually emits (command palette, menu, shortcuts list, owner password dialog) */
+.palette.open{position:fixed;inset:0;z-index:65;display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;width:auto;border:0;border-radius:0;box-shadow:none;background:rgba(0,0,0,.65);animation:none;overflow:visible}
+.palette-box{width:min(600px,92vw);background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:var(--radius-lg);box-shadow:var(--shadow-modal);overflow:hidden}
+.palette-q{width:100%;border:0!important;border-bottom:1px solid var(--border-subtle)!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;padding:14px 16px!important;font-size:15px;color:var(--fg-default);outline:none!important}
+.palette-list{max-height:52vh;overflow-y:auto;padding:var(--space-2)}
+.palette-sec{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-subtle);padding:var(--space-2) var(--space-3) var(--space-1)}
+.palette-item{justify-content:flex-start;gap:var(--space-2)}
+.palette-item svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.palette-item small{color:var(--fg-subtle);font-size:var(--text-xs)}
+.palette-item b{color:var(--acc);font-weight:600}
+.palette-kbd{margin-left:auto}
+.palette-item:hover{background:transparent;color:var(--fg-default)}
+.palette-item.sel{background:var(--bg-card-hover);color:var(--fg-default)}
+.palette-none{padding:var(--space-4);text-align:center;color:var(--fg-subtle);font-size:var(--text-sm)}
+.palette-foot{display:flex;gap:var(--space-4);padding:var(--space-2) var(--space-4);border-top:1px solid var(--border-subtle);font-size:var(--text-xs);color:var(--fg-subtle)}
+.menu-item{justify-content:flex-start}
+.menu-item svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.menu-item.danger{color:var(--bad)}
+.menu-item.danger:hover{background:var(--bad-subtle)}
+.menu-label{flex:1}
+.keys-row{display:flex;justify-content:space-between;gap:12px;padding:6px 0}
+#pinDlg{background:var(--bg-surface);color:var(--fg-default);border:1px solid var(--border-strong);border-radius:var(--radius-lg);padding:20px}
+#pinDlg::backdrop{background:rgba(0,0,0,.6)}

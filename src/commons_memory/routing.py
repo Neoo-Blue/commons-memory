@@ -77,9 +77,12 @@ def resolve_model(s: Store, agent: str, wanted: str, effort: str = "") -> str:
     cat = agent_catalog(s, a["id"])
     w = (wanted or "").strip()
     if not cat:
+        if w and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}", w):
+            raise CommonsError(f"invalid model name {w!r}")
         return w
     low = w.lower().split("/", 1)[-1] if w.lower().startswith(a["name"].lower() + "/") else w.lower()
-    tries = [f"{low}-{effort.lower()}", low] if effort else [low]
+    eff_aliases = ("max", "xhigh") if effort.lower() == "max" else ((effort.lower(),) if effort else ())
+    tries = [f"{low}-{e}" for e in eff_aliases] + [low]
     for t in tries:
         exact = [c for c in cat if t in (c["id"].lower(), c["model"].lower(), c["name"].lower())]
         if exact:

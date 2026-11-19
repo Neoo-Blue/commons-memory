@@ -9,6 +9,7 @@ plan -> execute -> verify on agents other than the owner, and the verify step ch
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 
 from .ids import iso, new_id, now
@@ -129,7 +130,20 @@ def watch(s: Store, t: float | None = None) -> list[dict]:
             continue
         pre = f"sched_cover:{r['id']}:"
         earlier = [m["value"] for m in s.q("SELECT value FROM meta WHERE substr(key, 1, ?)=?", (len(pre), pre))]
-        jobs = s.q(f"SELECT id, status, updated_at FROM jobs WHERE id IN ({','.join('?' * len(earlier))})", earlier) if earlier else []
+        jobs = [dict(j) for j in s.q(f"SELECT id, status, created_at, updated_at FROM jobs WHERE id IN "
+                                     f"({','.join('?' * len(earlier))})", earlier)] if earlier else []
+        # An open takeover used to block every later one for good: two from Nov 11 sat for eight days after the agent
+        # they went to ran out of credit, and neither schedule was covered again. One the owner has since delivered,
+        # or that nobody finished in a day, is closed so this run can get its own.
+        stale = float(os.environ.get("COMMONS_TAKEOVER_STALE", "86400"))
+        for j in jobs:
+            if j["status"] in ("done", "failed", "cancelled"):
+                continue
+            why = ("the schedule's owner delivered a later run" if (r["last_ok"] or 0) > (j["created_at"] or 0) else
+                   "nobody finished this takeover in time; a later run replaces it" if t - (j["created_at"] or t) >= stale else "")
+            if why:
+                Orchestrator(s).cancel(j["id"], why)
+                j["status"] = "cancelled"
         if any(j["status"] not in ("done", "failed", "cancelled") for j in jobs):
             continue  # an earlier missed run's takeover is still open: it covers this run too (one per schedule, not per hour)
         late = [j for j in jobs if j["status"] == "done" and (j["updated_at"] or 0) >= slot]

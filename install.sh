@@ -1,9 +1,10 @@
 #!/bin/sh
 # Commons one-line installer (macOS / Linux):
 #   curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/commons-memory/main/install.sh | sh
-# Options (env): COMMONS_VERSION=v0.7.1  COMMONS_EXTRAS=http,embed (comma list or "all")  COMMONS_NO_INIT=1
+# Options (env): COMMONS_VERSION=v0.7.1  COMMONS_EXTRAS=http,embed (comma list or "all")  COMMONS_NO_INIT=1  COMMONS_NO_UP=1 (CLI only)
 #                COMMONS_INSTALLER=uv|pipx|pip (force a method)
-# Installs the `commons` CLI (PyPI, else the GitHub release wheel, else git), runs `commons init`, prints next steps.
+# Installs the `commons` CLI (PyPI, else the GitHub release wheel, else git), runs `commons init`, then `commons up`:
+# the hub and dashboard as a login service and every AI CLI on this machine connected. Nothing else to do by hand.
 set -eu
 REPO="Neoo-Blue/commons-memory"
 EXTRAS="${COMMONS_EXTRAS:-http,embed}"
@@ -72,14 +73,12 @@ PATH="$HOME/.local/bin:$PATH"; export PATH
 have commons || die "installed, but 'commons' is not on PATH; add ~/.local/bin to PATH"
 say "installed $(commons --version)"
 if [ "${COMMONS_NO_INIT:-0}" != "1" ]; then commons init >/dev/null && say "database ready: ~/.commons/commons.db"; fi
-cat <<'NEXT'
-
-Next steps
-  1. Connect an AI:      commons connect claude --platform claude-code     (or cursor, codex, gemini, generic)
-  2. Try it:             commons remember "Commons is installed" && commons search "installed"
-  3. Dashboard:          commons dashboard            -> http://127.0.0.1:8766
-  4. Team / other boxes: commons serve --transport http --host <tailnet-ip> --port 8770
-  5. Paste PROMPT.md into any AI so it follows the Commons routine:
-     https://github.com/Neoo-Blue/commons-memory/blob/main/PROMPT.md
-If 'commons' isn't found in a new shell, add ~/.local/bin to your PATH.
-NEXT
+# Everything else is automatic: the hub and dashboard start now and at every login, and each AI CLI on this machine
+# is connected (key, MCP, instructions, hooks, wake). COMMONS_NO_UP=1 installs the CLI only (a server box, or a
+# machine that will join another hub with the dashboard's join link).
+if [ "${COMMONS_NO_UP:-0}" != "1" ] && [ "${COMMONS_NO_INIT:-0}" != "1" ]; then
+  commons up || say "setup did not finish; run 'commons up' again, or 'commons doctor' to see what is wrong"
+else
+  say "CLI only. Run 'commons up' to start the hub here and connect this machine's AIs."
+fi
+say "If 'commons' isn't found in a new shell, add ~/.local/bin to your PATH."

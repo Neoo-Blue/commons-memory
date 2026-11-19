@@ -44,7 +44,7 @@
     if (b <= 0) return "0 B";
     const k = 1024;
     const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-    const i = Math.floor(Math.log(b) / Math.log(k));
+    const i = Math.min(sizes.length - 1, Math.max(0, Math.floor(Math.log(b) / Math.log(k))));
     const val = b / Math.pow(k, i);
     const str = val >= 100 || Number.isInteger(val) ? Math.round(val) : val.toFixed(1);
     return str + " " + sizes[i];
@@ -109,7 +109,7 @@
   function getStatusDotClass(node) {
     if (node && node.stale) return "busy";
     const st = (node && node.attrs && node.attrs.status) ? String(node.attrs.status).toLowerCase() : "";
-    if (st === "running") return "live";
+    if (/^(running|active|online|up\b)/.test(st)) return "live";
     return "offline";
   }
 
@@ -204,7 +204,9 @@
   function updateUrl(params) {
     const rawHash = location.hash.slice(1);
     const qIndex = rawHash.indexOf("?");
-    const qs = new URLSearchParams(qIndex >= 0 ? rawHash.slice(qIndex + 1) : "");
+    const onInfra = rawHash.split("?")[0] === "Infrastructure";
+    const qs = new URLSearchParams(onInfra && qIndex >= 0 ? rawHash.slice(qIndex + 1) : "");
+    qs.delete("drawer");
 
     Object.entries(params).forEach(([k, v]) => {
       if (v === null || v === undefined || v === "") qs.delete(k);
@@ -244,11 +246,6 @@
     S.rootName = nodeName || "";
     S.depth = "2";
     updateUrl({ view: "graph", root: S.root, depth: "2" });
-    if (typeof tab !== "undefined" && tab !== "Infrastructure") {
-      go("Infrastructure");
-    } else {
-      render();
-    }
   };
 
   INFRA.setSystemFilter = function (sys) {
@@ -330,6 +327,7 @@
       if (text.includes(term)) {
         c.classList.add("infra-highlighted");
         c.classList.remove("infra-dimmed");
+        for (let p = c.parentElement; p; p = p.parentElement) p.classList.remove("infra-dimmed");
         const moreBox = c.closest(".infra-services-more");
         if (moreBox) {
           moreBox.style.display = "flex";
@@ -366,7 +364,7 @@
       const res = await api("infra_describe?q=" + encodeURIComponent(S.askQ));
       S.askText = res && res.text ? res.text : "No description returned.";
       if (box) {
-        box.innerHTML = `<pre class="infra-ask-pre">${E(S.askText)}</pre>`;
+        box.innerHTML = `<pre class="infra-ask-pre">${E(S.askText)}</pre><div style="display:flex;justify-content:flex-end"><button type="button" class="btn sm" onclick="K.copy(INFRA_STATE.askText)">Copy text</button></div>`;
       }
     } catch (e) {
       if (box) box.innerHTML = `<div class="mut sm">Error: ${E(e && e.message ? e.message : e)}</div>`;
@@ -473,8 +471,7 @@
         {
           label: "Show in graph",
           kind: "primary",
-          run: (ctx) => {
-            ctx.close();
+          run: () => {
             INFRA.showInGraph(nid);
           },
         },
@@ -484,9 +481,9 @@
           run: async (ctx) => {
             const target = prompt("Which node is this the same as? A name, IP, vmid or URL:");
             if (!target || !target.trim()) return;
-            let keep;
-            try { keep = (await api("infra_node?id=" + encodeURIComponent(target.trim()))).id; }
-            catch (e) { if (window.K && window.K.toast) window.K.toast("Nothing in the map matches " + target.trim(), { kind: "err" }); return; }
+            const res = await api("infra_node?id=" + encodeURIComponent(target.trim())).catch(() => null);
+            if (!res || !res.id) { if (window.K && window.K.toast) window.K.toast("Nothing in the map matches " + target.trim(), { kind: "err" }); return; }
+            const keep = res.id;
             if (keep === nid) return;
             const r = await postRaw("infra/merge", { keep, drop: nid });
             if (r && r.error) {
@@ -522,6 +519,7 @@
         let node;
         try {
           node = await api("infra_node?id=" + encodeURIComponent(nid));
+          if (node && node.error) throw new Error(node.error);
         } catch (e) {
           return `<div class="empty"><div class="mut">Could not load node details: ${E(e && e.message ? e.message : e)}</div></div>`;
         }
@@ -589,7 +587,7 @@
             }).join("")}
             ${node.stale ? `<span class="badge sm warn">stale · not seen since ${E(fmtAgo(node.last_seen))}</span>` : ""}
             ${node.last_seen && !node.stale ? `<span class="mut sm">seen ${E(fmtAgo(node.last_seen))}</span>` : ""}
-            <button type="button" class="btn sm" onclick="if(window.K&&window.K.drawer)K.drawer.close();INFRA.showInGraph(${J(node.id)}, ${J(node.name)})" style="display:inline-flex;align-items:center;gap:4px">
+            <button type="button" class="btn sm" onclick="INFRA.showInGraph(${J(node.id)}, ${J(node.name)})" style="display:inline-flex;align-items:center;gap:4px">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h3M14 12h3"/></svg>
               Show in graph
             </button>
@@ -614,7 +612,7 @@
               <span class="infra-drawer-section-title">Projects (${projects.length})</span>
               <div class="infra-drawer-chips">
                 ${projects.map(p => `
-                  <a href="#Projects?p=${encodeURIComponent(p.id)}" class="infra-project-chip" onclick="if(window.K&&window.K.drawer)K.drawer.close();if(typeof go==='function')go('Projects');">
+                  <a href="#Projects?p=${encodeURIComponent(p.id)}" class="infra-project-chip">
                     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
                     <span style="font-weight:500">${E(p.title || p.id)}</span>
                     ${p.notes ? `<span class="badge sm" style="font-size:10px">${p.notes} ${p.notes === 1 ? 'note' : 'notes'}</span>` : ''}
@@ -730,9 +728,7 @@
             if (window.K && window.K.toast) window.K.toast(r.error, { kind: "err" });
             return r;
           }
-          if (parentNid) {
-            setTimeout(() => INFRA.openNodeDrawer(parentNid), 300);
-          }
+          if (parentNid && document.getElementById("edge-row-" + edgeId)) INFRA.openNodeDrawer(parentNid);
           return r;
         },
       });
@@ -830,6 +826,7 @@
     let overview;
     try {
       overview = await api("infra_overview");
+      if (overview && overview.error) throw new Error(overview.error);
     } catch (e) {
       return `<div class="infra-page">
         <div class="empty">
@@ -913,6 +910,13 @@
             </div>
           </div>
         ` : ""}
+        ${job && job.status === "failed" ? `
+          <div class="infra-job-banner">
+            <div class="infra-job-top">
+              <span>Building the map from memory failed: ${E(job.error || "Extraction failed")}</span>
+            </div>
+          </div>
+        ` : ""}
       </div>`;
 
     // View Content
@@ -927,7 +931,7 @@
     } else if (S.view === "list") {
       out += await renderListView(S.q);
     } else if (S.view === "ask") {
-      out += renderAskView(S.askQ, S.askText);
+      out += renderAskView(S.askQ, S.askText, overview);
     }
 
     out += `</div>`;
@@ -981,6 +985,7 @@
     let stats;
     try {
       stats = await api("infra_stats");
+      if (stats && stats.error) throw new Error(stats.error);
     } catch (e) {
       return `<div class="empty"><div class="mut">Could not load infrastructure stats: ${E(e && e.message ? e.message : e)}</div></div>`;
     }
@@ -996,11 +1001,8 @@
     let stoppedGuests = 0;
     machines.forEach(m => {
       (m.guests || []).forEach(g => {
-        if (g.status && String(g.status).toLowerCase() === "stopped") {
-          stoppedGuests++;
-        } else {
-          runningGuests++;
-        }
+        if (!g.stale && String(g.status || "").toLowerCase() === "running") runningGuests++;
+        else stoppedGuests++;
       });
     });
 
@@ -1042,7 +1044,7 @@
           <div class="infra-kpi-sub mut sm">
             <span class="infra-pill-live">${runningGuests} running</span>
             <span class="infra-crumb-sep">·</span>
-            <span class="infra-pill-stopped">${stoppedGuests} stopped</span>
+            <span class="infra-pill-stopped">${stoppedGuests} not running</span>
           </div>
         </div>
 
@@ -1064,7 +1066,7 @@
           <div class="infra-kpi-sub mut sm">${counts.tunnel ? counts.tunnel + ' tunnels · ' : ''}${counts.endpoint || 0} reachable URLs</div>
         </div>
 
-        <div class="infra-kpi-card">
+        <div class="infra-kpi-card" onclick="INFRA.setView('list')">
           <div class="infra-kpi-head">
             <span class="infra-kpi-lbl">Storage pools</span>
             ${getKindIcon('storage')}
@@ -1073,7 +1075,7 @@
           <div class="infra-kpi-sub mut sm">${fmtBytes(totalStorageBytes)} total capacity</div>
         </div>
 
-        <div class="infra-kpi-card ${staleCount > 0 ? 'warn' : ''}">
+        <div class="infra-kpi-card ${staleCount > 0 ? 'warn' : ''}" onclick="INFRA.setView('list')">
           <div class="infra-kpi-head">
             <span class="infra-kpi-lbl">Stale items</span>
             <span class="status-dot ${staleCount > 0 ? 'busy' : 'live'}"></span>
@@ -1215,7 +1217,7 @@
             <span class="infra-num">${hasHostMem ? `${memUsedStr} of ${memTotalStr} (${hostMemPct}%)` : `${fmtGuestMem(totalAllocMemMb)} allocated`}</span>
           </div>
           <div class="infra-bar-track">
-            <div class="infra-bar-fill" style="width:${hasHostMem ? hostMemPct : 100}%"></div>
+            <div class="infra-bar-fill" style="width:${hasHostMem ? hostMemPct : 0}%"></div>
           </div>
         </div>
 
@@ -1225,7 +1227,7 @@
             <span class="infra-num">${m.cpu_count ? `${m.cpu_count} threads · ${totalAllocCores} cores allocated` : `${totalAllocCores} cores allocated`}</span>
           </div>
           <div class="infra-bar-track">
-            <div class="infra-bar-fill cores" style="width:${m.cpu_count ? Math.min(100, Math.round((totalAllocCores / m.cpu_count) * 100)) : 100}%"></div>
+            <div class="infra-bar-fill cores" style="width:${m.cpu_count ? Math.min(100, Math.round((totalAllocCores / m.cpu_count) * 100)) : 0}%"></div>
           </div>
         </div>
       </div>
@@ -1428,7 +1430,8 @@
     // Canvas of Machines
     out += `<div class="infra-map-canvas">`;
 
-    tree.forEach(m => {
+    const machines = tree.flatMap(r => r.kind === "place" ? [r, ...(r.children || []).filter(c => c.kind === "machine")] : [r]);
+    machines.forEach(m => {
       const allChildren = m.children || [];
       const guests = allChildren.filter(c => c.kind === "guest");
       const hostServices = allChildren.filter(c => c.kind === "service");
@@ -1436,8 +1439,8 @@
       const mAttrs = m.attrs || {};
       const mSpecs = [
         mAttrs.ip ? mAttrs.ip : null,
-        mAttrs.cpus ? mAttrs.cpus + " CPUs" : null,
-        mAttrs.ram_gb ? mAttrs.ram_gb + "GB RAM" : null,
+        mAttrs.cpu_count ? mAttrs.cpu_count + " CPUs" : null,
+        mAttrs.memory_total ? fmtBytes(mAttrs.memory_total) + " RAM" : null,
         mAttrs.os ? mAttrs.os : null,
       ].filter(Boolean).join(" · ");
 
@@ -1699,7 +1702,7 @@
                 const cNode = nodeMap.get(child.id) || child;
                 const cAttrs = cNode.attrs || {};
                 const ports = getServicePorts(cNode, gEdges, nodeMap);
-                return `<div class="infra-svc-chip-row" onclick="K.drawer.openId(${J('infra:' + child.id)})">
+                return `<div class="infra-svc-chip-row" data-search="${E(child.name)}" onclick="K.drawer.openId(${J('infra:' + child.id)})">
                   <div class="infra-svc-name">
                     ${getKindIcon(child.kind)}
                     <span>${E(child.name)}</span>
@@ -1734,7 +1737,7 @@
                       <div class="infra-bind-items">
                         ${binds.map(b => {
                           const srcPath = b.host_path || b.guest_path || "";
-                          const dstPath = b.guest_path || b.container_path || "";
+                          const dstPath = b.container_path || b.guest_path || "";
                           return `<div class="infra-bind-item">
                             <code class="infra-bind-path">${E(srcPath)}${dstPath && dstPath !== srcPath ? ' → ' + E(dstPath) : ''}</code>
                             ${b.read_only ? `<span class="badge sm">read-only</span>` : ""}
@@ -1933,7 +1936,8 @@
   }
 
   /* ---------- Ask View ---------- */
-  function renderAskView(q, text) {
+  function renderAskView(q, text, overview) {
+    const names = [...(overview.tree || []), ...(overview.systems || [])].map(n => n.name).filter(Boolean).slice(0, 6);
     return `<div class="infra-ask-wrap">
       <div class="infra-head-titles">
         <h3 style="margin:0;font-size:var(--text-lg);font-weight:600">Query infrastructure</h3>
@@ -1948,11 +1952,7 @@
       <div class="infra-ask-quick-row">
         <span class="mut sm">Suggestions:</span>
         <button type="button" class="chip sm" onclick="INFRA.ask('')">Full overview</button>
-        <button type="button" class="chip sm" onclick="INFRA.ask('hv01')">hv01</button>
-        <button type="button" class="chip sm" onclick="INFRA.ask('media')">media (LXC 201)</button>
-        <button type="button" class="chip sm" onclick="INFRA.ask('apps')">apps (LXC 202)</button>
-        <button type="button" class="chip sm" onclick="INFRA.ask('Atlas')">Atlas</button>
-        <button type="button" class="chip sm" onclick="INFRA.ask('nas01')">nas01</button>
+        ${names.map(n => `<button type="button" class="chip sm" onclick="INFRA.ask(${J(n)})">${E(n)}</button>`).join("")}
       </div>
 
       <div class="infra-ask-result-card">
@@ -1963,15 +1963,11 @@
         <div id="infra-ask-result">
           ${text ? `
             <pre class="infra-ask-pre">${E(text)}</pre>
+            <div style="display:flex;justify-content:flex-end"><button type="button" class="btn sm" onclick="K.copy(INFRA_STATE.askText)">Copy text</button></div>
           ` : `
             <div class="mut sm" style="padding:16px 0">Run a query or click a suggestion above to inspect agent text.</div>
           `}
         </div>
-        ${text ? `
-          <div style="display:flex;justify-content:flex-end">
-            <button type="button" class="btn sm" onclick="K.copy(S.askText)">Copy text</button>
-          </div>
-        ` : ""}
       </div>
     </div>`;
   }

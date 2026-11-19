@@ -548,7 +548,7 @@ header button[onclick="theme()"]:hover {
 }
 
 /* Emergency kill switch: restrained and calm rather than alarming */
-#ks button {
+#ks button:not(.pri) {
   height: 32px;
   min-height: 32px;
   padding: 0 var(--space-3);
@@ -562,7 +562,7 @@ header button[onclick="theme()"]:hover {
   transition: all var(--duration-fast) var(--ease-out);
 }
 
-#ks button:hover {
+#ks button:not(.pri):hover {
   background: color-mix(in srgb, var(--bad-subtle) 80%, var(--bad) 20%);
   border-color: var(--bad);
 }

@@ -147,6 +147,7 @@
   };
 
   window.workCancelJob = async function (jobId) {
+    if (!confirm("Cancel this job? Steps not finished yet stop.")) return;
     const r = await postRaw("job/cancel", { id: jobId });
     if (r && !r.error) {
       if (window.K && window.K.toast) window.K.toast("Job cancelled", { kind: "ok" });
@@ -360,9 +361,9 @@
             ${s.result ? `<details style="font-size:11.5px;"><summary class="mut" style="cursor:pointer;">Result preview</summary><pre style="max-height:160px;overflow:auto;margin:4px 0;background:var(--bg-input);padding:6px;border-radius:4px;font-size:11px;">${E(s.result)}</pre></details>` : ""}
 
             <div class="drawer-step-actions">
-              ${(isFailed || isPendingOrClaimed) ? `
+              ${(isFailed || isPendingOrClaimed) && s.type !== "owner" && s.type !== "tally" ? `
                 <button type="button" class="btn sm" onclick="workRetryStep(${J(s.id)}, ${J(job.id)})">Retry step</button>
-                <button type="button" class="btn sm" onclick="workMoveStepMenu(this, ${J(s.id)}, ${J(job.id)})">Move to agent...</button>
+                ${s.status === "pending" || s.status === "claimed" ? `<button type="button" class="btn sm" onclick="workMoveStepMenu(this, ${J(s.id)}, ${J(job.id)})">Move to agent...</button>` : ""}
               ` : ""}
             </div>
           </div>`;

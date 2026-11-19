@@ -142,6 +142,7 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
     base = url.rstrip("/").removesuffix("/mcp")
     mcp_url = base + "/mcp"
     key, keyfile = _key(agent)
+    keyfile.with_suffix(".json").write_text(json.dumps({"client": client, "url": base}))  # what a bare `commons doctor` checks
     commons = shutil.which("commons") or sys.argv[0]
     ok = True
 
@@ -161,6 +162,8 @@ def run(client: str, agent: str, url: str, skip: set[str]) -> int:
 
     def instructions():
         from . import instructions as I
+        if client not in I.TARGETS:
+            return "this AI has no instruction file"
         return ", ".join(f"{Path(r['file']).name} {r['status']}" for r in I.install(client, mcp_url, agent) if r.get("file"))
     step("instructions", instructions)
 
@@ -228,16 +231,41 @@ def ensure_mcp(client: str, url: str) -> str:
             "Commons hooks, and the hub answers over HTTP with the same key.")
 
 
-def registered(client: str, url: str) -> bool:
-    """Is this client's MCP config already pointing at this hub?"""
-    base = url.rstrip("/").removesuffix("/mcp")
+def _mcp_config(client: str) -> str:
     cfg = {"claude-code": Path.home() / ".claude.json", "codex": Path.home() / ".codex" / "config.toml",
            "goose": Path.home() / ".config" / "goose" / "config.yaml",
            **{k: Path(os.path.expanduser(v[0])) for k, v in JSON_MCP.items()}}.get(client)
     try:
-        return bool(cfg and cfg.exists() and base in cfg.read_text())
+        return cfg.read_text() if cfg and cfg.exists() else ""
     except OSError:
-        return False
+        return ""
+
+
+def registered(client: str, url: str) -> bool:
+    """Is this client's MCP config already pointing at this hub?"""
+    return url.rstrip("/").removesuffix("/mcp") in _mcp_config(client)
+
+
+def elsewhere(client: str, url: str) -> bool:
+    """Is this client already connected to a Commons hub at another address? `commons up` leaves such a client alone."""
+    import re
+    return not registered(client, url) and bool(  # an MCP entry named commons: JSON, codex TOML, goose YAML
+        re.search(r'"commons"\s*:|mcp_servers\.commons\]|^\s*commons:\s*$', _mcp_config(client), re.M))
+
+
+def doctor_all(repair: bool = False) -> int:
+    """`commons doctor` with nothing else: every AI that setup connected on this machine."""
+    home = Path(os.environ.get("COMMONS_HOME") or Path.home() / ".commons") / "agents"
+    found = sorted(home.glob("*.json")) if home.is_dir() else []
+    if not found:
+        print("no AI on this machine was connected by `commons up`, `join` or `setup` since v0.42: "
+              "run `commons up`, or name one with --client, --agent and --url")
+        return 1
+    rc = 0
+    for f in found:
+        c = json.loads(f.read_text())
+        rc |= doctor(c["client"], f.stem, c["url"], repair)
+    return rc
 
 
 def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
@@ -275,9 +303,10 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
             add("key accepted", False, str(e)[:120], "key")
     add("MCP server registered", registered(client, base), client, "mcp")
     from .playbook import INSTRUCTIONS
-    files = [Path(os.path.expanduser(p)) for p in I.TARGETS[client]]
-    current = all(f.exists() and INSTRUCTIONS in f.read_text() for f in files)
-    add("master instructions current", current, ", ".join(map(str, files)), "instructions")
+    files = [Path(os.path.expanduser(p)) for p in I.TARGETS.get(client, [])]  # some clients have no instruction file
+    if files:
+        current = all(f.exists() and INSTRUCTIONS in f.read_text() for f in files)
+        add("master instructions current", current, ", ".join(map(str, files)), "instructions")
     from .capture import HOOK_TARGETS
     if client in HOOK_TARGETS:
         hp = Path(os.path.expanduser(HOOK_TARGETS[client][0]))
@@ -304,3 +333,98 @@ def doctor(client: str, agent: str, url: str, repair: bool = False) -> int:
     if broken:
         print(f"run again with --repair to fix: {', '.join(sorted(broken))}")
     return 0 if all(ok for _n, ok, _d, _f in checks) else 1
+
+
+def up(db: str, port: int = 8765, dash_port: int = 8766, connect: bool = True) -> int:
+    """`commons up`: everything after the install, with nothing left to do by hand. Runs the hub and its dashboard as a
+    login service on this machine (loopback only, every background job in-process), then connects each AI CLI found
+    here: key, MCP, instructions, hooks, wake service, sync. Safe to run again: what is already set up is kept."""
+    import platform
+    import socket
+    import time
+    import urllib.request
+    from . import expose as X
+    from .cli_v7 import _install_unit
+    from .connect import create_key
+    from .join import CLIENT_BINS
+    from .store import CommonsError, Store
+    store = Store(db)
+    base = f"http://127.0.0.1:{port}"
+    argv = ["serve", "--transport", "http", "--host", "127.0.0.1", "--port", str(port), "--dashboard",
+            "--dashboard-port", str(dash_port)]
+    sysname = platform.system()
+    kind = "launchd" if sysname == "Darwin" else "windows" if sysname == "Windows" else "systemd"
+    env = {"COMMONS_BACKGROUND": os.environ.get("COMMONS_BACKGROUND", "full")}
+    done = f"hub service installed: starts at login, MCP {base}/mcp, dashboard http://127.0.0.1:{dash_port}/"
+    if kind == "windows":
+        exe = shutil.which("commons") or sys.argv[0]
+        tr = f'cmd /c "set COMMONS_DB={store.path}&& set COMMONS_BACKGROUND={env["COMMONS_BACKGROUND"]}&& "{exe}" {" ".join(argv)}"'
+        subprocess.run(["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", "Commons", "/TR", tr], capture_output=True)
+        subprocess.run(["schtasks", "/Run", "/TN", "Commons"], capture_output=True)
+        print(done)
+    else:
+        unit = X.service_unit(kind, port, "127.0.0.1", store.path, args=argv, env=env)
+        mine = os.path.expanduser("~/Library/LaunchAgents/dev.commons.server.plist" if kind == "launchd"
+                                  else "~/.config/systemd/user/commons.service")
+        old = Path(mine).read_text() if os.path.exists(mine) else ""
+        if old and not ("127.0.0.1" in old and str(port) in old):  # a hub someone set up another way (other port, on the network)
+            print(f"a Commons hub service is already installed here with other settings ({mine}) and was left as it is.\n"
+                  f"To replace it with the one-step setup, delete that file and run `commons up` again.", file=sys.stderr)
+            return 1
+        if kind == "launchd":
+            path = os.path.expanduser("~/Library/LaunchAgents/dev.commons.server.plist")
+            _install_unit(kind, "server", unit, files=[(path, unit)], done=done,
+                          cmds=[["launchctl", "unload", path], ["launchctl", "load", "-w", path]])
+        else:
+            _install_unit(kind, "commons", unit, done=done, cmds=[
+                ["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "commons"],
+                ["systemctl", "--user", "restart", "commons"],
+                ["loginctl", "enable-linger", os.environ.get("USER", "")]])  # keeps it up with nobody logged in
+    def answers(tries: int) -> bool:
+        for _ in range(tries):
+            try:
+                urllib.request.urlopen(base + "/bus/health", timeout=2).read()
+                return True
+            except OSError:
+                time.sleep(0.5)
+        return False
+    if not answers(30):  # no user service manager here (a container, WSL without systemd): run it directly
+        log = open(Path(store.path).parent / "commons.log", "a")
+        subprocess.Popen([shutil.which("commons") or sys.argv[0], *argv], stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                         start_new_session=True, env=os.environ | env | {"COMMONS_DB": store.path, "COMMONS_REQUIRE_KEYS": "1"})
+        if not answers(60):
+            print(f"the hub did not answer on {base}; see {log.name}", file=sys.stderr)
+            return 1
+        print("this machine has no login service manager for your user, so the hub was started in the background instead: "
+              "after a reboot, run `commons up` again")
+    rc = 0
+    if connect:
+        host = "".join(c if c.isalnum() else "-" for c in socket.gethostname().split(".")[0].lower()).strip("-")[:24] or "host"
+        keys = Path(os.environ.get("COMMONS_HOME") or Path.home() / ".commons") / "agents"
+        found = [c for c, b in CLIENT_BINS.items() if shutil.which(b)]
+        for c in found:
+            if registered(c, base):
+                print(f"\n== {c}: already connected")
+                continue
+            if elsewhere(c, base):
+                print(f"\n== {c}: already connected to another Commons hub, left as it is "
+                      f"(to move it here: `commons connect {c} --url {base}`)")
+                continue
+            n = f"{c}-{host}"
+            if not (keys / f"{n}.key").exists():
+                try:
+                    k = create_key(store, n, platform=c)["api_key"]
+                except CommonsError as e:
+                    print(f"\n== {c}: {e} (its key file is gone: `commons connect {c} --name {n} --new-key`)")
+                    rc = 1
+                    continue
+                keys.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd = os.open(keys / f"{n}.key", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(k + "\n")
+            print(f"\n== {c} as {n}")
+            rc |= run(c, n, base, set())
+        if not found:
+            print("no AI CLI found here yet (claude, codex, gemini, cursor-agent, ...): install one and run `commons up` again")
+    print(f"\nCommons is running and starts by itself from now on. Dashboard, whenever you want to look: http://127.0.0.1:{dash_port}/")
+    return rc

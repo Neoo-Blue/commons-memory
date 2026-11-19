@@ -178,6 +178,7 @@
   background-image: radial-gradient(circle, var(--border-subtle) 1px, transparent 1px);
   background-size: 22px 22px;
   cursor: grab;
+  touch-action: none;
 }
 .kn-org .oc {
   background: var(--bg-card); color: var(--fg-default); border: 1px solid var(--border-default);
@@ -308,6 +309,7 @@
   .kn-bulk { bottom: calc(78px + env(safe-area-inset-bottom)); }
   .kn-controls, .kn-controls label, .kn-controls select, .kn-controls .seg { width: 100%; }
   .kn-graph iframe, .kn-org .ocwrap { min-height: 360px; height: 68vh; }
+  .kn-org .minimap { display: none; }
   .toast-stack { left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); }
   .toast { min-width: 0; max-width: none; }
   .kn-pref { flex-wrap: wrap; }

@@ -474,6 +474,8 @@ class Store:
         self.sync_fts(iid)
         self.x("DELETE FROM embeddings WHERE item_id=?", (iid,))  # else vector search keeps scoring a ghost
         self.x("DELETE FROM relations WHERE src=? OR dst=?", (iid, iid))
+        from .canon import _close  # a conflict with a deleted side is over: no ghost row, no flag left on the other
+        _close(self, self.q("SELECT id, a, b FROM conflicts WHERE status='open' AND (a=? OR b=?)", (iid, iid)), "resolved")
         self.kb_dirty(r[0]["project_id"])
         self.audit(agent_id, "item.delete", iid, {"kind": r[0]["kind"]})
         return {"id": iid, "deleted": True}
@@ -498,8 +500,9 @@ class Store:
         return hits
 
     def list_conflicts(self, status: str = "open") -> list[dict]:
-        return [dict(r) | {"created_at": iso(r["created_at"])}
-                for r in self.q("SELECT * FROM conflicts WHERE status=? ORDER BY created_at DESC", (status,))]
+        rows = self.q("SELECT * FROM conflicts WHERE status=? ORDER BY created_at DESC", (status,))
+        hid = self.hidden_ids([x for r in rows for x in (r["a"], r["b"])])
+        return [dict(r) | {"created_at": iso(r["created_at"])} for r in rows if r["a"] not in hid and r["b"] not in hid]
 
     def resolve_conflict(self, conflict_id: str, keep_id: str, agent_id: str | None = None) -> dict:
         r = self.q("SELECT * FROM conflicts WHERE id=?", (conflict_id,))
@@ -508,6 +511,8 @@ class Store:
         c = r[0]
         if keep_id not in (c["a"], c["b"]):
             raise CommonsError("keep_id must be one of the conflicting items")
+        if self.hidden_ids([c["a"], c["b"]], "write"):
+            raise CommonsError("access denied: one of those records is not yours to change")
         from .canon import check_resolve
         check_resolve(self, conflict_id, keep_id)  # owner-only ones wait for the owner; Canon is corrected, not retired
         loser = c["b"] if keep_id == c["a"] else c["a"]
@@ -545,7 +550,7 @@ class Store:
                until: str | None = None, entity: str | None = None, limit: int = 20,
                max_tokens: int = 800, include_superseded: bool = False, as_of: str | float | None = None,
                explain: bool = False, rerank: bool | str | None = None, conflict: bool | None = None,
-               context: int = 0) -> dict:
+               context: int = 0, touch: bool = True) -> dict:
         ranked, total, why = self.rank(query, mode=mode, project=project, agent=agent, tags=tags, kinds=kinds,
                                        since=since, until=until, entity=entity,
                                        limit=max(limit, int(os.environ.get("COMMONS_RERANK_TOP", "30"))) if rerank else limit,
@@ -558,7 +563,7 @@ class Store:
         if query and rerank is not False and how not in ("off", "none"):
             ranked = rerank_ids(self, query, ranked, top=int(os.environ.get("COMMONS_RERANK_TOP", "30")), how=how)
         ranked = ranked[:limit]
-        out = self._budgeted(ranked, max_tokens, total=total)
+        out = self._budgeted(ranked, max_tokens, total=total, touch=touch)
         if context > 0 and out["results"]:
             self._with_context(out, min(int(context), 5), max_tokens // 2)
         if explain:
@@ -899,7 +904,7 @@ class Store:
             done += len(rows)
         return {"embedder": name, "done": done, "remaining": max(0, total - done)}
 
-    def _budgeted(self, ids: list[str], max_tokens: int, total: int) -> dict:
+    def _budgeted(self, ids: list[str], max_tokens: int, total: int, touch: bool = True) -> dict:
         from .temporal import annotate
         from .trust import Trust
         lines, results, used, trust = [], [], 0, Trust(self)
@@ -929,9 +934,9 @@ class Store:
                             "agent": r["agent_name"], "created_at": iso(r["created_at"]), "conflict": bool(r["conflict"]),
                             "tier": r["tier"] or "warm",
                             "authenticated": bool(r["authenticated"])})
-        if results:
-            from .tiers import touch
-            touch(self, [x["id"] for x in results])
+        if results and touch:  # the dashboard only looks: listing the archive must not warm it back up
+            from .tiers import touch as _touch
+            _touch(self, [x["id"] for x in results])
         more = max(0, total - len(results))
         text = "\n".join(lines) or "(no results)"
         if more:
@@ -988,18 +993,18 @@ class Store:
         if self.hidden_ids(list(ids)):
             raise CommonsError("access denied: that record belongs to a project you can't read")
 
-    def expand(self, any_id: str, depth: int = 0, max_tokens: int = 2000) -> dict:
+    def expand(self, any_id: str, depth: int = 0, max_tokens: int = 2000, touch: bool = True) -> dict:
         self.check_ids(any_id)
         d = self.get_item(any_id)
-        if d is not None:
-            from .tiers import touch
-            touch(self, [any_id])
+        if d is not None and touch:
+            from .tiers import touch as _touch
+            _touch(self, [any_id])
         if d is None:
             r = self.q("SELECT * FROM entities WHERE id=?", (any_id,))
             if r:
                 d = dict(r[0]) | {"meta": json.loads(r[0]["meta"] or "{}"), "created_at": iso(r[0]["created_at"])}
             else:
-                for t in ("sessions", "inbox", "jobs", "subtasks", "leftovers", "preferences", "recurring", "leases"):
+                for t in ("sessions", "inbox", "jobs", "subtasks", "leftovers", "preferences", "recurring"):
                     r = self.q(f"SELECT * FROM {t} WHERE id=?", (any_id,))
                     if r:
                         d = dict(r[0])
@@ -1076,31 +1081,114 @@ class Store:
             return "task", (r[0]["body"] or "")[:60]
         if "://" in any_id:
             return "secret_ref", any_id
-        if any_id.startswith("usg_"):
+        if any_id.startswith("usg_") and any_id[4:].isdigit():
             r = self.q("SELECT cost, tokens_in, tokens_out, model FROM usage WHERE id=?", (int(any_id[4:]),))
             if r:
                 return "usage", f"${r[0]['cost']:.4f} {r[0]['model'] or ''} ({(r[0]['tokens_in'] or 0) + (r[0]['tokens_out'] or 0)} tok)"
-        for t, col, typ in (("jobs", "title", "job"), ("subtasks", "title", "subtask"), ("leftovers", "text", "leftover"),
-                            ("recurring", "name", "schedule"), ("preferences", "statement", "preference"),
-                            ("leases", "ref", "lease")):
+        if any_id.startswith("msg:") and any_id[4:].isdigit():
+            try:
+                r = self.q("SELECT COALESCE(a1.name, m.sender) AS s, COALESCE(a2.name, m.recipient) AS r, m.subject, m.body "
+                           "FROM messages m LEFT JOIN agents a1 ON a1.id=m.sender LEFT JOIN agents a2 ON a2.id=m.recipient "
+                           "WHERE m.id=?", (int(any_id[4:]),))
+                if r:
+                    txt = (r[0]["subject"] or r[0]["body"] or "").replace("\n", " ")[:40]
+                    return "message", f"{r[0]['s']} -> {r[0]['r']}: {txt}"[:60]
+            except Exception:  # noqa: BLE001
+                pass
+        for t, col, typ in (("projects", "name", "project"), ("jobs", "title", "job"), ("subtasks", "title", "subtask"),
+                            ("leftovers", "text", "leftover"), ("recurring", "name", "schedule"),
+                            ("preferences", "statement", "preference"), ("leases", "ref", "lease"),
+                            ("skills", "name", "skill")):
             r = self.q(f"SELECT {col} AS v FROM {t} WHERE id=?", (any_id,))
             if r:
                 return typ, (r[0]["v"] or "")[:60]
+        for t, col, typ in (("board", "text", "board"), ("drive_files", "path", "drive_file")):
+            try:
+                r = self.q(f"SELECT {col} AS v FROM {t} WHERE id=?", (any_id,))
+                if r:
+                    return typ, (r[0]["v"] or "")[:60]
+            except Exception:  # noqa: BLE001
+                pass
         return "unknown", any_id
 
+    def labels(self, ids: Iterable[str]) -> dict[str, tuple[str, str]]:
+        """Batch (type, display name) lookup for many ids without N+1 queries."""
+        out: dict[str, tuple[str, str]] = {}
+        rem = {i for i in ids if i}
+        for i in list(rem):
+            if "://" in i:
+                out[i] = ("secret_ref", i)
+                rem.discard(i)
+        usg_ids = [int(i[4:]) for i in rem if i.startswith("usg_") and i[4:].isdigit()]
+        for b in range(0, len(usg_ids), 500):
+            ch = usg_ids[b:b + 500]
+            for r in self.q(f"SELECT id, cost, tokens_in, tokens_out, model FROM usage WHERE id IN ({','.join('?' * len(ch))})", ch):
+                k = f"usg_{r['id']}"
+                out[k] = ("usage", f"${r['cost']:.4f} {r['model'] or ''} ({(r['tokens_in'] or 0) + (r['tokens_out'] or 0)} tok)")
+                rem.discard(k)
+        msg_ids = [int(i[4:]) for i in rem if i.startswith("msg:") and i[4:].isdigit()]
+        if msg_ids:
+            try:
+                for b in range(0, len(msg_ids), 500):
+                    ch = msg_ids[b:b + 500]
+                    for r in self.q(
+                            "SELECT m.id, COALESCE(a1.name, m.sender) AS s, COALESCE(a2.name, m.recipient) AS r, m.subject, m.body "
+                            "FROM messages m LEFT JOIN agents a1 ON a1.id=m.sender LEFT JOIN agents a2 ON a2.id=m.recipient "
+                            f"WHERE m.id IN ({','.join('?' * len(ch))})", ch):
+                        k = f"msg:{r['id']}"
+                        txt = (r["subject"] or r["body"] or "").replace("\n", " ")[:40]
+                        out[k] = ("message", f"{r['s']} -> {r['r']}: {txt}"[:60])
+                        rem.discard(k)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _batch(sql_tmpl: str, mapper, optional: bool = False) -> None:
+            if not rem:
+                return
+            idl = list(rem)
+            for b in range(0, len(idl), 500):
+                ch = idl[b:b + 500]
+                try:
+                    rows = self.q(sql_tmpl.format(ph=",".join("?" * len(ch))), ch)
+                except Exception:  # noqa: BLE001
+                    if optional:
+                        return
+                    raise
+                for r in rows:
+                    k = r["id"]
+                    out[k] = mapper(r)
+                    rem.discard(k)
+
+        _batch("SELECT id, type, name FROM entities WHERE id IN ({ph})", lambda r: (r["type"], r["name"]))
+        _batch("SELECT id, kind, title FROM items WHERE id IN ({ph})", lambda r: (r["kind"], (r["title"] or "")[:60]))
+        _batch("SELECT id, name FROM agents WHERE id IN ({ph})", lambda r: ("agent", r["name"]))
+        _batch("SELECT id, goal FROM sessions WHERE id IN ({ph})", lambda r: ("session", (r["goal"] or "")[:60]))
+        _batch("SELECT id, body FROM inbox WHERE id IN ({ph})", lambda r: ("task", (r["body"] or "")[:60]))
+        for t, col, typ in (("projects", "name", "project"), ("jobs", "title", "job"), ("subtasks", "title", "subtask"),
+                            ("leftovers", "text", "leftover"), ("recurring", "name", "schedule"),
+                            ("preferences", "statement", "preference"), ("leases", "ref", "lease"),
+                            ("skills", "name", "skill")):
+            _batch(f"SELECT id, {col} AS v FROM {t} WHERE id IN ({{ph}})", lambda r, _t=typ: (_t, (r["v"] or "")[:60]))
+        for t, col, typ in (("board", "text", "board"), ("drive_files", "path", "drive_file")):
+            _batch(f"SELECT id, {col} AS v FROM {t} WHERE id IN ({{ph}})", lambda r, _t=typ: (_t, (r["v"] or "")[:60]), optional=True)
+        for i in rem:
+            out[i] = ("unknown", i)
+        return out
+
     def neighbors(self, any_id: str, depth: int = 1, rel_types: list[str] | None = None,
-                  direction: str = "both", limit: int = 100) -> dict:
+                  direction: str = "both", limit: int = 100, since: float | None = None) -> dict:
         seen, frontier, edges = {any_id}, [any_id], []
+        new = " AND created_at>=?" if since is not None else ""
         for _ in range(max(1, depth)):
             nxt = []
             for node in frontier:
                 qs = []
                 if direction in ("both", "out"):
-                    qs.append(("SELECT src, dst, type FROM relations WHERE src=?", "dst"))
+                    qs.append(("SELECT src, dst, type FROM relations WHERE src=?" + new, "dst"))
                 if direction in ("both", "in"):
-                    qs.append(("SELECT src, dst, type FROM relations WHERE dst=?", "src"))
+                    qs.append(("SELECT src, dst, type FROM relations WHERE dst=?" + new, "src"))
                 for sql, other in qs:
-                    for r in self.q(sql, (node,)):
+                    for r in self.q(sql, (node,) if since is None else (node, since)):
                         if rel_types and r["type"] not in rel_types:
                             continue
                         edges.append({"src": r["src"], "type": r["type"], "dst": r["dst"]})
@@ -1147,34 +1235,62 @@ class Store:
                 edges += [e for e in nb["edges"] if e not in edges]
         return {"matches": [dict(r) for r in roots], "nodes": nodes, "edges": edges[:limit]}
 
-    def export_graph(self, project: str | None = None, include_items: bool = True, limit: int = 5000) -> dict:
+    def export_graph(self, project: str | None = None, include_items: bool = True, limit: int = 5000,
+                     exclude_usage: bool = False, since: str | None = None) -> dict:
+        since_ts = _parse_time(since) if since else None
+        total_edges: int | None = None
         if project:
             pid = self.find_project(project)
             if not pid:
                 return {"nodes": {}, "edges": []}
             self.check_project(pid)
-            ids = {r["id"] for r in self.q("SELECT id FROM entities WHERE project_id=? LIMIT ?", (pid, limit))}
+            ids = {r["id"] for r in self.q("SELECT id FROM entities WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (pid, limit))}
             if include_items:
-                ids |= {r["id"] for r in self.q("SELECT id FROM items WHERE project_id=? LIMIT ?", (pid, limit))}
+                if since_ts is not None:
+                    ids |= {r["id"] for r in self.q(
+                        "SELECT id FROM items WHERE project_id=? AND created_at>=? ORDER BY created_at DESC LIMIT ?",
+                        (pid, since_ts, limit))}
+                else:
+                    ids |= {r["id"] for r in self.q("SELECT id FROM items WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (pid, limit))}
             rels, idl = [], list(ids)
+            extra_sql = (" AND src NOT LIKE 'usg_%' AND dst NOT LIKE 'usg_%'" if exclude_usage else "") + \
+                        (" AND created_at>=?" if since_ts is not None else "")
+            extra_args = [since_ts] if since_ts is not None else []
             for i in range(0, len(idl), 400):
                 ch = idl[i:i + 400]
-                rels += [dict(r) for r in self.q(f"SELECT src,dst,type FROM relations WHERE src IN ({','.join('?' * len(ch))})", ch)
-                         if r["dst"] in ids]
+                rels += [dict(r) for r in self.q(
+                    f"SELECT src,dst,type FROM relations WHERE src IN ({','.join('?' * len(ch))}){extra_sql}",
+                    ch + extra_args) if r["dst"] in ids]
         else:
-            rels = [dict(r) for r in self.q("SELECT src,dst,type FROM relations LIMIT ?", (limit,))]
+            where, args = [], []
+            if exclude_usage:
+                where.append("src NOT LIKE 'usg_%' AND dst NOT LIKE 'usg_%'")
+            if since_ts is not None:
+                where.append("created_at>=?"); args.append(since_ts)
+            wsql = (" WHERE " + " AND ".join(where)) if where else ""
+            total_edges = self.q(f"SELECT COUNT(*) c FROM relations{wsql}", args)[0]["c"]
+            rels = [dict(r) for r in self.q(
+                f"SELECT src,dst,type FROM relations{wsql} ORDER BY created_at DESC LIMIT ?", args + [limit])]
             ids = {r["src"] for r in rels} | {r["dst"] for r in rels}
-            if not include_items:
-                ids -= {r["id"] for r in self.q("SELECT id FROM items")}
+            if not include_items and ids:
+                idl = list(ids)
+                for b in range(0, len(idl), 500):
+                    ch = idl[b:b + 500]
+                    ids -= {r["id"] for r in self.q(f"SELECT id FROM items WHERE id IN ({','.join('?' * len(ch))})", ch)}
         ids -= self.hidden_ids(list(ids))
         rels = [r for r in rels if r["src"] in ids and r["dst"] in ids]
-        nodes = {i: dict(zip(("type", "name"), self.label(i))) for i in ids}
+        lbls = self.labels(ids)
+        nodes = {i: {"type": lbls[i][0], "name": lbls[i][1]} for i in ids}
         idl = list(ids)
         for b in range(0, len(idl), 500):  # source badges for code entities: path and line
             ch = idl[b:b + 500]
             for r in self.q(f"SELECT id, path, line FROM entities WHERE id IN ({','.join('?' * len(ch))}) AND path IS NOT NULL", ch):
                 nodes[r["id"]].update(path=r["path"], **({"line": r["line"]} if r["line"] else {}))
         out = {"nodes": nodes, "edges": rels}
+        if total_edges is not None:
+            out["total_edges"] = total_edges
+            if total_edges > limit:
+                out["truncated"] = True
         if project:
             c = self.q("SELECT value FROM meta WHERE key=?", (f"codecommit:{self.find_project(project)}",))
             if c:
@@ -1268,12 +1384,17 @@ class Store:
                                 ": nothing to resume, start fresh (handoff() before you stop)."}
             sid = r[0]["id"]
         s = self._session(sid)
+        self.check_project(s["project_id"])
         h = self.q("SELECT id FROM items WHERE session_id=? AND kind='handoff' ORDER BY created_at DESC LIMIT 1", (sid,))
+        if h:
+            self.check_ids(h[0]["id"])
         packet = self.get_item(h[0]["id"])["meta"].get("packet") if h else None
         recent = self.search("", kinds=["checkpoint", "decision", "memory", "fact"], limit=15,
                              max_tokens=max_tokens // 2, **({"project": s["project_id"]} if s["project_id"] else {}))
         in_session = [dict(r) for r in self.q("SELECT id, kind, summary FROM items WHERE session_id=? ORDER BY created_at",
                                              (sid,))]
+        hid = self.hidden_ids([r["id"] for r in in_session])
+        in_session = [r for r in in_session if r["id"] not in hid]
         if agent_id and s["status"] == "handed_off":
             self.x("UPDATE sessions SET status='active', agent_id=?, updated_at=? WHERE id=?", (agent_id, now(), sid))
             self.relate(sid, agent_id, "resumed_by", agent_id=agent_id)
@@ -1390,8 +1511,13 @@ class Store:
 
     def respond_task(self, task_id: str, result: str, status: str = "done", agent_id: str | None = None) -> dict:
         result, found = redact(result)
-        if not self.q("SELECT 1 FROM inbox WHERE id=?", (task_id,)):
+        r = self.q("SELECT from_agent, to_agent, claimed_by FROM inbox WHERE id=?", (task_id,))
+        if not r:
             raise CommonsError(f"unknown task {task_id}")
+        from .auth import PRINCIPAL
+        if PRINCIPAL.get() is not None and r[0]["to_agent"] != "*" and \
+                agent_id not in (r[0]["from_agent"], r[0]["to_agent"], r[0]["claimed_by"]):
+            raise CommonsError(f"task {task_id} is between other agents")
         self.x("UPDATE inbox SET status=?, result=?, claimed_by=COALESCE(claimed_by,?), updated_at=? WHERE id=?",
                (status, result, agent_id, now(), task_id))
         return {"task_id": task_id, "status": status} | ({"redacted": found} if found else {})

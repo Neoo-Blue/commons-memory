@@ -164,7 +164,7 @@ def shortest_path(g: dict, a: str, b: str) -> list[str]:
 
 
 VIEWER_TEMPLATE = """<!doctype html>
-<html lang="en">
+<html lang="en"__THEME_ATTR__>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -189,8 +189,26 @@ VIEWER_TEMPLATE = """<!doctype html>
   --label-text: #f8fafc;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+:root[data-theme="light"] {
+  --bg: #f8fafc;
+  --panel-bg: rgba(255, 255, 255, 0.94);
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --card-bg: #f1f5f9;
+  --card-border: #cbd5e1;
+  --danger: #dc2626;
+  --success: #059669;
+  --edge: #475569;
+  --edge-highlight: #312e81;
+  --label-bg: rgba(255, 255, 255, 0.95);
+  --label-border: rgba(148, 163, 184, 0.9);
+  --label-text: #0f172a;
+}
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #f8fafc;
     --panel-bg: rgba(255, 255, 255, 0.94);
     --border: #e2e8f0;
@@ -242,10 +260,10 @@ input:focus, select:focus { border-color: var(--accent); }
 .tool-icon { display: inline; }
 
 #canvas-container { position: absolute; top: 46px; left: 0; right: 0; bottom: 0; overflow: hidden; }
-#main-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+#main-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 #main-canvas.grabbing { cursor: grabbing; }
 
-#sidebar-toggle { position: fixed; top: 54px; left: 10px; z-index: 90; }
+#sidebar-toggle { flex-shrink: 0; }
 #sidebar { position: fixed; top: 46px; left: 0; bottom: 0; width: 280px; background: var(--panel-bg); backdrop-filter: blur(8px); border-right: 1px solid var(--border); z-index: 80; display: flex; flex-direction: column; transform: translateX(0); transition: transform 0.25s ease; }
 #sidebar.collapsed { transform: translateX(-100%); }
 #sidebar-content { padding: 12px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
@@ -372,6 +390,7 @@ body.presentation #canvas-container { top: 0 !important; }
     <button id="sidebar-toggle" aria-label="Toggle filters sidebar" title="Toggle filters sidebar">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
     </button>
+    <button id="btn-back-overview" class="small" style="display:none" aria-label="Back to cluster overview">All clusters</button>
     <div id="title-badge">__TITLE__</div>
     <div id="graph-stats"></div>
   </div>
@@ -548,7 +567,7 @@ body.presentation #canvas-container { top: 0 !important; }
     entity: '#38bdf8',
     machine: '#f97316', guest: '#3b82f6', service: '#22c55e', system: '#eab308', endpoint: '#a855f7', tunnel: '#ec4899',
     storage: '#14b8a6', database: '#0ea5e9', network: '#64748b', place: '#f59e0b', repo: '#84cc16', directory: '#94a3b8',
-    credential: '#ef4444'
+    credential: '#ef4444', message: '#38bdf8', board: '#fb7185', skill: '#a78bfa', drive_file: '#60a5fa'
   };
 
   const COMM_PALETTE = [
@@ -648,11 +667,13 @@ body.presentation #canvas-container { top: 0 !important; }
   const miniCtx = miniCanvas.getContext('2d');
 
   let ox = 0, oy = 0, sc = 1;
+  let dpr = 1, viewW = 1, viewH = 1, miniW = 160, miniH = 110;
   let layoutMode = 'force';
   let colorMode = 'type';
   let selNode = null;
   let hoverNode = null;
   let focusHops = 0;
+  let focusSet = null;
   let pathMode = false;
   let pathSource = null;
   let pathNodes = null;
@@ -666,12 +687,28 @@ body.presentation #canvas-container { top: 0 !important; }
   let animFrame = null;
   let dragNode = null;
   let panStart = null;
+  let downPos = null;
+  let pointerMoved = false;
   let pinchDist = null;
   let userInteractedCamera = false;
   let layoutSettled = false;
 
+  function rebuildFocusSet() {
+    if (!focusHops || !selNode) { focusSet = null; return; }
+    const s = new Set([selNode.id]);
+    const hop1 = (adj[selNode.id] || []).map(function(e) { return e.target; });
+    hop1.forEach(function(id) { s.add(id); });
+    if (focusHops >= 2) {
+      hop1.forEach(function(id) {
+        (adj[id] || []).forEach(function(e) { s.add(e.target); });
+      });
+    }
+    focusSet = s;
+  }
+
   function getThemeTokens() {
-    const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    const forced = document.documentElement.dataset.theme;
+    const isLight = forced === 'light' || (!forced && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
     if (isLight) {
       return {
         edge: '#475569',
@@ -698,25 +735,18 @@ body.presentation #canvas-container { top: 0 !important; }
     };
   }
 
+  window.addEventListener('message', function(ev) {
+    const d = ev.data;
+    if (d && d.type === 'commons:theme' && (d.theme === 'light' || d.theme === 'dark')) {
+      document.documentElement.dataset.theme = d.theme;
+      draw();
+    }
+  });
+
   function isNodeVisible(n) {
     if (hiddenTypes.has(n.type)) return false;
     if (hiddenComms.has(n.community)) return false;
-    if (focusHops > 0 && selNode) {
-      if (focusHops === 1) {
-        if (n.id !== selNode.id && !adj[selNode.id].some(function(edge) { return edge.target === n.id; })) return false;
-      } else if (focusHops === 2) {
-        if (n.id !== selNode.id) {
-          const direct = adj[selNode.id].map(function(edge) { return edge.target; });
-          if (!direct.includes(n.id)) {
-            let found2 = false;
-            for (let i = 0; i < direct.length; i++) {
-              if (adj[direct[i]].some(function(edge) { return edge.target === n.id; })) { found2 = true; break; }
-            }
-            if (!found2) return false;
-          }
-        }
-      }
-    }
+    if (focusSet && !focusSet.has(n.id)) return false;
     return true;
   }
 
@@ -889,25 +919,19 @@ body.presentation #canvas-container { top: 0 !important; }
   }
 
   function stepPhysics() {
-    if (layoutMode === 'radial') {
+    if (layoutMode === 'radial' || layoutMode === 'layered') {
       let moved = false;
       nodes.filter(isNodeVisible).forEach(function(n) {
         if (n.targetX !== null && n !== dragNode) {
-          n.x += (n.targetX - n.x) * 0.14;
-          n.y += (n.targetY - n.y) * 0.14;
-          moved = true;
-        }
-      });
-      return moved;
-    }
-
-    if (layoutMode === 'layered') {
-      let moved = false;
-      nodes.filter(isNodeVisible).forEach(function(n) {
-        if (n.targetX !== null && n !== dragNode) {
-          n.x += (n.targetX - n.x) * 0.14;
-          n.y += (n.targetY - n.y) * 0.14;
-          moved = true;
+          const dx = n.targetX - n.x, dy = n.targetY - n.y;
+          if (Math.abs(dx) > 0.25 || Math.abs(dy) > 0.25) {
+            n.x += dx * 0.14;
+            n.y += dy * 0.14;
+            moved = true;
+          } else {
+            n.x = n.targetX;
+            n.y = n.targetY;
+          }
         }
       });
       return moved;
@@ -1028,8 +1052,8 @@ body.presentation #canvas-container { top: 0 !important; }
 
     visNodes.forEach(function(n) {
       if (n === dragNode) return;
-      n.vx -= n.x * 0.0001;
-      n.vy -= n.y * 0.0001;
+      n.vx -= n.x * 0.01;
+      n.vy -= n.y * 0.01;
       n.vx *= 0.74;
       n.vy *= 0.74;
       n.x += Math.max(-28, Math.min(28, n.vx * alpha));
@@ -1063,8 +1087,8 @@ body.presentation #canvas-container { top: 0 !important; }
   }
 
   function draw() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, viewW, viewH);
 
     if (nodes.length === 0) {
       document.getElementById('empty-message').style.display = 'block';
@@ -1072,7 +1096,7 @@ body.presentation #canvas-container { top: 0 !important; }
     }
     document.getElementById('empty-message').style.display = 'none';
 
-    ctx.setTransform(sc, 0, 0, sc, mainCanvas.width / 2 + ox, mainCanvas.height / 2 + oy);
+    ctx.setTransform(sc * dpr, 0, 0, sc * dpr, (viewW / 2 + ox) * dpr, (viewH / 2 + oy) * dpr);
 
     const hasActiveFocus = selNode || hoverNode || pathNodes || traceNodes;
     const highlightIds = new Set();
@@ -1108,7 +1132,7 @@ body.presentation #canvas-container { top: 0 !important; }
 
       let alphaEdge = tokens.edgeAlpha;
       let strokeCol = tokens.edge;
-      let strokeWidth = 1.2;
+      let strokeWidth = e.weight ? Math.min(6, 1 + Math.log2(e.weight + 1)) : 1.2;
 
       if (isPathEdge) {
         alphaEdge = 0.95;
@@ -1118,7 +1142,7 @@ body.presentation #canvas-container { top: 0 !important; }
         if (isConnected) {
           alphaEdge = tokens.edgeHighlightAlpha;
           strokeCol = tokens.edgeHighlight;
-          strokeWidth = 1.8;
+          strokeWidth = Math.max(strokeWidth, 1.8);
         } else {
           alphaEdge = 0.05;
         }
@@ -1167,8 +1191,8 @@ body.presentation #canvas-container { top: 0 !important; }
       }
     });
 
-    // Screen-space labels with collision grid and theme background pill
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Screen-space labels with exact pill bounding-box collision and theme background pill
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const labelCandidates = [];
     nodes.forEach(function(n) {
@@ -1184,16 +1208,18 @@ body.presentation #canvas-container { top: 0 !important; }
       if (isSel || isHover) priority = 5;
       else if (isPathNode) priority = 4;
       else if (isNbr) priority = 3;
-      else if (isTopRank) priority = 2;
+      else if (isTopRank || n.size) priority = 2;  // a cluster bubble is always named: the overview is only bubbles
       else if (sc > 1.2) priority = 1;
 
       if (priority > 0) labelCandidates.push({ node: n, priority: priority });
     });
 
-    labelCandidates.sort(function(a, b) { return b.priority - a.priority; });
+    // the biggest and best-connected first, so a hub is named before the leaves around it
+    labelCandidates.sort(function(a, b) {
+      return (b.priority - a.priority) || ((b.node.size || 0) - (a.node.size || 0)) || (b.node.degree - a.node.degree);
+    });
 
-    const occCells = new Set();
-    const cellW = 100, cellH = 24;
+    const placedBoxes = [];
 
     ctx.font = '500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.textAlign = 'left';
@@ -1201,20 +1227,9 @@ body.presentation #canvas-container { top: 0 !important; }
 
     labelCandidates.forEach(function(item) {
       const n = item.node;
-      const sx = n.x * sc + ox + mainCanvas.width / 2;
-      const sy = n.y * sc + oy + mainCanvas.height / 2;
-      if (sx < -80 || sx > mainCanvas.width + 80 || sy < -30 || sy > mainCanvas.height + 30) return;
-
-      const gx = Math.floor(sx / cellW), gy = Math.floor(sy / cellH);
-      const key = gx + ',' + gy;
-      if (item.priority < 4 && (occCells.has(key) || occCells.has((gx + 1) + ',' + gy) || occCells.has((gx - 1) + ',' + gy))) return;
-
-      occCells.add(key);
-      occCells.add((gx + 1) + ',' + gy);
-
-      let textAlpha = 1.0;
-      if (hasActiveFocus && !highlightIds.has(n.id)) textAlpha = 0.2;
-      ctx.globalAlpha = textAlpha;
+      const sx = n.x * sc + ox + viewW / 2;
+      const sy = n.y * sc + oy + viewH / 2;
+      if (sx < -80 || sx > viewW + 80 || sy < -30 || sy > viewH + 30) return;
 
       const nodeScreenR = (4 + (n.size ? Math.min(26, 3 + Math.sqrt(n.size) * 2.2) : Math.min(10, Math.sqrt(n.degree) * 2) * (n.outside ? 0.6 : 1))) * sc;
       let lx = sx + Math.max(nodeScreenR + 4, 10);
@@ -1226,13 +1241,27 @@ body.presentation #canvas-container { top: 0 !important; }
       let pillX = lx - 3;
       const pillY = ly - pillH / 2;
 
-      if (pillX + pillW > mainCanvas.width - 6) {
+      if (pillX + pillW > viewW - 6) {
         const leftLx = sx - Math.max(nodeScreenR + 4, 10) - textW;
         if (leftLx - 4 >= 6) {
           lx = leftLx;
           pillX = leftLx - 4;
         }
       }
+
+      const pad = 3;
+      const x1 = pillX - pad, y1 = pillY - pad, x2 = pillX + pillW + pad, y2 = pillY + pillH + pad;
+      if (item.priority < 4) {
+        for (let i = 0; i < placedBoxes.length; i++) {
+          const b = placedBoxes[i];
+          if (x1 < b.x2 && x2 > b.x1 && y1 < b.y2 && y2 > b.y1) return;
+        }
+      }
+      placedBoxes.push({ x1: x1, y1: y1, x2: x2, y2: y2 });
+
+      let textAlpha = 1.0;
+      if (hasActiveFocus && !highlightIds.has(n.id)) textAlpha = 0.2;
+      ctx.globalAlpha = textAlpha;
 
       ctx.beginPath();
       ctx.moveTo(pillX + 3, pillY);
@@ -1256,8 +1285,8 @@ body.presentation #canvas-container { top: 0 !important; }
   }
 
   function drawMinimap() {
-    miniCtx.setTransform(1, 0, 0, 1, 0, 0);
-    miniCtx.clearRect(0, 0, miniCanvas.width, miniCanvas.height);
+    miniCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    miniCtx.clearRect(0, 0, miniW, miniH);
 
     const vis = nodes.filter(isNodeVisible);
     if (!vis.length) return;
@@ -1273,10 +1302,10 @@ body.presentation #canvas-container { top: 0 !important; }
     const pad = 120;
     minX -= pad; maxX += pad; minY -= pad; maxY += pad;
     const w = maxX - minX, h = maxY - minY;
-    const ms = Math.min(miniCanvas.width / w, miniCanvas.height / h);
+    const ms = Math.min(miniW / w, miniH / h);
 
-    const offX = (miniCanvas.width - w * ms) / 2 - minX * ms;
-    const offY = (miniCanvas.height - h * ms) / 2 - minY * ms;
+    const offX = (miniW - w * ms) / 2 - minX * ms;
+    const offY = (miniH - h * ms) / 2 - minY * ms;
 
     vis.forEach(function(n) {
       const mx = n.x * ms + offX;
@@ -1285,10 +1314,10 @@ body.presentation #canvas-container { top: 0 !important; }
       miniCtx.fillRect(mx - 1, my - 1, 2, 2);
     });
 
-    const vLeft = (-mainCanvas.width / 2 - ox) / sc;
-    const vRight = (mainCanvas.width / 2 - ox) / sc;
-    const vTop = (-mainCanvas.height / 2 - oy) / sc;
-    const vBottom = (mainCanvas.height / 2 - oy) / sc;
+    const vLeft = (-viewW / 2 - ox) / sc;
+    const vRight = (viewW / 2 - ox) / sc;
+    const vTop = (-viewH / 2 - oy) / sc;
+    const vBottom = (viewH / 2 - oy) / sc;
 
     const rx = vLeft * ms + offX;
     const ry = vTop * ms + offY;
@@ -1303,14 +1332,24 @@ body.presentation #canvas-container { top: 0 !important; }
   }
 
   function renderLoop() {
-    stepPhysics();
+    animFrame = null;
+    const moving = stepPhysics();
     draw();
-    animFrame = requestAnimationFrame(renderLoop);
+    if (moving || dragNode) {
+      animFrame = requestAnimationFrame(renderLoop);
+    }
+  }
+
+  function scheduleLoop() {
+    if (animFrame === null) {
+      animFrame = requestAnimationFrame(renderLoop);
+    }
   }
 
   function reheat() {
     alpha = Math.max(alpha, 0.55);
     layoutSettled = false;
+    scheduleLoop();
   }
 
   function fitCamera() {
@@ -1327,8 +1366,8 @@ body.presentation #canvas-container { top: 0 !important; }
     const minX = xs[lo], maxX = xs[hi], minY = ys[lo], maxY = ys[hi];
     const gw = Math.max(maxX - minX, 1);
     const gh = Math.max(maxY - minY, 1);
-    const availW = mainCanvas.width * 0.84;
-    const availH = mainCanvas.height * 0.84;
+    const availW = viewW * 0.84;
+    const availH = viewH * 0.84;
     sc = Math.min(availW / gw, availH / gh);
     sc = Math.max(0.04, Math.min(sc, 3.0));
     const cx = (minX + maxX) / 2;
@@ -1344,10 +1383,15 @@ body.presentation #canvas-container { top: 0 !important; }
   }
 
   function resize() {
-    mainCanvas.width = mainCanvas.clientWidth;
-    mainCanvas.height = mainCanvas.clientHeight;
-    miniCanvas.width = miniCanvas.clientWidth;
-    miniCanvas.height = miniCanvas.clientHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    viewW = mainCanvas.clientWidth || 1;
+    viewH = mainCanvas.clientHeight || 1;
+    mainCanvas.width = Math.round(viewW * dpr);
+    mainCanvas.height = Math.round(viewH * dpr);
+    miniW = miniCanvas.clientWidth || 160;
+    miniH = miniCanvas.clientHeight || 110;
+    miniCanvas.width = Math.round(miniW * dpr);
+    miniCanvas.height = Math.round(miniH * dpr);
     if (!userInteractedCamera) {
       fitCamera();
     } else {
@@ -1381,8 +1425,8 @@ body.presentation #canvas-container { top: 0 !important; }
     const rect = mainCanvas.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
-    const wx = (mx - mainCanvas.width / 2 - ox) / sc;
-    const wy = (my - mainCanvas.height / 2 - oy) / sc;
+    const wx = (mx - viewW / 2 - ox) / sc;
+    const wy = (my - viewH / 2 - oy) / sc;
 
     let hit = null;
     let minDist = Infinity;
@@ -1415,10 +1459,12 @@ body.presentation #canvas-container { top: 0 !important; }
     if (!n) {
       document.getElementById('detail-panel').classList.remove('open');
       focusHops = 0;
+      rebuildFocusSet();
       updateFocusBtn();
       draw();
       return;
     }
+    rebuildFocusSet();
 
     document.getElementById('detail-title').textContent = n.name;
     document.getElementById('detail-subtitle').textContent = n.type + ' (community ' + n.community + ')';
@@ -1614,6 +1660,7 @@ body.presentation #canvas-container { top: 0 !important; }
   function toggleFocus() {
     if (!selNode) return;
     focusHops = (focusHops + 1) % 3;
+    rebuildFocusSet();
     updateFocusBtn();
     reheat();
     if (!userInteractedCamera) fitCamera();
@@ -1680,6 +1727,7 @@ body.presentation #canvas-container { top: 0 !important; }
     commList.forEach(function(c) {
       const chip = document.createElement('div');
       chip.className = 'chip';
+      chip.dataset.commId = String(c.id);
       const col = COMM_PALETTE[c.id % COMM_PALETTE.length];
       chip.innerHTML = '<span class="chip-dot" style="background:' + col + '"></span>' +
                        '<span>' + esc(c.label) + '</span><span class="chip-count">' + c.size + '</span>';
@@ -1710,7 +1758,20 @@ body.presentation #canvas-container { top: 0 !important; }
       edgeChips.appendChild(chip);
     });
 
-    document.getElementById('graph-stats').textContent = nodes.length + ' nodes · ' + edges.length + ' edges · ' + commList.length + ' communities';
+    const nodeLabel = G.total_nodes ? (nodes.length + ' clusters (' + G.total_nodes + ' nodes)') : (nodes.length + ' nodes');
+    const truncLabel = G.truncated && G.total_edges ? (' · latest ' + edges.length + ' of ' + G.total_edges + ' links') : '';
+    document.getElementById('graph-stats').textContent = nodeLabel + ' · ' + edges.length + ' edges · ' + commList.length + ' communities' + truncLabel;
+    const backBtn = document.getElementById('btn-back-overview');
+    if (backBtn) {
+      const curUrl = new URL(window.location.href);
+      if (curUrl.searchParams.has('community')) {
+        backBtn.style.display = 'inline-flex';
+        backBtn.onclick = function() {
+          curUrl.searchParams.delete('community');
+          window.location.href = curUrl.toString();
+        };
+      }
+    }
     loadSavedViewsDropdown();
   }
 
@@ -1815,11 +1876,15 @@ body.presentation #canvas-container { top: 0 !important; }
 
     if (v.selNodeId && nodeMap[v.selNodeId]) selectNode(nodeMap[v.selNodeId]);
     else selectNode(null);
+    rebuildFocusSet();
 
     // Update chip styling
     document.querySelectorAll('#type-chips .chip').forEach(function(el) {
       const type = el.children[1].textContent;
       el.classList.toggle('dim', hiddenTypes.has(type));
+    });
+    document.querySelectorAll('#comm-chips .chip').forEach(function(el) {
+      el.classList.toggle('dim', hiddenComms.has(Number(el.dataset.commId)));
     });
     document.querySelectorAll('#edge-chips .chip').forEach(function(el) {
       const type = el.children[0].textContent;
@@ -1930,6 +1995,8 @@ body.presentation #canvas-container { top: 0 !important; }
   // Mouse / Canvas Events
   mainCanvas.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
+    downPos = { x: e.clientX, y: e.clientY };
+    pointerMoved = false;
     const hit = findNodeAt(e.clientX, e.clientY);
     if (hit) {
       dragNode = hit;
@@ -1942,11 +2009,14 @@ body.presentation #canvas-container { top: 0 !important; }
   });
 
   window.addEventListener('mousemove', function(e) {
+    if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
+      pointerMoved = true;
+    }
     if (dragNode) {
       const rect = mainCanvas.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      dragNode.x = (mx - mainCanvas.width / 2 - ox) / sc;
-      dragNode.y = (my - mainCanvas.height / 2 - oy) / sc;
+      dragNode.x = (mx - viewW / 2 - ox) / sc;
+      dragNode.y = (my - viewH / 2 - oy) / sc;
       dragNode.vx = 0; dragNode.vy = 0;
       reheat();
       draw();
@@ -1965,6 +2035,7 @@ body.presentation #canvas-container { top: 0 !important; }
   });
 
   window.addEventListener('mouseup', function(e) {
+    downPos = null;
     if (dragNode) { dragNode = null; }
     if (panStart) {
       panStart = null;
@@ -1973,6 +2044,7 @@ body.presentation #canvas-container { top: 0 !important; }
   });
 
   mainCanvas.addEventListener('click', function(e) {
+    if (pointerMoved) { pointerMoved = false; return; }
     const hit = findNodeAt(e.clientX, e.clientY);
     selectNode(hit);
   });
@@ -1981,8 +2053,8 @@ body.presentation #canvas-container { top: 0 !important; }
     e.preventDefault();
     userInteractedCamera = true;
     const rect = mainCanvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left - mainCanvas.width / 2;
-    const my = e.clientY - rect.top - mainCanvas.height / 2;
+    const mx = e.clientX - rect.left - viewW / 2;
+    const my = e.clientY - rect.top - viewH / 2;
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
     const newSc = Math.max(0.04, Math.min(6.0, sc * factor));
 
@@ -1996,6 +2068,8 @@ body.presentation #canvas-container { top: 0 !important; }
   mainCanvas.addEventListener('touchstart', function(e) {
     if (e.touches.length === 1) {
       const touch = e.touches[0];
+      downPos = { x: touch.clientX, y: touch.clientY };
+      pointerMoved = false;
       const hit = findNodeAt(touch.clientX, touch.clientY);
       if (hit) {
         dragNode = hit;
@@ -2007,6 +2081,7 @@ body.presentation #canvas-container { top: 0 !important; }
     } else if (e.touches.length === 2) {
       dragNode = null;
       panStart = null;
+      pointerMoved = true;
       userInteractedCamera = true;
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -2015,13 +2090,15 @@ body.presentation #canvas-container { top: 0 !important; }
   }, { passive: true });
 
   mainCanvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
     if (e.touches.length === 1) {
       const touch = e.touches[0];
+      if (downPos && Math.hypot(touch.clientX - downPos.x, touch.clientY - downPos.y) > 4) pointerMoved = true;
       if (dragNode) {
         const rect = mainCanvas.getBoundingClientRect();
         const mx = touch.clientX - rect.left, my = touch.clientY - rect.top;
-        dragNode.x = (mx - mainCanvas.width / 2 - ox) / sc;
-        dragNode.y = (my - mainCanvas.height / 2 - oy) / sc;
+        dragNode.x = (mx - viewW / 2 - ox) / sc;
+        dragNode.y = (my - viewH / 2 - oy) / sc;
         reheat();
         draw();
       } else if (panStart) {
@@ -2035,14 +2112,20 @@ body.presentation #canvas-container { top: 0 !important; }
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const factor = dist / pinchDist;
-      sc = Math.max(0.04, Math.min(6.0, sc * factor));
+      const rect = mainCanvas.getBoundingClientRect();
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left - viewW / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top - viewH / 2;
+      const newSc = Math.max(0.04, Math.min(6.0, sc * (dist / pinchDist)));
+      ox = midX - (midX - ox) * (newSc / sc);
+      oy = midY - (midY - oy) * (newSc / sc);
+      sc = newSc;
       pinchDist = dist;
       draw();
     }
-  }, { passive: true });
+  }, { passive: false });
 
   mainCanvas.addEventListener('touchend', function(e) {
+    downPos = null;
     dragNode = null;
     panStart = null;
     pinchDist = null;
@@ -2068,9 +2151,9 @@ body.presentation #canvas-container { top: 0 !important; }
     const pad = 120;
     minX -= pad; maxX += pad; minY -= pad; maxY += pad;
     const w = maxX - minX, h = maxY - minY;
-    const ms = Math.min(miniCanvas.width / w, miniCanvas.height / h);
-    const offX = (miniCanvas.width - w * ms) / 2 - minX * ms;
-    const offY = (miniCanvas.height - h * ms) / 2 - minY * ms;
+    const ms = Math.min(miniW / w, miniH / h);
+    const offX = (miniW - w * ms) / 2 - minX * ms;
+    const offY = (miniH - h * ms) / 2 - minY * ms;
 
     const targetWx = (mx - offX) / ms;
     const targetWy = (my - offY) / ms;
@@ -2169,7 +2252,7 @@ body.presentation #canvas-container { top: 0 !important; }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(selNode.id).then(function() { showToast('Copied ID!'); });
     } else {
-      showToast('Copied: ' + selNode.id);
+      showToast('Copy is not available here: ' + selNode.id);
     }
   };
   document.getElementById('btn-path-mode').onclick = function() {
@@ -2197,8 +2280,21 @@ body.presentation #canvas-container { top: 0 !important; }
   document.getElementById('btn-open-commons').onclick = function() {
     if (!selNode) return;
     if (selNode.type === 'cluster') { openCluster(selNode); return; }
-    window.parent.postMessage({ type: 'commons:open', id: selNode.id }, '*');
-    showToast('Sent commons:open to parent');
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'commons:open', id: selNode.id, nodeType: selNode.type, name: selNode.name }, '*');
+      showToast('Opening in Commons...');
+      return;
+    }
+    const id = selNode.id, t = selNode.type;
+    let target = '/#Memory?drawer=' + encodeURIComponent('mem:' + id);
+    if (t === 'agent' || id.startsWith('agt_')) target = '/#Agents?drawer=' + encodeURIComponent('agent:' + (selNode.name || id));
+    else if (t === 'job' || id.startsWith('job_')) target = '/#Orchestration?drawer=' + encodeURIComponent('job:' + id);
+    else if (t === 'board' || id.startsWith('brd_')) target = '/#Overview?drawer=' + encodeURIComponent('board:' + id);
+    else if (t === 'skill' || id.startsWith('skl_')) target = '/#Agents?drawer=' + encodeURIComponent('skill:' + (selNode.name || id));
+    else if (['machine', 'guest', 'service', 'system', 'endpoint', 'tunnel', 'storage', 'database', 'network'].includes(t)) {
+      target = '/#Infrastructure?drawer=' + encodeURIComponent('infra:' + id);
+    }
+    window.location.href = target;
   };
 
   document.getElementById('btn-all-types').onclick = function() {
@@ -2243,13 +2339,12 @@ body.presentation #canvas-container { top: 0 !important; }
   function exportPNG() {
     const tokens = getThemeTokens();
     const offCanvas = document.createElement('canvas');
-    offCanvas.width = mainCanvas.width * 2;
-    offCanvas.height = mainCanvas.height * 2;
+    offCanvas.width = viewW * 2;
+    offCanvas.height = viewH * 2;
     const octx = offCanvas.getContext('2d');
-    octx.scale(2, 2);
     octx.fillStyle = tokens.canvasBg;
-    octx.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
-    octx.drawImage(mainCanvas, 0, 0);
+    octx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+    octx.drawImage(mainCanvas, 0, 0, offCanvas.width, offCanvas.height);
 
     const a = document.createElement('a');
     a.download = 'commons-graph.png';
@@ -2260,7 +2355,7 @@ body.presentation #canvas-container { top: 0 !important; }
 
   function exportSVG() {
     const tokens = getThemeTokens();
-    const w = mainCanvas.width, h = mainCanvas.height;
+    const w = viewW, h = viewH;
     let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">';
     svg += '<rect width="100%" height="100%" fill="' + tokens.canvasBg + '"/>';
     svg += '<g transform="translate(' + (w / 2 + ox) + ',' + (h / 2 + oy) + ') scale(' + sc + ')">';
@@ -2302,7 +2397,7 @@ body.presentation #canvas-container { top: 0 !important; }
     stepPhysics();
   }
   fitCamera();
-  renderLoop();
+  scheduleLoop();
 })();
 </script>
 </body>
@@ -2342,8 +2437,8 @@ def overview(g: dict, max_nodes: int = 400, max_clusters: int = 60) -> dict:
         if x is not None and y is not None and x != y:
             agg[tuple(sorted((str(x), str(y))))] += 1
     edges = [{"src": f"cluster:{x}", "dst": f"cluster:{y}", "type": "links", "weight": n} for (x, y), n in agg.items()]
-    return analyze({"nodes": nodes, "edges": edges, "scope": "overview", "total_nodes": len(a["nodes"]), "commit": g.get("commit"),
-                    "root": g.get("root")})
+    meta = {k: g[k] for k in ("commit", "root", "total_edges", "truncated") if k in g and g[k] is not None}
+    return analyze({"nodes": nodes, "edges": edges, "scope": "overview", "total_nodes": len(a["nodes"]), **meta})
 
 
 def community(g: dict, cluster: str, limit: int = 600) -> dict:
@@ -2366,11 +2461,12 @@ def community(g: dict, cluster: str, limit: int = 600) -> dict:
                     "commit": g.get("commit")})
 
 
-def render(g: dict, title: str = "Commons graph") -> str:
+def render(g: dict, title: str = "Commons graph", theme: str | None = None) -> str:
     analyzed = analyze(g) if "communities" not in g or not g.get("nodes") else g
     data = json.dumps(analyzed).replace("</", "<\\/")
     safe_title = html.escape(title)
-    return VIEWER_TEMPLATE.replace("__TITLE__", safe_title).replace("__DATA__", data)
+    theme_attr = f' data-theme="{theme}"' if theme in ("light", "dark") else ""
+    return VIEWER_TEMPLATE.replace("__THEME_ATTR__", theme_attr).replace("__TITLE__", safe_title).replace("__DATA__", data)
 
 
 __all__ = ["analyze", "shortest_path", "overview", "community", "render"]

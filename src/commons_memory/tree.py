@@ -20,7 +20,84 @@ from .store import CommonsError, Store
 GROUPS = [("jobs", "Jobs & tasks"), ("workflows", "Workflows"), ("sessions", "Sessions"), ("kb", "Knowledge base"),
           ("code", "Code"), ("schedules", "Schedules"), ("skills", "Skills used"), ("memories", "Memories"),
           ("leftovers", "Leftovers")]
-ROOTS = {"workspace": "Workspace", "agents": "Agents", "skills": "Skill library"}
+ROOTS = {"workspace": "Workspace", "agents": "Agents", "flows": "Team flows", "skills": "Skill library"}
+INTERNAL_AGENTS = {"cli", "user", "librarian", "commons", "dashboard-user", "reviewer"}
+LEAF_PREFIXES = ("itm:", "sym:", "skv:", "fedge:")
+
+
+def _real_agents(s: Store) -> tuple[dict[str, dict], dict[str, str]]:
+    """Real team agents (excluding internal/provider rows): ({id: row}, {id_or_name: id})."""
+    by_id: dict[str, dict] = {}
+    lookup: dict[str, str] = {}
+    for r in s.q("SELECT id, name, display, platform FROM agents WHERE name NOT LIKE 'provider:%' ORDER BY created_at, name"):
+        if r["name"] in INTERNAL_AGENTS or str(r["name"]).startswith("cf:"):
+            continue
+        d = dict(r)
+        by_id[d["id"]] = d
+        lookup[d["id"]] = d["id"]
+        lookup[d["name"]] = d["id"]
+    return by_id, lookup
+
+
+def team_flows(s: Store) -> dict:
+    """Directed agent-to-agent relationships built from real delegations, splits, cross-reviews and messages."""
+    by_id, lookup = _real_agents(s)
+    res = lambda x: lookup.get(x) if x else None  # noqa: E731
+    delegates: dict[str, Counter] = {}
+    reports: dict[str, Counter] = {}
+    reviews: dict[str, dict[str, list[int]]] = {}
+    reviewed_by: dict[str, dict[str, list[int]]] = {}
+    msg_out: dict[str, Counter] = {}
+    msg_in: dict[str, Counter] = {}
+
+    # 1. Job submissions -> subtask assignees/executors
+    for r in s.q("SELECT j.submitted_by AS src, COALESCE(st.claimed_by, st.assigned_agent) AS dst, COUNT(*) AS n "
+                 "FROM subtasks st JOIN jobs j ON j.id=st.job_id "
+                 "WHERE j.submitted_by IS NOT NULL AND COALESCE(st.claimed_by, st.assigned_agent) IS NOT NULL "
+                 "GROUP BY src, dst"):
+        a, b = res(r["src"]), res(r["dst"])
+        if a and b and a != b:
+            delegates.setdefault(a, Counter())[b] += r["n"]
+            reports.setdefault(b, Counter())[a] += r["n"]
+
+    # 2. Subtask splits (stage lead / parent executor -> child executor)
+    for r in s.q("SELECT COALESCE(p.claimed_by, p.assigned_agent) AS src, "
+                 "COALESCE(c.claimed_by, c.assigned_agent) AS dst, COUNT(*) AS n "
+                 "FROM relations rel JOIN subtasks c ON c.id=rel.src JOIN subtasks p ON p.id=rel.dst "
+                 "WHERE rel.type='split_from' GROUP BY src, dst"):
+        a, b = res(r["src"]), res(r["dst"])
+        if a and b and a != b:
+            delegates.setdefault(a, Counter())[b] += r["n"]
+            reports.setdefault(b, Counter())[a] += r["n"]
+
+    # 3. Cross-review gates (reviewer -> author, tracking approve/reject verdicts)
+    for r in s.q("SELECT COALESCE(g.claimed_by, g.assigned_agent) AS rev, "
+                 "COALESCE(t.claimed_by, t.assigned_agent) AS auth, g.verdict, COUNT(*) AS n "
+                 "FROM subtasks g JOIN subtasks t ON t.id=g.gate_of "
+                 "WHERE g.gate_of IS NOT NULL GROUP BY rev, auth, g.verdict"):
+        a, b = res(r["rev"]), res(r["auth"])
+        if a and b and a != b:
+            v = reviews.setdefault(a, {}).setdefault(b, [0, 0, 0])
+            rb = reviewed_by.setdefault(b, {}).setdefault(a, [0, 0, 0])
+            v[0] += r["n"]; rb[0] += r["n"]
+            if r["verdict"] == "approve":
+                v[1] += r["n"]; rb[1] += r["n"]
+            elif r["verdict"] == "reject":
+                v[2] += r["n"]; rb[2] += r["n"]
+
+    # 4. Direct messages / questions between agents
+    try:
+        for r in s.q("SELECT sender, recipient, COUNT(*) AS n FROM messages "
+                     "WHERE sender IS NOT NULL AND recipient IS NOT NULL AND recipient<>'*' GROUP BY sender, recipient"):
+            a, b = res(r["sender"]), res(r["recipient"])
+            if a and b and a != b:
+                msg_out.setdefault(a, Counter())[b] += r["n"]
+                msg_in.setdefault(b, Counter())[a] += r["n"]
+    except Exception:  # noqa: BLE001 - messages table is created on first Messaging() use
+        pass
+
+    return {"agents": by_id, "delegates": delegates, "reports": reports,
+            "reviews": reviews, "reviewed_by": reviewed_by, "msg_out": msg_out, "msg_in": msg_in}
 
 
 def N(key: str, label: str, kind: str, rid: str | None = None, **extra) -> dict:
@@ -31,6 +108,12 @@ class Tree:
     def __init__(self, store: Store):
         self.s = store
         self._labels: dict[str, str] = {}
+        self._flows_cache: dict | None = None
+
+    def _flows(self) -> dict:
+        if self._flows_cache is None:
+            self._flows_cache = team_flows(self.s)
+        return self._flows_cache
 
     # ------------------------------------------------------------------ children
     def node(self, key: str) -> dict:
@@ -55,6 +138,62 @@ class Tree:
             return [N(f"agt:{r['id']}", r["name"], "agent", r["id"], platform=r["platform"])
                     for r in s.q("SELECT id, name, platform FROM agents WHERE name NOT LIKE 'provider:%' "
                                  "ORDER BY created_at, name")]
+        if key == "flows":
+            f = self._flows()
+            def score(aid: str) -> int:
+                return (sum(f["delegates"].get(aid, {}).values()) + sum(f["reports"].get(aid, {}).values())
+                        + sum(v[0] for v in f["reviews"].get(aid, {}).values())
+                        + sum(v[0] for v in f["reviewed_by"].get(aid, {}).values())
+                        + sum(f["msg_out"].get(aid, {}).values()) + sum(f["msg_in"].get(aid, {}).values()))
+            ordered = sorted(f["agents"].values(), key=lambda a: (-score(a["id"]), a["name"]))
+            out = []
+            for a in ordered:
+                aid = a["id"]
+                grps = sum(bool(x) for x in (
+                    f["delegates"].get(aid), f["reports"].get(aid), f["reviews"].get(aid),
+                    f["reviewed_by"].get(aid), set(f["msg_out"].get(aid, {})) | set(f["msg_in"].get(aid, {}))))
+                lbl = a.get("display") or a["name"]
+                out.append(N(f"fagt:{aid}", lbl, "agent", aid, agent_name=a["name"], count=grps))
+            return out
+        if kind == "fagt":
+            f = self._flows()
+            out = []
+            specs = [
+                ("delegates", "Delegates work to", len(f["delegates"].get(rest, {}))),
+                ("reports", "Receives work from", len(f["reports"].get(rest, {}))),
+                ("reviews", "Reviews work of", len(f["reviews"].get(rest, {}))),
+                ("reviewed_by", "Reviewed by", len(f["reviewed_by"].get(rest, {}))),
+                ("messages", "Messages and asks", len(set(f["msg_out"].get(rest, {})) | set(f["msg_in"].get(rest, {})))),
+            ]
+            for gk, glabel, cnt in specs:
+                if cnt:
+                    out.append(N(f"fgrp:{rest}:{gk}", glabel, "group", None, count=cnt))
+            return out
+        if kind == "fgrp":
+            aid, _, gk = rest.partition(":")
+            f = self._flows()
+            agents = f["agents"]
+            name_of = lambda x: (agents[x].get("display") or agents[x]["name"]) if x in agents else s.label(x)[1]  # noqa: E731
+            handle_of = lambda x: agents[x]["name"] if x in agents else s.label(x)[1]  # noqa: E731
+            if gk in ("delegates", "reports"):
+                rows = sorted(f[gk].get(aid, {}).items(), key=lambda kv: (-kv[1], name_of(kv[0])))
+                return [N(f"fedge:{aid}:{gk}:{other}", f"{name_of(other)} · {n} task{'s' if n != 1 else ''}",
+                          "agent", other, agent_name=handle_of(other), count=0) for other, n in rows]
+            if gk in ("reviews", "reviewed_by"):
+                rows = sorted(f[gk].get(aid, {}).items(), key=lambda kv: (-kv[1][0], name_of(kv[0])))
+                out = []
+                for other, (tot, ok, rej) in rows:
+                    detail = f" ({ok} ok, {rej} rej)" if (ok or rej) else ""
+                    out.append(N(f"fedge:{aid}:{gk}:{other}", f"{name_of(other)} · {tot} review{'s' if tot != 1 else ''}{detail}",
+                                 "agent", other, agent_name=handle_of(other), count=0))
+                return out
+            if gk == "messages":
+                peers = set(f["msg_out"].get(aid, {})) | set(f["msg_in"].get(aid, {}))
+                rows = sorted(peers, key=lambda o: (-(f["msg_out"].get(aid, {}).get(o, 0) + f["msg_in"].get(aid, {}).get(o, 0)), name_of(o)))
+                return [N(f"fedge:{aid}:msg:{o}",
+                          f"{name_of(o)} · {f['msg_out'].get(aid, {}).get(o, 0)} sent / {f['msg_in'].get(aid, {}).get(o, 0)} recv",
+                          "agent", o, agent_name=handle_of(o), count=0) for o in rows]
+            return []
         if key == "skills":
             return [N(f"skl:{r['id']}", f"{r['name']} v{r['active_version'] or '-'}", "skill", r["id"])
                     for r in s.q("SELECT id, name, active_version FROM skills ORDER BY created_at, name")]

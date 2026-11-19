@@ -17,7 +17,7 @@ function shellLink(t){const on=t==tab;return `<a href="#${encodeURI(t)}" class="
 function tabs(){
   const cur=wsOf(tab);
   const WS=wsList(),opened=shellOpenState();
-  $("#tabs").innerHTML=WS.map(([name,ico,pages])=>{const open=name==cur[0]||opened[name];return `<div class="ws ${name==cur[0]?"cur":""}"><button class="ws-h" aria-expanded="${open}" onclick="shellToggle(${J(name)})"><svg viewBox="0 0 24 24" aria-hidden="true">${ico}</svg><span>${name}</span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>${open?`<div class="ws-items">${pages.map(shellLink).join("")}</div>`:""}</div>`}).join("");
+  $("#tabs").innerHTML=WS.map(([name,ico,pages])=>{const open=(name in opened)?opened[name]:name==cur[0];return `<div class="ws ${name==cur[0]?"cur":""}"><button class="ws-h" aria-expanded="${open}" onclick="shellToggle(${J(name)})"><svg viewBox="0 0 24 24" aria-hidden="true">${ico}</svg><span>${name}</span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>${open?`<div class="ws-items">${pages.map(shellLink).join("")}</div>`:""}</div>`}).join("");
   const c=$("#crumbs");if(c)c.innerHTML=`<span class="ws-name">${cur[0]}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>`;
   $("#ttl").textContent=tab;document.title=tab+" · Commons";
   const st=$("#subtabs");if(st)st.innerHTML=cur[2].length>1?cur[2].map(t=>`<a href="#${encodeURI(t)}" class="${t==tab?"on":""}" onclick="go(${J(t)});return false">${E(t)}</a>`).join(""):"";

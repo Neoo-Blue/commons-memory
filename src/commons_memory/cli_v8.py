@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-NOSTORE = {"hook", "hooks", "mcp-auth", "join", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra",
+NOSTORE = {"up", "hook", "hooks", "mcp-auth", "join", "bench", "import", "quota", "instructions", "setup", "doctor", "audit-verify", "audit-key", "infra",
            "canon"}
 CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space", "audit", "vault", "audit-export",
         "audit-chain", "graphiti", "approvals"} | NOSTORE
@@ -15,10 +15,15 @@ CMDS = {"capture", "observations", "reindex", "diagram", "fact", "sweep", "space
 def add_parsers(sub) -> None:
     from .setup import LABELS
     dr = sub.add_parser("doctor", help="check this AI's whole Commons connection; --repair fixes what is broken")
-    dr.add_argument("--client", required=True, help="claude-code, codex, gemini, cursor, opencode, copilot, cline, kilo, amp, factory, qwen, crush, goose, windsurf, zed, roo, warp")
-    dr.add_argument("--agent", required=True)
-    dr.add_argument("--url", required=True, help="the hub, e.g. http://192.168.50.111:8770")
+    dr.add_argument("--client", help="with none of --client, --agent and --url: every AI connected on this machine. One of claude-code, codex, gemini, cursor, opencode, copilot, cline, kilo, amp, factory, qwen, crush, goose, windsurf, zed, roo, warp")
+    dr.add_argument("--agent")
+    dr.add_argument("--url", help="the hub, e.g. http://192.168.50.111:8770")
     dr.add_argument("--repair", action="store_true")
+    u = sub.add_parser("up", help="run everything on this machine with nothing else to do: the hub and dashboard as a "
+                                  "login service, and every AI CLI found here connected (the installer runs this)")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--dashboard-port", type=int, default=8766)
+    u.add_argument("--no-connect", action="store_true", help="start the hub only; connect AIs later")
     st = sub.add_parser("setup", help="connect an AI to Commons completely in one go (MCP, instructions, hooks, "
                                       "instant wake, model and version sync, memory hand-over, verify); "
                                       "every step on unless --no-<step>")
@@ -273,8 +278,15 @@ def handle_nostore(args) -> int:
         print(json.dumps(public_key(), indent=2))
         return 0
     if c == "doctor":
-        from .setup import doctor
+        from .setup import doctor, doctor_all
+        if not (args.client or args.agent or args.url):
+            return doctor_all(args.repair)
+        if not (args.client and args.agent and args.url):
+            raise SystemExit("commons doctor takes --client, --agent and --url together, or none of them")
         return doctor(args.client, args.agent, args.url, args.repair)
+    if c == "up":
+        from .setup import up
+        return up(args.db, args.port, args.dashboard_port, not args.no_connect)
     if c == "setup":
         from .setup import STEPS, run
         return run(args.client, args.agent, args.url, {k for k in STEPS if getattr(args, f"no_{k}")})

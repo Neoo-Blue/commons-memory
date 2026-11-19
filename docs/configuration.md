@@ -14,7 +14,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_ALLOW_ANON_READS` | — | HTTP: allow read-only calls without a key (`1`); writes always need a key | auth.py, expose.py |
 | `COMMONS_API_KEY` | — | Agent API key for stdio/CLI/worker calls | capture.py, cli.py, cli_v7.py, cli_v8.py, join.py, server.py, setup.py |
 | `COMMONS_AUDIT_KEY_FILE` | — | Ed25519 key that signs audit exports (default COMMONS_HOME/audit_signing.key, created 0600 on first export) | auditexport.py |
-| `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` or `1`/`on` (every job: escalation, recurring runs, pruning, backups), `0` off | background.py |
+| `COMMONS_BACKGROUND` | `light` | In-process maintenance: `light` (KB refresh, librarian, reaper), `full` or `1`/`on` (every job: escalation, recurring runs, pruning, backups), `0` off | background.py, setup.py |
 | `COMMONS_BACKUP` | `0` | Nightly SQLite backup from the background loop (`1` on) | background.py |
 | `COMMONS_BACKUP_DIR` | — | Backup directory (default `~/.commons/backups`) | retention.py |
 | `COMMONS_BACKUP_KEEP` | `7` | Number of backups to keep | retention.py |
@@ -137,6 +137,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_SSE_MAX_SECONDS` | `3600` | Max lifetime of a dashboard/agent SSE stream | dashboard.py |
 | `COMMONS_STILL_NEEDED_AFTER` | `86400` | Seconds a job may wait before a claim on it first asks the agent that posted it whether it is still needed; default 86400 | orchestrator.py |
 | `COMMONS_STILL_NEEDED_WAIT` | `90` | Seconds a claim waits for the poster's answer to "still needed?" (a later no still cancels the job); default 90 | orchestrator.py |
+| `COMMONS_TAKEOVER_STALE` | `86400` | Seconds an unfinished schedule takeover job may stay open before a later missed run cancels it and gets its own; default 86400 | schedules.py |
 | `COMMONS_THREADS` | `64` | Worker threads for sync tool calls and long-polls on the HTTP hub (the default executor is only cpus+4); default 64 | server.py |
 | `COMMONS_TLS_CERT` | — | TLS certificate (PEM) for HTTP transport and dashboard | cli.py, connect.py, dashboard.py, server.py |
 | `COMMONS_TLS_KEY` | — | TLS private key (PEM) | cli.py, dashboard.py, server.py |

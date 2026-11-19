@@ -130,6 +130,8 @@ def register_v5(mcp, store, who):
         leftovers, model performance and procedures into a review queue. dry_run (default) only estimates.
         Admin only: it reads local history files."""
         aid = admin(project or None, agent, api_key)
+        from .auth import require_host
+        require_host(store, "retro_learn")  # admin of one project is not enough to read the host's files
         from .retro import RetroLearner
         r = RetroLearner(store).run(sources or ["all"], paths or {}, dry_run=dry_run, auto_approve=auto_approve or None,
                                     budget=None if budget < 0 else budget, use_llm=None if use_llm else False,

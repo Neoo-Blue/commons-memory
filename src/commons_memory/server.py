@@ -302,8 +302,13 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def register_agent(name: str, vendor: str = "", model: str = "", description: str = "",
                        capabilities: list[str] | None = None, a2a_url: str = "") -> str:
         """Register (or re-key) an agent identity. Returns an api_key shown once; use it on writes."""
-        if require_keys and store.get_agent(name) and store.get_agent(name).get("key_hash"):
-            raise CommonsError("agent already registered; re-key via CLI `commons register-agent`")
+        if require_keys:
+            from .auth import ANON, PRINCIPAL
+            from .join import _taken
+            if PRINCIPAL.get() == ANON:
+                raise CommonsError("authentication required to register an agent")
+            if _taken(store, name):
+                raise CommonsError("agent already registered or reserved; re-key via CLI `commons register-agent`")
         return _fmt(store.register_agent(name, vendor, model, description, capabilities, a2a_url,
                                          issued_by="itself, through register_agent"), "json")
 
@@ -390,6 +395,10 @@ def build_server(store: Store | None = None, host: str = "127.0.0.1", port: int 
     def secret_revoke(lease_id: str = "", ref: str = "", agent: str = "", api_key: str = "") -> str:
         """Revoke a lease (or all of your leases / all leases for a ref)."""
         aid, _ = who(agent, api_key)
+        from .auth import PRINCIPAL
+        if lease_id and PRINCIPAL.get() is not None and not store.q(
+                "SELECT 1 FROM leases WHERE id=? AND agent_id=?", (lease_id, aid)):
+            raise CommonsError("that lease is not yours")
         return _fmt(broker.revoke(lease_id or None, aid if not lease_id else None, ref or None), "json")
 
     @mcp.tool()
@@ -467,8 +476,8 @@ def _lifespan_mount(mcp_app, a2a_app):
 
 
 def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765, db: str | None = None,
-        require_keys: bool | None = None) -> None:
-    store = Store(db)
+        require_keys: bool | None = None, store: Store | None = None) -> None:
+    store = store or Store(db)
     server = build_server(store, host=host, port=port, require_keys=require_keys)
     if transport not in ("http", "streamable-http"):
         server.run("stdio")

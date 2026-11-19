@@ -170,10 +170,10 @@ def run_worker(client, cmd: str, *, once: bool = False, max_tasks: int = 0, inte
         env = {**os.environ, "COMMONS_MODEL": p.get("model") or "", "COMMONS_SUBTASK_ID": p["subtask_id"], "COMMONS_JOB_ID": p["job_id"],
                "COMMONS_TASK_TYPE": p["type"], "COMMONS_PROMPT_FILE": pf}
         model = p.get("model") or ""
-        full = cmd.replace("{prompt_file}", shlex.quote(pf)).replace("{type}", p["type"]) \
+        full = cmd.replace("{prompt_file}", shlex.quote(pf)).replace("{type}", shlex.quote(p["type"])) \
                   .replace("{model}", shlex.quote(model.split("/", 1)[-1]) if model else "") \
                   .replace("{model_full}", shlex.quote(model)) \
-                  .replace("{subtask_id}", p["subtask_id"])
+                  .replace("{subtask_id}", shlex.quote(p["subtask_id"]))
         log(f"[worker] {p['subtask_id']} {p['type']}: {p['title'][:70]}")
         t0 = time.time()
         try:

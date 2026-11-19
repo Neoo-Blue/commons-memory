@@ -186,7 +186,7 @@ def details(s: Store, question_id: str) -> dict:
         if d:
             d = dict(d[0])
             pend = json.loads(d.get("pending") or "{}")
-            out |= {"agent": s.label(d["agent_id"])[1], "credential": d["cred"], "method": d["method"], "url": d["url"],
+            out |= {"agent_id": d["agent_id"], "agent": s.label(d["agent_id"])[1], "credential": d["cred"], "method": d["method"], "url": d["url"],
                     "reason": d["justification"], "why_asked": d["reason"], "body": (pend.get("body") or "")[:4000],
                     "result": pend.get("result"),
                     # approved, and Commons is running it right now: the result is seconds away

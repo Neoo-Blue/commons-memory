@@ -36,8 +36,10 @@ def _due(s: Store, name: str, force: bool = False) -> bool:
     if every <= 0:
         return False
     key = f"bg_last:{name}"
-    s.x("INSERT OR IGNORE INTO meta VALUES(?, '0')", (key,))
     r = s.q("SELECT value FROM meta WHERE key=?", (key,))
+    if not r:
+        s.x("INSERT OR IGNORE INTO meta VALUES(?, '0')", (key,))
+        r = s.q("SELECT value FROM meta WHERE key=?", (key,))
     last = r[0]["value"] if r else "0"
     if force or now() - float(last) >= every:  # compare-and-swap: of two loops (or processes) only one claims the run
         with s.lock:

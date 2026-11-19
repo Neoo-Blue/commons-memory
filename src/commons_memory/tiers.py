@@ -56,6 +56,7 @@ def set_tier(s: Store, iid: str, tier: str) -> dict:
     if not r:
         raise CommonsError(f"unknown id {iid}")
     s.check_project(r[0]["project_id"], "write")
+    s._row_write(iid)
     if tier == "cold":  # archive sticks until the item is used again (forget the accesses that made it hot)
         s.x("UPDATE items SET tier='cold', pinned=0, last_access=NULL, access_count=0 WHERE id=?", (iid,))
     else:
@@ -74,5 +75,7 @@ def hot(s: Store, project: str | None = None, limit: int = 8) -> list[dict]:
     if denied:
         where += f" AND (project_id IS NULL OR project_id NOT IN ({','.join('?' * len(denied))}))"
         args += denied
-    return [dict(r) for r in s.q(f"SELECT id, kind, summary FROM items WHERE {where} "
+    rows = [dict(r) for r in s.q(f"SELECT id, kind, summary FROM items WHERE {where} "
                                  f"ORDER BY COALESCE(pinned,0) DESC, COALESCE(last_access, created_at) DESC LIMIT ?", args + [limit])]
+    hid = s.hidden_ids([r["id"] for r in rows])  # row-restricted records
+    return [r for r in rows if r["id"] not in hid]

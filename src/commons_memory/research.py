@@ -57,11 +57,38 @@ def extract(raw: str) -> tuple[str, str]:
     return html.unescape(p.title.strip()), text
 
 
-def fetch(url: str, timeout: float = 15, max_bytes: int = 2_000_000) -> dict:
-    if not re.match(r"^https?://", url):
+def _public(url: str, allow=()) -> None:
+    """Refuse a URL the hub should not read for an agent: loopback, LAN, link-local and metadata addresses.
+    Hosts in `allow` (the owner's own search provider) and in COMMONS_WEBHOOK_ALLOWLIST pass."""
+    import ipaddress
+    import socket
+    from .messaging import _allowlist, _host_allowed
+    u = urllib.parse.urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
         raise CommonsError("only http(s) URLs")
+    host = u.hostname.lower()
+    if host in allow or _host_allowed(host, _allowlist()):
+        return
+    try:
+        infos = socket.getaddrinfo(host, u.port or (443 if u.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise CommonsError(f"cannot resolve {host}") from e
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global or ip.is_multicast:
+            raise CommonsError(f"{host} is not a public address; research only reads public pages")
+
+
+def fetch(url: str, timeout: float = 15, max_bytes: int = 2_000_000, allow=()) -> dict:
+    _public(url, allow)
+
+    class Checked(urllib.request.HTTPRedirectHandler):  # every hop is checked: a public page can redirect inward
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            _public(newurl, allow)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+    # ponytail: the name is resolved again on connect, so DNS rebinding is not covered; pin the address if it matters
     req = urllib.request.Request(url, headers={"User-Agent": "commons-memory/0.4 (+research)"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+    with urllib.request.build_opener(Checked).open(req, timeout=timeout) as r:  # noqa: S310
         raw = r.read(max_bytes).decode(r.headers.get_content_charset() or "utf-8", "replace")
         ctype = r.headers.get("Content-Type", "")
     title, text = extract(raw) if "html" in ctype or raw.lstrip().startswith("<") else ("", raw)
@@ -141,7 +168,9 @@ class Research:
     def research(self, query: str, *, provider: str | None = None, max_results: int = 5, fetch_pages: bool = True,
                  project: str | None = None, agent_id: str | None = None, refresh: bool = False) -> dict:
         provider = provider or self.default_provider()
-        key = hashlib.sha256(f"{provider}|{query}|{max_results}|{fetch_pages}".encode()).hexdigest()
+        key = hashlib.sha256(f"{provider}|{query}|{max_results}|{fetch_pages}|{project or ''}".encode()).hexdigest()
+        own = urllib.parse.urlparse(self._url(provider) or "").hostname if provider in ("mock", "searxng") else None
+        allow = {own} if own else ()  # pages on the owner's own search host; the "fetch" provider gets none
         cached = self.s.q("SELECT * FROM research_cache WHERE key=?", (key,))
         if cached and not refresh and now() - cached[0]["ts"] < CACHE_TTL:
             data = json.loads(cached[0]["results"])
@@ -153,7 +182,7 @@ class Research:
             page = {"url": r["url"], "title": r["title"], "text": r.get("snippet", "")}
             if fetch_pages:
                 try:
-                    page = fetch(r["url"])
+                    page = fetch(r["url"], allow=allow)
                 except Exception as e:  # noqa: BLE001
                     page["error"] = str(e)[:120]
             text, _ = redact(page["text"])

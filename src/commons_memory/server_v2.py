@@ -146,9 +146,10 @@ def register_v2(mcp, store, who):
         aid = me(agent, api_key, write=False)
         from .handover import nudge
         from .releases import nudge as rnudge
+        from .join import wake_nudge
         pk = orch.pickup(aid, project or None, max_tokens)
         return ((pk["facts"] + "\n\n" if pk["facts"] else "") + playbook_once(store, aid) + rnudge(store, aid)
-                + nudge(store, aid) + pk["body"])
+                + nudge(store, aid) + wake_nudge(store, aid) + pk["body"])
 
     @mcp.tool()
     def add_leftover(text: str, task_type: str = "general", priority: int = 1, project: str = "", source_id: str = "",
@@ -209,13 +210,18 @@ def register_v2(mcp, store, who):
         return r["text"] or "(no preferences recorded)"
 
     @mcp.tool()
-    def confirm_preference(pref_id: str, statement: str = "") -> str:
+    def confirm_preference(pref_id: str, statement: str = "", agent: str = "", api_key: str = "") -> str:
         """User confirms (optionally rewrites) a preference: confidence -> 1.0."""
+        who(agent, api_key)
         return _js(orch.prefs.confirm(pref_id, statement or None))
 
     @mcp.tool()
-    def forget_preference(pref_id: str = "", everything: bool = False) -> str:
-        """Delete one preference, or everything=true to wipe the user profile."""
+    def forget_preference(pref_id: str = "", everything: bool = False, agent: str = "", api_key: str = "") -> str:
+        """Delete one preference, or everything=true to wipe the user profile (admin only)."""
+        if everything:
+            make_admin(store, who)(None, agent, api_key)
+        else:
+            who(agent, api_key)
         return _js(orch.prefs.forget(pref_id or None, everything))
 
     # ------------------------------------------------------------ knowledge base & graph views

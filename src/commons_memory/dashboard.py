@@ -222,13 +222,14 @@ class API:
         conflict = q.get("conflict") in ("1", "true", "yes")
         return self.s.search(q.get("q", ""), project=q.get("project") or None, kinds=kinds,
                              conflict=True if conflict else None, max_tokens=int(q.get("max_tokens", 4000)),
-                             limit=int(q.get("limit", 50)))
+                             limit=int(q.get("limit", 50)), agent=q.get("agent") or None,
+                             since=q.get("since") or None, touch=False)
 
     def timeline(self, q):
         return self.s.timeline(project=q.get("project") or None, limit=100, max_tokens=4000)
 
     def item(self, q):
-        return self.s.expand(q["id"], depth=1, max_tokens=int(q.get("max_tokens", 8000)))
+        return self.s.expand(q["id"], depth=1, max_tokens=int(q.get("max_tokens", 8000)), touch=False)
 
     def conflicts(self, q):
         out = []
@@ -326,19 +327,35 @@ class API:
                 "proposals": pl.proposals(None)[:50], "clis": listing(self.s), "seats": seat_status(self.s)}
 
     def tree_children(self, q):
-        from .tree import ROOTS, Tree
+        from .tree import LEAF_PREFIXES, ROOTS, Tree
         t = Tree(self.s)
         ref = q.get("ref", "workspace")
         key, path = t.resolve(ref)
         root = ref.split("/", 1)[0] if "/" in ref else (ref if ref in ROOTS else "workspace")
         pre = "" if root == "workspace" else root + "/"
+        raw = t.children(key)
+        limit = max(1, min(int(q.get("limit") or 300), 1000))
+        idx = list(enumerate(raw, 1))  # a path is the child's place in the stable order, whatever order it is shown in
+        if key == "workspace":  # biggest projects first: hundreds of one-off folders must not bury the real ones
+            size = {r["project_id"]: r["n"] for r in self.s.q("SELECT project_id, COUNT(*) n FROM items GROUP BY project_id")}
+            idx.sort(key=lambda ic: -size.get(ic[1].get("id"), 0))  # stable: ties keep creation order
+        idx = idx[:limit]
+        page = [c for _, c in idx]
+        more = max(0, len(raw) - len(page))
+        keys = [c["key"] for c in page]
+        summs: dict[str, str] = {}
+        for b in range(0, len(keys), 500):
+            ch = keys[b:b + 500]
+            for r in self.s.q(f"SELECT key, summary FROM node_summaries WHERE key IN ({','.join('?' * len(ch))})", ch):
+                summs[r["key"]] = r["summary"]
         out = []
-        for i, c in enumerate(t.children(key), 1):
+        for i, c in idx:
             p = f"{path}.{i}" if path else str(i)
-            summ = self.s.q("SELECT summary FROM node_summaries WHERE key=?", (c["key"],))
-            out.append(c | {"path": pre + p, "count": c.get("count") if c.get("count") is not None
-                            else len(t.children(c["key"])), "summary": summ[0]["summary"] if summ else None})
-        return {"ref": ref, "children": out[:300], "more": max(0, len(out) - 300)}
+            cnt = c.get("count")
+            if cnt is None:
+                cnt = 0 if c["key"].startswith(LEAF_PREFIXES) else len(t.children(c["key"]))
+            out.append(c | {"path": pre + p, "count": cnt, "summary": summs.get(c["key"])})
+        return {"ref": ref, "children": out, "more": more}
 
     def tree_find(self, q):
         from .tree import Tree
@@ -362,7 +379,7 @@ class API:
     def activity(self, q):
         ev = []
         for r in self.s.q("SELECT kind, summary, agent_id, created_at FROM items ORDER BY created_at DESC LIMIT 25"):
-            ev.append({"ts": r["created_at"], "type": r["kind"], "text": r["summary"][:140],
+            ev.append({"ts": r["created_at"], "type": r["kind"], "text": (r["summary"] or "")[:140],
                        "agent": self.s.label(r["agent_id"])[1] if r["agent_id"] else None})
         for r in self.s.q("SELECT ts, action, target FROM audit WHERE action NOT LIKE '%.internal' ORDER BY ts DESC LIMIT 40"):
             if ev and ev[-1]["type"] == r["action"] and ev[-1]["text"] == str(r["target"] or "")[:140]:
@@ -428,7 +445,7 @@ class API:
         out = {"packs": cs.packs(), "savings": cs.savings()}
         if q.get("id"):
             out["diff"] = cs.diff(q["id"])
-            out["l1"] = cs.load(q["id"], "L1", 3000)["text"]
+            out["l1"] = cs.load(q["id"], "L1", 3000, record=False)["text"]
         return out
 
     def palette(self, q):
@@ -488,7 +505,7 @@ class API:
                          goal=body.get("goal") or None, current=body.get("current") or None, source="user")
         if path == "/api/board/update":
             from . import board as B
-            return B.update(self.s, body["id"], status=body.get("status") or None, current=body.get("current") or None,
+            return B.update(self.s, body["id"], status=body.get("status") or None, current=body.get("current"),
                             evidence=body.get("evidence") or None, goal=body.get("goal") or None)
         if path == "/api/setup/provider":
             from .onboarding import set_provider
@@ -635,7 +652,7 @@ class API:
             return rebuild(self.s)
         if path == "/api/lease/revoke":
             return self.b.revoke(body["id"])
-        if path in ("/api/item/update", "/api/item/delete", "/api/items/bulk"):
+        if path in ("/api/item/update", "/api/item/delete", "/api/item/tier", "/api/items/bulk"):
             return self._items(path, body)
         if path.startswith("/api/infra/"):
             from . import infra as I
@@ -740,6 +757,7 @@ def make_handler(api: API, token: str | None):
     class H(BaseHTTPRequestHandler):
         # keep-alive: a page's API calls reuse one connection instead of paying a TCP (and TLS) handshake each
         protocol_version = "HTTP/1.1"
+        timeout = 30
 
         def log_message(self, *a):
             pass
@@ -883,19 +901,23 @@ def make_handler(api: API, token: str | None):
                     ig = infra_graph(api.s, q.get("root") or None, int(q.get("depth") or 2))
                     g = {"nodes": {n["id"]: {"name": n["name"], "type": n["kind"], "stale": n["stale"]} for n in ig["nodes"]},
                          "edges": [{"src": e["src"], "dst": e["dst"], "type": e["rel"]} for e in ig["edges"]]}
-                    return self._send(200, graphview.render(g, "Infrastructure"), "text/html; charset=utf-8")
+                    return self._send(200, graphview.render(g, "Infrastructure", theme=q.get("theme")), "text/html; charset=utf-8")
                 if u.path == "/graph.html":
+                    exclude_usage = q.get("usage", "1") == "0"
+                    since = q.get("since") or None
                     if q.get("scope") and q.get("id"):
                         from .graphlinks import subgraph
-                        g = subgraph(api.s, q["scope"], q["id"], int(q.get("depth", 2)))
+                        g = subgraph(api.s, q["scope"], q["id"], int(q.get("depth", 2)),
+                                     exclude_usage=exclude_usage, since=since)
                     else:
-                        g = api.s.export_graph(q.get("project") or None, q.get("items", "1") == "1")
+                        g = api.s.export_graph(q.get("project") or None, q.get("items", "1") == "1",
+                                               exclude_usage=exclude_usage, since=since)
                     from . import graphview
                     if q.get("community"):  # a cluster opened from the overview
                         g = graphview.community(g, q["community"])
                     elif q.get("level") != "all":  # big graphs open as a cluster map (level=all forces everything)
                         g = graphview.overview(g)
-                    return self._send(200, graphview.render(g), "text/html; charset=utf-8")
+                    return self._send(200, graphview.render(g, theme=q.get("theme")), "text/html; charset=utf-8")
                 if u.path == "/drive/raw":
                     from .dashboard_v7 import drive_raw
                     data, mime = drive_raw(api, q)
@@ -906,11 +928,16 @@ def make_handler(api: API, token: str | None):
                     return self._send(200, metrics(api), "text/plain; version=0.0.4")
                 self._ctx()
                 name = u.path.removeprefix("/api/")
-                fn = getattr(api, name, None) if u.path.startswith("/api/") and name.isidentifier() and name != "post" else None
-                if not fn:
+                fn = getattr(api, name, None) if u.path.startswith("/api/") and name.isidentifier() \
+                    and not name.startswith("_") and name != "post" else None
+                if not callable(fn):
                     return self._send(404, {"error": "not found"})
+                if name == "import_scan":
+                    from . import approvals as AP
+                    if AP.has_pin(api.s) and not self._approver():
+                        return self._send(403, {"error": "this view needs your owner password", "need_pin": True})
                 return self._send(200, fn(q))
-            except (CommonsError, KeyError) as e:
+            except (CommonsError, KeyError, ValueError) as e:
                 return self._send(400, {"error": str(e)})
 
         def do_POST(self):
@@ -986,10 +1013,11 @@ def make_handler(api: API, token: str | None):
 
 # changes an agent on the LAN could use to approve itself, reach a key, mint a key, or pick who does the work: once a
 # PIN exists they need the browser the owner unlocked with it
-OWNER_ONLY = ("/api/infra/extract", "/api/refile/start", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
+OWNER_ONLY = ("/api/infra/extract", "/api/import/run", "/api/retro/", "/api/refile/start", "/api/setup/", "/api/vault/", "/api/mcp/approve", "/api/mcp/policy", "/api/mcp/add_preset",
               "/api/mcp/remove", "/api/trust/set", "/api/connect/key", "/api/connect/join", "/api/connect/wake", "/api/connect/join_close", "/api/routing/policy", "/api/routing/mode",
               "/api/librarian/config", "/api/skill/review", "/api/killswitch", "/api/subtask/", "/api/job/retry",
-              "/api/agent/display", "/api/agent/introduce", "/api/msg/send")
+              "/api/agent/display", "/api/agent/introduce", "/api/msg/send", "/api/job/cancel", "/api/agent/update",
+              "/api/item/delete", "/api/items/bulk", "/api/prefs/forget", "/api/infra/merge", "/api/infra/hide")
 
 
 def _host_allowed(host_hdr: str, s: Store | None = None) -> bool:

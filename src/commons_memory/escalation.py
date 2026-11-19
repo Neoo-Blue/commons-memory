@@ -83,7 +83,7 @@ class Escalator:
     def stuck(self) -> list[dict]:
         rows = [dict(r) for r in self.s.q(
             "SELECT s.* FROM subtasks s JOIN jobs j ON j.id=s.job_id WHERE s.status='pending' AND j.status='running' "
-            "AND s.type NOT IN ('tally','owner')")]  # owner steps wait on the user's board question
+            "AND s.type NOT IN ('tally','owner') AND COALESCE(s.not_before,0)<=?", (now(),))]  # owner/paused steps wait
         out = []
         for st in rows:
             if not self.o._deps_ok(st):
@@ -118,14 +118,24 @@ class Escalator:
                 self._log(st, "notified", "notify", {"age_days": round(days, 1), "too_old": True})
                 done.append({"subtask": st["id"], "action": "asked_user", "age_days": round(days, 1)})
                 continue
-            if level is None:
-                cands = [a for a in self._active_agents(st) if a["id"] != st["assigned_agent"]]
+            if level in (None, "reassigned"):
+                # every agent gets one turn, not only the first: the ladder used to stop after one reassignment, so
+                # work handed to an agent that was out of credit went straight to "tell the user" and stayed there
+                tried = {json.loads(e["detail"] or "{}").get("to") for e in self.s.q(
+                    "SELECT detail FROM escalations WHERE subtask_id=? AND action='reassign'", (st["id"],))}
+                cands = [] if self.o._pin(st["id"]) else [  # pinned work stays with the agent the submitter chose
+                    a for a in self._active_agents(st) if a["id"] != st["assigned_agent"] and a["name"] not in tried]
                 if cands:
                     prev = self.s.label(st["assigned_agent"])[1] if st["assigned_agent"] else None
                     why = ("no agent with this expertise was free" if st["unassignable"] else
                            f"{prev}, who had it, has gone quiet or is paused" if st["stale_assignee"] and prev else
                            f"nobody claimed it in {int(st['age'] // 60)} minutes")
-                    self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=?", (cands[0]["id"], st["id"]))
+                    with self.s.lock:  # only if nobody claimed or moved it since stuck() read it
+                        won = self.s.db.execute(
+                            "UPDATE subtasks SET assigned_agent=? WHERE id=? AND status='pending' AND assigned_agent IS ?",
+                            (cands[0]["id"], st["id"], st["assigned_agent"])).rowcount
+                    if won != 1:
+                        continue
                     self.s.relate(st["id"], cands[0]["id"], "assigned_to")
                     # the usual "ready" mail (subtask id, routed model): a daemon claims it for its agent. The old mark
                     # said it had been mailed once, which is why the first assignee's lapsed mail was never resent.
@@ -135,12 +145,10 @@ class Escalator:
                                                              "unassignable": st["unassignable"]})
                     done.append({"subtask": st["id"], "action": "reassigned", "to": cands[0]["name"]})
                     continue
-                level = "reassigned"  # nobody to reassign to: fall through
-            if level == "reassigned":
-                r = self._llm(st)
-                if r:
-                    done.append(r)
-                    continue
+            r = self._llm(st)  # nobody (else) to hand it to
+            if r:
+                done.append(r)
+                continue
             notify(self.s, f"Subtask needs a human or an agent: {st['title'][:80]}",
                    f"Subtask {st['id']} ({st['type']}) in job {st['job_id']} has waited {int(st['age'])}s with no agent "
                    f"able to take it. Connect an agent with this expertise, configure a distributor model "
@@ -156,8 +164,17 @@ class Escalator:
         if not model:
             return None
         aid = self.s.ensure_agent("commons-distributor")
+        prev = st["assigned_agent"]
+        with self.s.lock:  # claim() only hands work to its assignee
+            won = self.s.db.execute(
+                "UPDATE subtasks SET assigned_agent=? WHERE id=? AND status='pending' AND assigned_agent IS ?",
+                (aid, st["id"], prev)).rowcount
+        if won != 1:
+            return None
         pk = self.o.claim(aid, st["id"])
         if not pk:
+            self.s.x("UPDATE subtasks SET assigned_agent=? WHERE id=? AND status='pending' AND assigned_agent=?",
+                     (prev, st["id"], aid))
             return None
         from .worker import parse_output, render_prompt
         try:
@@ -167,7 +184,8 @@ class Escalator:
             self.o.complete(st["id"], aid, r["text"], verdict=out.get("verdict"), leftovers=out.get("leftovers"),
                             tokens_in=r["tokens_in"], tokens=r["tokens_out"], cost=r["cost"], model=model)
         except Exception as e:  # noqa: BLE001
-            self.s.x("UPDATE subtasks SET status='pending', claimed_by=NULL WHERE id=? AND status='claimed'", (st["id"],))
+            self.s.x("UPDATE subtasks SET status='pending', claimed_by=NULL, assigned_agent=? WHERE id=? AND status='claimed' "
+                     "AND claimed_by=?", (prev, st["id"], aid))  # back to who had it, or nobody could ever claim it
             self.s.audit(None, "escalate.llm.error", st["id"], str(e)[:200])
             return None
         self._log(st, "llm", "distributor", {"model": model})
