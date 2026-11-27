@@ -72,7 +72,8 @@ def test_an_unusable_agent_plan_or_nobody_live_falls_back_to_the_rules(store):
     o.complete(plan_id, gb, "I would start by looking at the logs.")  # no JSON plan
     assert len(o.status(j["job_id"])["subtasks"]) > 1
     store.x("DELETE FROM agent_presence")
-    assert o.submit("Fix the flaky download test", agent_id=lead)["pattern"] == "auto"  # nobody live: rules
+    j2 = o.submit("Fix the flaky download test", agent_id=lead)  # nobody live: the rules split it, and say so
+    assert j2["pattern"] == "cross_review" and o.planned(j2["job_id"])["by"] == "rules"
 
 
 def test_an_agent_splits_its_subtask_and_merges_the_parts(store):
@@ -202,3 +203,21 @@ def test_plans_survive_lead_in_brackets_loops_and_duplicate_keys(store):
         o.submit("x", dag=[{"key": "k", "title": "one"}, {"key": "k", "title": "two"}])
     assert not store.q("SELECT 1 FROM jobs WHERE title='x'")
 
+
+
+def test_every_job_records_who_planned_it_and_why(store):
+    """The Orchestration page shows who split each job and why; a plain small task is one step under the rules."""
+    lead = _agent(store, "lead")
+    o = Orchestrator(store)
+    j = o.submit("Summarize this week's support tickets", agent_id=lead)
+    assert j["pattern"] == "single" and len(j["subtasks"]) == 1
+    p = o.planned(j["job_id"])
+    assert p["by"] == "rules" and "one step" in p["why"]
+    j = o.submit("Should we move to Postgres? Weigh the trade-offs.", agent_id=lead)
+    assert j["pattern"] == "debate" and "judge" in o.planned(j["job_id"])["why"]
+
+
+def test_a_planner_reason_line_is_kept():
+    from commons_memory import planning as P
+    text = 'WHY: two independent parts, so they run side by side.\n[{"key": "a", "title": "A"}, {"key": "b", "title": "B"}]'
+    assert P.why(text) == "two independent parts, so they run side by side." and len(P.parse(text)) == 2

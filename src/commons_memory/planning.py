@@ -13,7 +13,7 @@ import json
 from .store import Store
 
 TYPES = ("research", "plan", "code", "review", "test", "red_team", "debate", "judge", "summarize", "write", "general")
-FORMAT = ("Return ONLY a JSON array of {\"key\",\"type\",\"title\",\"body\",\"deps\":[keys],\"gates\":[keys]}. "
+FORMAT = ("Start with one line 'WHY: <one plain sentence on how you split it and why>', then a JSON array of {\"key\",\"type\",\"title\",\"body\",\"deps\":[keys],\"gates\":[keys]}. "
           f"Types: {', '.join(TYPES)}. Put review/test/red_team keys in the \"gates\" of the work they check. Each body "
           "must stand on its own (an agent sees only its part and the results of the parts it depends on) and stay "
           "under 120 words. Don't name "
@@ -72,6 +72,13 @@ def parse(text: str) -> list[dict] | None:
         return None
 
 
+def why(text: str) -> str:
+    """The planner's one-line reason ('WHY: ...'), shown on the Orchestration page."""
+    import re
+    m = re.search(r"(?im)^\s*WHY:\s*(.+)$", text or "")
+    return m.group(1).strip()[:300] if m else ""
+
+
 def llm(s: Store, model: str, task: str) -> list[dict] | None:
     from .providers import ProviderLayer
     try:
@@ -80,6 +87,8 @@ def llm(s: Store, model: str, task: str) -> list[dict] | None:
         s.audit(None, "plan.error", model, str(e)[:200])
         return None
     dag = parse(out.get("text") or "")
+    if dag:
+        dag[0]["_why"] = why(out.get("text") or "")
     if not dag:  # usually a plan cut off at max_tokens; the next entry plans instead
         s.audit(None, "plan.unparsed", model, (out.get("text") or "")[-300:])
     return dag

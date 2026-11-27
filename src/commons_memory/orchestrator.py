@@ -38,6 +38,7 @@ def _j(v):
 class Profiles:
     def __init__(self, store: Store):
         self.s = store
+        self._plan_by = ""
 
     def set(self, agent_id: str, *, expertise: dict[str, float] | None = None, strengths: list[str] | None = None,
             cost: float | None = None, speed: float | None = None, availability: str | None = None,
@@ -159,7 +160,9 @@ def plan(task: str, pattern: str = "auto", n: int = 3) -> list[dict]:
         elif re.search(r"\b(implement|code|build|fix|refactor|write)\b", low):
             pattern = "cross_review"
         else:
-            pattern = "plan_execute_verify"
+            pattern = "single"
+    if pattern == "single":  # a small task nobody needs to split or check: the best agent for it just does it
+        return [{"key": "do", "type": "general", "title": head, "body": task, "deps": []}]
     if pattern == "debate":
         dag = [{"key": f"debater{i + 1}", "type": "debate", "title": f"Debate position {i + 1}: {head}",
                 "body": f"Argue a well-reasoned position (#{i + 1} of {n}); steelman alternatives, cite evidence.\n\n{task}",
@@ -207,6 +210,31 @@ def plan(task: str, pattern: str = "auto", n: int = 3) -> list[dict]:
              "deps": ["execute"]}]
 
 
+RULE_WHY = {
+    "single": "A small task: the agent best at it does it in one step.",
+    "cross_review": "A code change: one agent builds it, then two others review it and look for flaws.",
+    "debate": "A judgement call: agents argue different positions and a judge decides.",
+    "consensus": "A yes/no question: several agents vote and the votes are tallied.",
+    "parallel": "A list of parts: one shared plan, the parts run side by side, each is reviewed, then merged.",
+    "plan_execute_verify": "Plan it, do it, then a different agent checks the result.",
+}
+
+
+def _rules_kind(dag: list[dict]) -> str:
+    keys = [d["key"] for d in dag]
+    if keys == ["do"]:
+        return "single"
+    if "judge" in keys:
+        return "debate"
+    if "tally" in keys:
+        return "consensus"
+    if "red_team" in keys:
+        return "cross_review"
+    if "summary" in keys:
+        return "parallel"
+    return "plan_execute_verify"
+
+
 def _untag(text: str) -> str:
     """Agent text quoted in a question for the owner can't carry an approval tag of its own."""
     return re.sub(r"\[(vault|mcp|gate|rework) ", r"(\1 ", text or "")
@@ -226,6 +254,7 @@ def parse_verdict(text: str) -> str:
 class Orchestrator:
     def __init__(self, store: Store):
         self.s = store
+        self._plan_by = ""
         self.profiles = Profiles(store)
         self.prefs = Preferences(store)
 
@@ -241,10 +270,21 @@ class Orchestrator:
         if not dag and pattern == "sdlc":
             from .sdlc import dag as sdlc_dag
             dag = sdlc_dag(task, stages)
-        if not dag and pattern in ("auto", "llm"):
+        from . import planning as P
+        planned_by, why = "", ""
+        if dag:
+            planned_by, why = "given", "The parts were given with the task."
+        elif pattern in ("auto", "llm"):  # the planner decides; it keeps a small task as one step
             dag, how = self._plan(task, prefer)
-            pattern = how or pattern
-        dag = dag or plan(task, pattern if pattern not in ("llm", "agent-plan") else "auto", n)
+            if dag:
+                pattern, planned_by = how, self._plan_by
+                why = dag[0].pop("_why", "") if how == "llm" else "A live agent is writing the plan as the first step."
+        if not dag:
+            rules = pattern if pattern not in ("llm", "agent-plan") else "auto"
+            dag = plan(task, rules, n)
+            planned_by, why = "rules", RULE_WHY.get(_rules_kind(dag), "")
+            if pattern == "auto":
+                pattern = _rules_kind(dag)
         if leftovers:
             for i, lo in enumerate(leftovers):
                 dag.append({"key": f"leftover{i + 1}", "type": lo.get("task_type") or "general",
@@ -273,6 +313,7 @@ class Orchestrator:
                  (jid, title or task.strip().splitlines()[0][:120], task, pattern, pid, agent_id, "running",
                   _j(budget), _j({"tokens": 0, "seconds": 0.0, "cost": 0.0}), None, recurring_id, now(), now()))
         self._insert(jid, dag, chosen, {k: (v / max(1, len(dag))) for k, v in budget.items() if isinstance(v, (int, float))})
+        self._note_plan(jid, planned_by, why)
         if pid:
             self.s.relate(jid, pid, "in_project")
         self.allocate(jid)
@@ -351,6 +392,7 @@ class Orchestrator:
             if entry == "agent":
                 who = self._planner_agent(prefer)
                 if who:
+                    self._plan_by = "agent:" + self.s.label(who)[1]
                     return [{"key": "plan", "type": "plan", "title": f"Plan: {task.strip().splitlines()[0][:100]}",
                              "body": P.agent_brief(self.s, task), "assign": who, "plans": True,
                              "max_attempts": 1}], "agent-plan"  # one try: a failure or timeout falls back to the rules
@@ -361,10 +403,40 @@ class Orchestrator:
             dag = P.llm(self.s, model, task)
             try:
                 if dag and self._check(dag) is not None:
+                    self._plan_by = model
                     return dag, "llm"
             except CommonsError:  # a plan that can't run: the next entry plans
                 self.s.audit(None, "plan.invalid", model, "")
         return None, None
+
+    def _plan_models(self, task: str) -> tuple[list[dict] | None, str]:
+        """The model entries after "agent" in the plan chain: used when the agent that was asked to plan could not."""
+        from . import planning as P
+        from . import settings as _st
+        from .providers import ProviderLayer
+        chain = list(_st.get(self.s, "plan_chain"))
+        pl = ProviderLayer(self.s)
+        for entry in chain[chain.index("agent") + 1:] if "agent" in chain else []:
+            if entry == "rules":
+                break
+            model = pl.role_model(entry[5:]) if entry.startswith("role:") else entry
+            if not model or not self.s.q("SELECT 1 FROM providers WHERE name=? AND enabled=1", (model.split("/")[0],)):
+                continue
+            dag = P.llm(self.s, model, task)
+            try:
+                if dag and self._check(dag) is not None:
+                    return dag, model
+            except CommonsError:
+                self.s.audit(None, "plan.invalid", model, "")
+        return None, ""
+
+    def _note_plan(self, job_id: str, by: str, why: str) -> None:
+        """Who split this job and why, for the Orchestration page."""
+        self.s.x("INSERT OR REPLACE INTO meta VALUES(?,?)", (f"planned:{job_id}", _j({"by": by or "rules", "why": why or ""})))
+
+    def planned(self, job_id: str) -> dict:
+        r = self.s.q("SELECT value FROM meta WHERE key=?", (f"planned:{job_id}",))
+        return json.loads(r[0]["value"]) if r else {}
 
     def _planner_agent(self, prefer: str | None = None) -> str | None:
         """The live agent to write a plan: the preferred one if it is live with usage to spare, else the best planner."""
@@ -384,10 +456,20 @@ class Orchestrator:
             chosen = self._check(dag) if dag else None
         except CommonsError:  # parses but can't run (a loop once checks wait for their work): use the rules
             dag = None
-        if not dag:
-            self.s.audit(None, "plan.unparsed", st["id"], (result or "")[:300])
-            dag = plan(job["body"], "auto")
-            chosen = self._check(dag)
+        if dag:
+            self._note_plan(job["id"], self.s.label(st["claimed_by"] or st["assigned_agent"])[1] if (
+                st["claimed_by"] or st["assigned_agent"]) else "agent", P.why(result))
+        else:
+            if result:
+                self.s.audit(None, "plan.unparsed", st["id"], (result or "")[:300])
+            dag, model = self._plan_models(job["body"])
+            if dag:
+                self._note_plan(job["id"], model, dag[0].pop("_why", ""))
+                chosen = self._check(dag)
+            else:
+                dag = plan(job["body"], "auto")
+                chosen = self._check(dag)
+                self._note_plan(job["id"], "rules", RULE_WHY.get(_rules_kind(dag), ""))
         ids = self._insert(job["id"], dag, chosen, {}, prefix="p.")
         for d in dag:  # the first parts hang off the plan: they see it, and it never shows up as a job result
             if not d.get("deps"):
@@ -1608,6 +1690,32 @@ def _cron_field(f: str, lo: int, hi: int) -> set[int]:
             a = b = int(part)
         vals |= set(range(a, b + 1, step))
     return vals
+
+
+def cron_words(expr: str) -> str:
+    """A schedule in plain words for the dashboard: '34 */4 * * *' -> 'every 4 hours, at :34'."""
+    f = (expr or "").split()
+    if len(f) != 5:
+        return expr
+    m, h, dom, mon, dow = f
+    days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    at = f"{int(h):02d}:{int(m):02d}" if h.isdigit() and m.isdigit() else ""
+    if dom == mon == "*":
+        if m.startswith("*/") and h == "*" and dow == "*":
+            return f"every {m[2:]} minutes"
+        if m == "*" and h == "*" and dow == "*":
+            return "every minute"
+        if m.isdigit() and h == "*" and dow == "*":
+            return f"every hour, at :{int(m):02d}"
+        if m.isdigit() and h.startswith("*/") and dow == "*":
+            return f"every {h[2:]} hours, at :{int(m):02d}"
+        if at and dow == "*":
+            return f"daily at {at}"
+        if at and dow.isdigit() and int(dow) < 7:
+            return f"{days[int(dow)]}s at {at}"
+        if at and dow in ("1-5", "MON-FRI"):
+            return f"weekdays at {at}"
+    return expr
 
 
 def next_cron(expr: str, after: datetime) -> datetime:

@@ -570,88 +570,147 @@
   /* ==========================================================================
      PAGE 2: Orchestration
      ========================================================================== */
-  V["Orchestration"] = async function () {
-    const jobs = await api("jobs");
-    if (!jobs || !jobs.length) {
-      return `<div class="work-page">
-        <div class="work-head">
-          <div class="work-head-main">
-            <h2 class="work-title">Orchestration</h2>
-            <p class="work-subtitle">Parallel execution topology and task allocation</p>
-          </div>
-        </div>
-        <div class="card" style="padding:var(--space-6);">
-          ${window.K && window.K.empty ? window.K.empty({
-            icon: "Orchestration",
-            title: "No active or queued jobs",
-            hint: "Submit tasks using the submit_task tool or the CLI."
-          }) : '<div class="empty"><b>No active or queued jobs</b></div>'}
-        </div>
-      </div>`;
-    }
+  /* Orchestration: one page that says, in plain words, how work is split and routed, what is running now, what
+     repeats, and what just finished; the planner order, routing and schedules are adjusted right here. */
+  const OR_STEP = { done: "ok", running: "run", claimed: "run", failed: "bad", cancelled: "mut", pending: "" };
+  const OR_PRESETS = [["0 * * * *", "Every hour"], ["0 */4 * * *", "Every 4 hours"], ["0 */12 * * *", "Twice a day"],
+    ["0 7 * * *", "Daily at 07:00"], ["0 7 * * 1", "Mondays at 07:00"]];
 
-    return `<div class="work-page">
+  function orModel(v) {  // "anthropic/claude-opus-5-5" -> "Claude Opus 5.5"
+    const m = String(v || "").split("/").pop().replace(/-(\d+)-(\d+)$/, " $1.$2").replace(/-/g, " ");
+    return m.replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\bGpt\b/, "GPT");
+  }
+
+  function orPlannedBy(p) {
+    if (!p || !p.by) return "";
+    const by = p.by === "rules" ? "Simple rules" : p.by === "given" ? "Given with the task" :
+      p.by.startsWith("agent:") ? p.by.slice(6) : p.by.includes("/") ? orModel(p.by) : p.by;
+    return `<div class="or-why"><span class="or-by">${E(by)}</span>${p.why ? `<span>${E(p.why)}</span>` : ""}</div>`;
+  }
+
+  function orSteps(subs) {
+    return `<ol class="or-steps">${(subs || []).map(st => `<li class="or-step ${OR_STEP[st.status] || ""}" title="${E(st.title || st.key)}">
+      <span class="or-step-k">${E(st.title && st.title.length < 48 ? st.title : st.key)}</span>
+      <span class="or-step-a">${E(st.agent || "waiting for an agent")}${st.verdict ? " · " + E(st.verdict) : ""}</span></li>`).join("")}</ol>`;
+  }
+
+  function orJob(x, live) {
+    return `<article class="or-job${live ? " live" : ""}">
+      <div class="or-job-top">
+        <a href="#" class="or-job-t" onclick="openJobDrawer(${J(x.job_id)});return false">${E(x.title)}</a>
+        <span class="or-job-meta">${badgeHtml(x.status)} ${E(fmtAgo(x.created_at))}${x.used && x.used.cost ? " · " + fmtMoney(x.used.cost) : ""}</span>
+        ${live ? `<button type="button" class="btn sm bad" onclick="workCancelJob(${J(x.job_id)})">Cancel</button>` : ""}
+      </div>
+      ${orPlannedBy(x.planned)}
+      ${orSteps(x.subtasks)}
+    </article>`;
+  }
+
+  window.orChain = async function (op, i, val) {
+    const c = (window._orChain || []).slice();
+    if (op === "up" && i > 0) [c[i - 1], c[i]] = [c[i], c[i - 1]];
+    if (op === "down" && i < c.length - 1) [c[i + 1], c[i]] = [c[i], c[i + 1]];
+    if (op === "rm") c.splice(i, 1);
+    if (op === "add" && val && !c.includes(val)) c.splice(c.includes("rules") ? c.indexOf("rules") : c.length, 0, val);
+    if (!c.includes("rules")) c.push("rules");  // something always plans
+    const r = await postRaw("setup/setting", { key: "plan_chain", value: c });
+    if (r && r.error) toast(r.error, "err"); else render();
+  };
+  window.orSetting = async function (key, value) {
+    const r = await postRaw("setup/setting", { key, value });
+    if (r && r.error) toast(r.error, "err"); else render();
+  };
+  window.orRec = async function (id, change) {
+    const r = await postRaw("recurring/update", Object.assign({ id }, change));
+    if (r && r.error) toast(r.error, "err"); else { toast("Schedule saved", "ok"); render(); }
+  };
+  window.orRecCron = function (id, sel) {
+    let cron = sel.value;
+    if (cron === "custom") { cron = prompt("Schedule in cron form (minute hour day month weekday), e.g. 30 7 * * 1-5"); if (!cron) { render(); return; } }
+    window.orRec(id, { cron });
+  };
+  window.orRunNow = async function (id) {
+    const r = await postRaw("recurring/run", { id });
+    if (r && r.error) toast(r.error, "err"); else { toast("Started", "ok"); render(); }
+  };
+  window.orPause = async function (paused) {
+    const r = await postRaw("killswitch", { paused, reason: "Orchestration page" });
+    if (r && r.error) toast(r.error, "err"); else render();
+  };
+
+  V["Orchestration"] = async function () {
+    const d = await api("orchestration_view");
+    if (!d || d.error) return `<div class="work-page"><div class="card">${E((d && d.error) || "Could not load")}</div></div>`;
+    const t = d.totals || {}, set = d.settings || {}, chain = set.plan_chain || [];
+    window._orChain = chain;
+    (d.chain_options || []).forEach(o => { if (o.value.includes("/")) o.label = orModel(o.value); });
+    const opt = v => (d.chain_options || []).find(o => o.value === v) || (v.startsWith("role:") ? { label: "Model set for the " + v.slice(5) + " role", hint: "" }
+      : { label: orModel(v), hint: v.split("/")[0] + " API key; paid" });
+    const live = (d.team || []).filter(a => a.state === "live");
+    const doneN = t.done || 0, failN = t.failed || 0;
+    const summary = `${d.running.length ? `<b>${d.running.length} job${d.running.length > 1 ? "s" : ""} running.</b>` : "<b>Nothing running.</b>"}
+      ${doneN} finished this week${failN ? `, <span class="or-bad">${failN} failed</span>` : ""}, ${fmtMoney(t.cost_7d || 0)} spent.
+      ${live.length} of ${(d.team || []).length} agents online.`;
+    const addable = (d.chain_options || []).filter(o => !chain.includes(o.value));
+
+    return `<div class="work-page or-page">
       <div class="work-head">
         <div class="work-head-main">
           <h2 class="work-title">Orchestration</h2>
-          <p class="work-subtitle">Parallel execution topology, subtask lifecycle and token telemetry</p>
+          <p class="work-subtitle">How Commons splits work and who does it</p>
         </div>
-        <div class="work-head-actions">
-          <button type="button" class="btn" onclick="render()">Refresh</button>
-        </div>
+        <div class="work-head-actions">${set.paused
+          ? `<button type="button" class="btn pri" onclick="orPause(false)">Resume all work</button>`
+          : `<button type="button" class="btn" onclick="orPause(true)">Pause all work</button>`}</div>
       </div>
+      ${set.paused ? `<div class="or-banner">All work is paused: ${E(set.paused)}</div>` : ""}
+      <p class="or-summary">${summary}</p>
 
-      <div style="display:flex;flex-direction:column;gap:var(--space-3);">
-        ${jobs.map(x => {
-          const isExp = !!window.orch_expanded[x.job_id];
-          const subtasks = x.subtasks || [];
-          const costStr = fmtMoney(x.used ? x.used.cost : 0);
-          const tokStr = fmtTokens(x.used ? x.used.tokens : 0);
+      <section class="card or-card" aria-label="How work is planned">
+        <h3 class="or-h">How a job gets split</h3>
+        <p class="or-p">Small tasks skip planning and go straight to the agent best at them. Bigger ones are planned by the first of these that can answer:</p>
+        <ol class="or-chain">${chain.map((v, i) => { const o = opt(v); return `<li class="or-link">
+          <span class="or-n">${i + 1}</span><span class="or-link-t"><b>${E(o.label)}</b><small>${E(o.hint || "")}</small></span>
+          <span class="or-link-b">
+            <button type="button" class="icon-btn sm" aria-label="Move up" ${i ? "" : "disabled"} onclick="orChain('up',${i})">↑</button>
+            <button type="button" class="icon-btn sm" aria-label="Move down" ${i < chain.length - 1 ? "" : "disabled"} onclick="orChain('down',${i})">↓</button>
+            ${v === "rules" ? "" : `<button type="button" class="icon-btn sm" aria-label="Remove" onclick="orChain('rm',${i})">×</button>`}
+          </span></li>`; }).join("")}</ol>
+        ${addable.length ? `<label class="or-add">Add a planner <select onchange="orChain('add',0,this.value)"><option value="">Choose…</option>
+          ${addable.map(o => `<option value="${E(o.value)}">${E(o.label)} (${E(o.hint)})</option>`).join("")}</select></label>` : ""}
+        <h3 class="or-h">Who does each step</h3>
+        <p class="or-p">Each step goes to the agent with the best record at that kind of work, never the one that wrote what it checks.</p>
+        <label class="or-toggle"><input type="checkbox" ${set.quota_routing ? "checked" : ""} onchange="orSetting('quota_routing',this.checked)">
+          Only give work to agents with usage left (keeps your reserve)</label>
+        <div class="or-team">${(d.team || []).map(a => `<span class="or-agent ${a.state === "live" ? "on" : ""}" title="${E(Object.keys(a.good_at || {}).join(", "))}">
+          <i></i>${E(a.agent)}<small>${a.state === "live" ? "online" : E(a.state || "offline")}${a.usage_left && a.usage_left !== "unknown" ? " · " + E(a.usage_left) + " left" : ""}</small></span>`).join("")}</div>
+      </section>
 
-          return `<div class="card" style="margin:0;padding:var(--space-4);">
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap;">
-              <div style="flex:1;min-width:240px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                  ${statusDotHtml(x.status)}
-                  <a href="#" style="font-size:var(--text-sm);font-weight:700;color:var(--fg-default);text-decoration:none;" onclick="openJobDrawer(${J(x.job_id)});return false">
-                    ${E(x.title)}
-                  </a>
-                  ${badgeHtml(x.status)}
-                  <span class="badge ${x.pattern === 'sdlc' ? 'accent' : ''}">${E(x.pattern)}</span>
-                </div>
-                <div style="font-size:var(--text-xs);color:var(--fg-muted);margin-top:4px;">
-                  Tokens: ${tokStr} · Spend: ${costStr} ${x.budget && Object.keys(x.budget).length ? " · Budget: " + E(JSON.stringify(x.budget)) : ""}
-                </div>
-              </div>
+      <section aria-label="Running now">
+        <h3 class="or-sec">Running now <span class="or-count">${d.running.length}</span></h3>
+        ${d.running.length ? d.running.map(x => orJob(x, true)).join("") : `<p class="or-empty">Nothing is running.</p>`}
+      </section>
 
-              <div style="display:flex;align-items:center;gap:6px;">
-                <button type="button" class="btn sm" onclick="openJobDrawer(${J(x.job_id)})">Inspect in drawer</button>
-                <button type="button" class="btn sm" onclick="window.orch_expanded[${J(x.job_id)}]=!window.orch_expanded[${J(x.job_id)}];render()">${isExp ? 'Hide subtasks' : 'Subtasks (' + subtasks.length + ')'}</button>
-                ${x.status === 'running' ? `<button type="button" class="btn sm bad" onclick="workCancelJob(${J(x.job_id)})">Cancel</button>` : ""}
-              </div>
-            </div>
+      <section aria-label="Repeating tasks">
+        <h3 class="or-sec">Repeating tasks <span class="or-count">${d.recurring.length}</span></h3>
+        <div class="card or-card or-rec">${d.recurring.map(r => `<div class="or-rec-row${r.enabled ? "" : " off"}">
+          <label class="or-switch" title="${r.enabled ? "On" : "Off"}"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="orRec(${J(r.id)},{enabled:this.checked})"><span></span></label>
+          <div class="or-rec-main"><b>${E(r.name)}</b>
+            <small>${r.last ? `Last run ${E(fmtAgo(r.last.created_at))}, ${E(r.last.status)}` : "Never run"} · ${r.runs_7d} run${r.runs_7d === 1 ? "" : "s"} this week${r.failed_7d ? `, <span class="or-bad">${r.failed_7d} failed</span>` : ""}${r.cost_7d ? " · " + fmtMoney(r.cost_7d) : ""}</small>
+            ${r.last && r.last.planned && r.last.planned.why ? `<small class="or-rec-why">${E(r.last.planned.why)}</small>` : ""}</div>
+          <select class="or-rec-when" aria-label="Schedule for ${E(r.name)}" onchange="orRecCron(${J(r.id)},this)">
+            ${OR_PRESETS.some(p => p[0] === r.cron) ? "" : `<option value="${E(r.cron)}" selected>${E(r.when)}</option>`}
+            ${OR_PRESETS.map(p => `<option value="${p[0]}" ${p[0] === r.cron ? "selected" : ""}>${p[1]}</option>`).join("")}
+            <option value="custom">Custom…</option></select>
+          <button type="button" class="btn sm" onclick="orRunNow(${J(r.id)})">Run now</button>
+        </div>`).join("") || `<p class="or-empty">No repeating tasks.</p>`}
+        <p class="or-foot">Times follow the hub's clock (UTC).</p></div>
+      </section>
 
-            <!-- Lifecycle step pipeline -->
-            <div style="margin-top:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:var(--bg-surface);padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);">
-              ${subtasks.map((s, i) => `
-                <span class="badge ${s.status === 'done' ? 'ok' : s.status === 'running' ? 'accent' : s.status === 'failed' ? 'bad' : ''}" style="cursor:pointer;" onclick="openJobDrawer(${J(x.job_id)})" title="${E(s.title || s.key)}">
-                  ${E(s.key)} ${s.agent ? '· ' + E(s.agent) : ''}
-                </span>
-                ${i < subtasks.length - 1 ? '<span class="mut sm">→</span>' : ''}
-              `).join("")}
-            </div>
-
-            ${isExp ? `
-              <div class="work-scroll-wrap" style="margin-top:12px;">
-                <table style="width:100%;font-size:12px;border-collapse:collapse;">
-                  <tr style="border-bottom:1px solid var(--border-subtle);"><th style="text-align:left;padding:6px;">Key</th><th style="text-align:left;padding:6px;">Type</th><th style="text-align:left;padding:6px;">Status</th><th style="text-align:left;padding:6px;">Agent</th><th style="text-align:left;padding:6px;">Verdict</th><th style="text-align:left;padding:6px;">Attempts</th></tr>
-                  ${subtasks.map(s => `<tr style="border-bottom:1px solid var(--border-subtle);"><td style="padding:6px;"><b>${E(s.key)}</b></td><td style="padding:6px;">${badgeHtml(s.type)}</td><td style="padding:6px;">${badgeHtml(s.status)}</td><td style="padding:6px;">${E(s.agent || 'unassigned')}</td><td style="padding:6px;">${s.verdict ? badgeHtml(s.verdict) : '-'}</td><td style="padding:6px;">${s.attempts || 0}</td></tr>`).join("")}
-                </table>
-              </div>
-            ` : ""}
-          </div>`;
-        }).join("")}
-      </div>
+      <section aria-label="Recent jobs">
+        <h3 class="or-sec">Recent one-off jobs</h3>
+        ${d.recent.length ? d.recent.map(x => orJob(x, false)).join("") : `<p class="or-empty">None yet.</p>`}
+      </section>
     </div>`;
   };
 

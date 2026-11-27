@@ -2,6 +2,22 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.44.0: orchestration you can read and adjust
+- **Why.** The owner: "the orchestrator is not doing super smart, it's not straightforward and easy to understand from
+  the dashboard, and it's hard to adjust." On the live hub 162 of 169 jobs in 30 days had used the fixed
+  plan, execute, verify template (recurring tasks were pinned to it) and the planner ran twice, on Claude Haiku.
+- **Every job is planned.** `auto` jobs, recurring ones included, go through the plan chain; the planner is told to
+  keep a small task as one step. When the agent asked to plan can't (no answer, no usable plan), the models after
+  `agent` in the chain plan before the keyword rules do. The rules' default for a plain task is now one step done by
+  the best agent, not three.
+- **Who planned it and why.** Planners start with a `WHY:` line; Commons keeps it, or the rule's own sentence, with
+  the job (`Orchestrator.planned(job_id)`). A job's pattern now names the rule that split it (`single`,
+  `cross_review`, ...) instead of `auto`.
+- **A new Orchestration page.** A one-line summary; the planner order as a numbered list you can reorder, add to and
+  trim; the routing switch and the team with who is online; running jobs with each step's agent and state and the
+  planner's reason; repeating tasks as one line each with an on/off switch, a schedule in plain words you can change,
+  and Run now; recent one-off jobs. `GET /api/orchestration_view`, `POST /api/recurring/update`, `POST /api/recurring/run`.
+
 ## v0.43.0: vault headers and file uploads, and a notification bell
 - **Notification bell in the top bar.** Every page shows a bell with the unread count, kept live by the /events stream
   (which now also sends the count). It opens the latest 20; a click marks one read, and Mark all read clears them.

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .graphexport import to_html
 from .ids import iso, now
+from datetime import datetime
 from .orchestrator import Orchestrator
 from .secrets import Broker
 from .store import CommonsError, Store
@@ -265,6 +266,49 @@ class API:
 
     def recurring(self, q):
         return self.o.list_recurring()
+
+    def orchestration_view(self, q):
+        """The Orchestration page in one call: how work is planned and routed (and the controls for it), the team,
+        what is running, recurring tasks as one line each, and recent one-off jobs with who planned them and why."""
+        from . import planning as P
+        from . import settings as S
+        from .orchestrator import cron_words
+        wk = now() - 7 * 86400
+
+        def card(jid):
+            st = self.o.status(jid)
+            st["planned"] = self.o.planned(jid)
+            row = self.s.q("SELECT created_at, updated_at, recurring_id FROM jobs WHERE id=?", (jid,))[0]
+            return st | {"created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+        running = [card(r["id"]) for r in self.s.q("SELECT id FROM jobs WHERE status='running' ORDER BY created_at DESC "
+                                                   "LIMIT 30")]
+        recent = [card(r["id"]) for r in self.s.q("SELECT id FROM jobs WHERE status!='running' AND recurring_id IS NULL "
+                                                  "ORDER BY created_at DESC LIMIT 15")]
+        rec = []
+        for r in self.s.q("SELECT * FROM recurring ORDER BY enabled DESC, name"):
+            runs = self.s.q("SELECT status, used FROM jobs WHERE recurring_id=? AND created_at>?", (r["id"], wk))
+            last = self.s.q("SELECT id, status, created_at FROM jobs WHERE recurring_id=? ORDER BY created_at DESC LIMIT 1",
+                            (r["id"],))
+            rec.append({"id": r["id"], "name": r["name"], "cron": r["cron"], "when": cron_words(r["cron"]),
+                        "enabled": bool(r["enabled"]), "next_run": r["next_run"], "task": (r["task"] or "")[:400],
+                        "runs_7d": len(runs), "failed_7d": sum(x["status"] == "failed" for x in runs),
+                        "cost_7d": round(sum(json.loads(x["used"] or "{}").get("cost", 0) for x in runs), 4),
+                        "last": dict(last[0]) | {"planned": self.o.planned(last[0]["id"])} if last else None})
+        tot = self.s.q("SELECT status, COUNT(*) n FROM jobs WHERE created_at>? GROUP BY status", (wk,))
+        cost = sum(json.loads(x["used"] or "{}").get("cost", 0) for x in self.s.q("SELECT used FROM jobs WHERE created_at>?", (wk,)))
+        from .providers import ProviderLayer
+        on = [r["name"] for r in self.s.q("SELECT name FROM providers WHERE enabled=1")]
+        models = [m for m in ProviderLayer(self.s).models() if m["provider"] in on] if on else []
+        opts = ([{"value": "agent", "label": "A live agent", "hint": "Claude, Gemini or Grok on your subscriptions; free"}]
+                + [{"value": f"{m['provider']}/{m['model']}", "label": m["model"], "hint": f"{m['provider']} API key; paid"}
+                   for m in models]
+                + [{"value": "rules", "label": "Simple rules", "hint": "keyword splitting; always works"}])
+        return {"settings": {"plan_chain": S.get(self.s, "plan_chain"), "quota_routing": S.get(self.s, "quota_routing"),
+                             "paused": self.o.paused()},
+                "chain_options": opts, "team": P.roster(self.s),
+                "totals": {k["status"]: k["n"] for k in tot} | {"cost_7d": round(cost, 4)},
+                "running": running, "recurring": rec, "recent": recent}
 
     def kb_list(self, q):
         from .kb import KB
@@ -638,6 +682,19 @@ class API:
             return self.o.prefs.confirm(body["id"], body.get("statement") or None)
         if path == "/api/conflicts/resolve":
             return self.s.resolve_conflict(body["id"], body["keep"])
+        if path == "/api/recurring/update":
+            from .orchestrator import next_cron
+            r = self.s.q("SELECT * FROM recurring WHERE id=?", (body.get("id") or "",))
+            if not r:
+                raise CommonsError("unknown recurring task")
+            cron = (body.get("cron") or r[0]["cron"]).strip()
+            nxt = next_cron(cron, datetime.now()).timestamp()  # raises on a bad schedule
+            enabled = int(bool(body["enabled"])) if "enabled" in body else r[0]["enabled"]
+            self.s.x("UPDATE recurring SET cron=?, enabled=?, next_run=? WHERE id=?", (cron, enabled, nxt, r[0]["id"]))
+            self.s.audit(None, "recurring.update", r[0]["id"], {"cron": cron, "enabled": enabled})
+            return {"ok": True, "cron": cron, "enabled": bool(enabled), "next_run": nxt}
+        if path == "/api/recurring/run":
+            return {"ran": self.o.run_due(force=body.get("id") or "")}
         if path == "/api/killswitch":
             return self.o.set_paused(bool(body["paused"]), body.get("reason", "dashboard kill switch"))
         if path == "/api/job/cancel":
