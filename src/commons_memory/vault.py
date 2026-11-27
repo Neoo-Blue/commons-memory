@@ -227,7 +227,10 @@ def set_hosts(s: Store, agent_id: str, name: str, base_urls: list[str]) -> dict:
 # headers the request sets itself, that carry a key, or that change what the approved request does (a method override
 # turns a judged GET into a write)
 _OWN_HEADERS = {"authorization", "proxy-authorization", "host", "content-length", "content-encoding", "transfer-encoding",
-                "expect", "connection", "upgrade", "te", "trailer", "x-method-override"}
+                "expect", "connection", "upgrade", "te", "trailer", "x-method-override",
+                # proxies and frameworks that honour these send the call to another host or path than the approved URL
+                "forwarded", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-prefix", "x-forwarded-port",
+                "x-original-url", "x-rewrite-url", "x-original-host"}
 
 
 def set_headers(s: Store, agent_id: str, name: str, extra_headers: list[str]) -> dict:
@@ -793,6 +796,10 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
             return _waiting(s, same[0]["id"], same[0]["question_id"], "this exact request is already waiting for the user")
     d = ({"verdict": "allow", "scope": g["scope"], "scores": {}, "via": "grant", "reason": f"within grant {g['id']}"}
          if g else judge(s, agent_id, cred, method, url, justification, body))
+    if data is not None and d["verdict"] == "allow" and cred.get("risk") != "always":
+        from . import settings
+        if not settings.get(s, "auto_approve_all"):  # the judge only sees a name, a size and a hash: the user decides
+            d = d | {"verdict": "ask_user", "reason": "a file body can't be read by the judge, so you decide"}
     did, qid, pending = new_id("vdc"), None, None
     if d["verdict"] == "ask_user":
         from . import board as B

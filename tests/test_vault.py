@@ -439,7 +439,8 @@ def test_the_depositor_sets_fixed_headers_without_handing_the_value_over_again(s
     for bad in (["X-Ether-Request"], ["X-A: 1\r\nX-B: 2"], ["Authorization: Bearer x"], ["Host: evil.example"],
                 ["x-plex-token: other"], ["Bad Name: 1"], ["X-Empty:  "], ["X-HTTP-Method-Override: DELETE"],
                 ["X-Method-Override: PUT"], ["Expect: 100-continue"], ["Transfer-Encoding: chunked"],
-                ["X-A: v\r\n"]):
+                ["X-A: v\r\n"], ["Forwarded: host=evil.example"], ["X-Forwarded-Host: evil.example"],
+                ["X-Original-URL: /admin/delete"], ["x-rewrite-url: /admin"]):
         with pytest.raises(CommonsError):
             V.set_headers(store, a, "ether", bad)
     assert V.set_headers(store, a, "ether", ["X-Ether-Request: 1"])["extra_headers"] == {"X-Ether-Request": "1"}
@@ -561,3 +562,19 @@ def test_no_grant_ever_carries_another_file(store, upsvc, monkeypatch):
     assert r["verdict"] == "waiting_for_user" and [raw for _, raw in seen] == [b"AAA"]   # but not of other files
     t = V.use(store, a, "ether", "POST", base + "/api/config/x", why, body="{}")
     assert t["verdict"] == "allowed"                                               # text calls still ride the grant
+
+
+def test_a_judge_never_waves_a_file_through_on_its_own(store, upsvc, monkeypatch):
+    """The judge sees only a file's name, size and hash, so its allow becomes a question for the user."""
+    base, seen, up = upsvc
+    a = store.ensure_agent("builder")
+    V.add(store, "ether", SECRET, "ether", [base], {"header": "X-Plex-Token"})
+    monkeypatch.setattr(V, "judge", lambda *a, **k: {"verdict": "allow", "scope": "write", "scores": {"user_backed": 1},
+                                                     "via": "typesafe", "reason": "sound"})
+    (up / "plugin.etherpkg").write_bytes(b"\x00build\xff")
+    n = len(seen)
+    r = V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install the plugin",
+              body_file="plugin.etherpkg")
+    assert r["verdict"] != "allowed" and r.get("question_id") and len(seen) == n
+    r = V.use(store, a, "ether", "POST", base + "/api/config/x", "the user asked to change a quality rule", body="{}")
+    assert r["verdict"] == "allowed"                                               # text bodies are judged as before
