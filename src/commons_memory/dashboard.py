@@ -460,6 +460,12 @@ class API:
                 out.append({"kind": "memory", "label": r["summary"][:90], "sub": r["kind"] + " · " + r["id"], "id": r["id"]})
         return out
 
+    def notifications(self, q):
+        """The top bar's bell: the unread count and the latest notifications."""
+        from .escalation import notifications as latest
+        unread = self.s.q("SELECT COUNT(*) AS n FROM notifications WHERE read=0")[0]["n"]
+        return {"unread": unread, "items": latest(self.s, limit=20)}
+
     # ---- mutations
     def system(self, q):
         from .auth import ACL
@@ -816,7 +822,8 @@ def make_handler(api: API, token: str | None):
                     fp = change_fingerprint(api.s)
                     if fp != last:
                         n = api.s.q("SELECT id,title,level FROM notifications WHERE read=0 ORDER BY ts DESC LIMIT 3")
-                        self.wfile.write(f"event: change\ndata: {json.dumps({'fp': fp, 'notifications': [dict(x) for x in n]})}\n\n".encode())
+                        unread = api.s.q("SELECT COUNT(*) AS n FROM notifications WHERE read=0")[0]["n"]
+                        self.wfile.write(f"event: change\ndata: {json.dumps({'fp': fp, 'notifications': [dict(x) for x in n], 'unread': unread})}\n\n".encode())
                         self.wfile.flush()
                         last = fp
                     elif time.time() - beat > 15:
