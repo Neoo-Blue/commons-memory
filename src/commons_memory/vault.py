@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -221,6 +222,44 @@ def set_hosts(s: Store, agent_id: str, name: str, base_urls: list[str]) -> dict:
     s.x("UPDATE vault_creds SET base_urls=?, updated_at=? WHERE name=?", (json.dumps(urls), now(), name))
     s.audit(agent_id, "vault.hosts", name, {"base_urls": urls})
     return {"name": name, "base_urls": urls}
+
+
+# headers the request sets itself, that carry a key, or that change what the approved request does (a method override
+# turns a judged GET into a write)
+_OWN_HEADERS = {"authorization", "proxy-authorization", "host", "content-length", "content-encoding", "transfer-encoding",
+                "expect", "connection", "upgrade", "te", "trailer", "x-method-override",
+                # proxies and frameworks that honour these send the call to another host or path than the approved URL
+                "forwarded", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-prefix", "x-forwarded-port",
+                "x-original-url", "x-rewrite-url", "x-original-host"}
+
+
+def set_headers(s: Store, agent_id: str, name: str, extra_headers: list[str]) -> dict:
+    """The agent that deposited a key sets the fixed headers its service wants on every call (a CSRF marker, a client
+    id) without handing the value over again. The list replaces what was stored; an empty list clears it."""
+    r = s.q("SELECT deposited_by, auth FROM vault_creds WHERE name=?", (name,))
+    if not r:
+        raise CommonsError(f"unknown credential {name!r}")
+    if r[0]["deposited_by"] != agent_id:
+        raise CommonsError(f"only the agent that deposited {name} can change its headers")
+    auth, hdrs = json.loads(r[0]["auth"]), {}
+    for h in extra_headers or []:
+        k, sep, v = (h or "").partition(":")
+        bad = any(c in (h or "") for c in "\r\n\0")  # checked before trimming: a line break is never just padding
+        k, v = k.strip(), v.strip()
+        if not sep or not v or bad or not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", k):
+            raise CommonsError("extra headers are 'Name: value', one per item, on one line each")
+        if k.lower() in _OWN_HEADERS or k.lower().startswith("x-http-method") or \
+                k.lower() == (auth.get("header") or "").lower():
+            raise CommonsError(f"{k} can't be a fixed header: the request sets it, it carries the key, or it would "
+                               "change the request that was approved")
+        hdrs[k] = v
+    if hdrs:
+        auth["extra_headers"] = hdrs
+    else:
+        auth.pop("extra_headers", None)
+    s.x("UPDATE vault_creds SET auth=?, updated_at=? WHERE name=?", (json.dumps(auth), now(), name))
+    s.audit(agent_id, "vault.headers", name, {"extra_headers": sorted(hdrs)})
+    return {"name": name, "extra_headers": hdrs}
 
 
 # ------------------------------------------------------------------------------------------------ storage
@@ -618,8 +657,46 @@ def _grant(s: Store, agent_id: str, cred: str, method: str, url: str) -> dict | 
     return None
 
 
-def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_type: str = "", timeout: float = 30) -> dict:
-    """Make the HTTP call with the key attached; return the status and a scrubbed body."""
+UPLOAD_MAX = 64 * 1024 * 1024
+
+
+def _file_body(name: str) -> bytes:
+    """A file someone copied into the hub's upload folder (COMMONS_VAULT_UPLOADS), to be sent as a request body: a
+    package, an image, a backup. Only a bare file name is taken and never a link, so a request can't read anything
+    else on the hub; like any body it only ever goes to the key's own service."""
+    root = os.environ.get("COMMONS_VAULT_UPLOADS", "").strip()
+    if not root:
+        raise CommonsError("file bodies are off on this hub: the admin sets COMMONS_VAULT_UPLOADS to a folder files "
+                           "can be copied into")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", name or ""):
+        raise CommonsError("body_file is a bare file name in the hub's upload folder (letters, digits, . _ -), not a path")
+    path = os.path.join(root, name)
+    try:
+        if os.path.islink(path):
+            raise OSError("a link")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+                     | getattr(os, "O_BINARY", 0))
+    except OSError as e:
+        raise CommonsError(f"no file {name!r} in the hub's upload folder: copy it there first") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:  # a second name could be a hard link to a hub file
+            raise CommonsError(f"{name!r} is not a plain file of its own (a folder, a pipe or a hard link)")
+        if st.st_size > UPLOAD_MAX:
+            raise CommonsError(f"{name!r} is over {UPLOAD_MAX // (1024 * 1024)} MB")
+        if not st.st_size:
+            raise CommonsError(f"{name!r} is empty")
+        with os.fdopen(os.dup(fd), "rb") as f:
+            return f.read(UPLOAD_MAX)
+    except OSError as e:
+        raise CommonsError(f"{name!r} can't be read from the hub's upload folder") from e
+    finally:
+        os.close(fd)
+
+
+def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_type: str = "", timeout: float = 30,
+         data: bytes | None = None) -> dict:
+    """Make the HTTP call with the key attached; return the status and a scrubbed body. data = a file body, sent as is."""
     value, auth = _value(s, cred["name"]), json.loads(cred["auth"])
     if "\n" in value or "\r" in value:  # http.client quotes a bad header value in its error: that leaked a whole key
         raise CommonsError(f"{cred['name']} has line breaks, so it can't be sent as a key; nothing was sent. A "
@@ -640,6 +717,10 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
         headers[auth["header"]] = auth.get("prefix", "") + value
     if content_type:
         headers["Content-Type"] = content_type
+    elif data is not None and "content-type" not in {k.lower() for k in headers}:
+        headers["Content-Type"] = "application/octet-stream"
+    if data is not None:
+        timeout = max(timeout, 300)  # an upload the service then unpacks takes longer than an API call
 
     def _scrub(text: str) -> str:
         for n in needles:
@@ -647,7 +728,8 @@ def call(s: Store, cred: dict, method: str, url: str, body: str = "", content_ty
                 text = text.replace(n, "[credential]")
         return text
 
-    req = urllib.request.Request(url, data=body.encode() if body else None, method=method, headers=headers)
+    payload = data if data is not None else body.encode() if body else None
+    req = urllib.request.Request(url, data=payload, method=method, headers=headers)
     try:
         with _OPENER.open(req, timeout=timeout) as r:
             status, raw = r.status, r.read(400_000)
@@ -666,7 +748,9 @@ _HOST = contextvars.ContextVar("commons_request_host", default="")  # the hub ad
 
 
 def use(s: Store, agent_id: str, credential: str, method: str, url: str, justification: str, body: str = "",
-        content_type: str = "") -> dict:
+        content_type: str = "", body_file: str = "") -> dict:
+    """body_file = a file in the hub's upload folder to send as the body instead of text (see _file_body). The decision
+    agent and the user are shown its name, size and hash; an approval covers those exact bytes."""
     method = (method or "GET").upper()
     r = s.q("SELECT name, service, description, base_urls, auth, risk FROM vault_creds WHERE name=?", (credential,))
     if not r:
@@ -681,7 +765,14 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
         raise CommonsError("justify the request: what you need this call for (the user's ask or your task)")
     from .redact import redact
     justification = redact(justification)[0][:1000]
-    bh = hashlib.sha256((body or "").encode()).hexdigest()
+    if body_file and body:
+        raise CommonsError("give body or body_file, not both")
+    if body_file and method in READ:
+        raise CommonsError(f"a file body goes with a write (POST, PUT, PATCH), not with {method}")
+    data = _file_body(body_file) if body_file else None
+    bh = hashlib.sha256(data if data is not None else (body or "").encode()).hexdigest()
+    if data is not None:  # what the judge, the user and the log see of a file
+        body = f"[file {body_file}: {len(data)} bytes, sha256 {bh}]"
     for r in s.q("SELECT id, question_id, pending, ts FROM vault_decisions WHERE agent_id=? AND cred=? AND method=? AND url=? AND "
                  "verdict='user_allowed' AND pending IS NOT NULL AND ts>? ORDER BY ts DESC", (agent_id, credential, method,
                                                                                             url[:1000], now() - 3600)):
@@ -693,7 +784,8 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
         st = (pend.get("result") or {}).get("status") or 0
         if method not in READ and pend.get("body_hash") == bh and 0 < st < 500:  # the approval ran it: never twice
             return {"verdict": "allowed", "decision_id": r["id"], "reason": "approved by the user and already run"} | pend["result"]
-    g = _grant(s, agent_id, credential, method, url)
+    # a grant is for a method and a URL, not for bytes: a file is always judged or asked on its own
+    g = None if data is not None else _grant(s, agent_id, credential, method, url)
     if not g:  # the same request again: point at the question already waiting before paying for another judgement
         same = [r for r in s.q("SELECT d.id, d.question_id, d.pending FROM vault_decisions d JOIN board b ON "
                                "b.id=d.question_id WHERE d.agent_id=? AND d.cred=? AND d.method=? AND d.url=? AND "
@@ -704,6 +796,10 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
             return _waiting(s, same[0]["id"], same[0]["question_id"], "this exact request is already waiting for the user")
     d = ({"verdict": "allow", "scope": g["scope"], "scores": {}, "via": "grant", "reason": f"within grant {g['id']}"}
          if g else judge(s, agent_id, cred, method, url, justification, body))
+    if data is not None and d["verdict"] == "allow" and cred.get("risk") != "always":
+        from . import settings
+        if not settings.get(s, "auto_approve_all"):  # the judge only sees a name, a size and a hash: the user decides
+            d = d | {"verdict": "ask_user", "reason": "a file body can't be read by the judge, so you decide"}
     did, qid, pending = new_id("vdc"), None, None
     if d["verdict"] == "ask_user":
         from . import board as B
@@ -712,7 +808,8 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
                                    f"{cred['service']} key? Their reason: {justification[:300]} (Commons: {d['reason']})."
                                    + (f" Body: {shown}" if shown else "") + " Answer yes or no.",
                     project="commons-dev", path="vault", agent_id=agent_id)["id"]
-        pending = json.dumps({"body": body or "", "content_type": content_type or "", "body_hash": bh})
+        pending = json.dumps({"body": "" if data is not None else body or "", "content_type": content_type or "",
+                              "body_hash": bh, "body_file": body_file or ""})
     s.x("INSERT INTO vault_decisions(id,agent_id,cred,method,url,justification,scope,verdict,scores,reason,question_id,ts,"
         "pending) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (did, agent_id, credential, method, url[:1000], justification, d["scope"], d["verdict"], json.dumps(d["scores"]),
@@ -729,7 +826,8 @@ def use(s: Store, agent_id: str, credential: str, method: str, url: str, justifi
             (g["id"], agent_id, credential, d["scope"], method, url[:1000], did,
              now() + (GRANT_S if d["scope"] == "read" else 900)))
     s.x("UPDATE vault_grants SET uses=uses+1 WHERE id=?", (g["id"],))
-    return {"verdict": "allowed", "decision_id": did, "reason": d["reason"]} | call(s, cred, method, url, body, content_type)
+    return {"verdict": "allowed", "decision_id": did, "reason": d["reason"]} | call(
+        s, cred, method, url, "" if data is not None else body, content_type, data=data)
 
 
 def _waiting(s: Store, did: str, qid: str, reason: str) -> dict:
@@ -772,14 +870,21 @@ def answered(s: Store, question_text: str, answer: str) -> None:
     s.audit(None, "vault.user_" + ("allow" if yes else "deny"), d["cred"], {"decision": d["id"], "similar": similar})
     if yes and pend is not None:  # run the approved request now and hand the result to the agent: no retry needed
         cred = s.q("SELECT * FROM vault_creds WHERE name=?", (d["cred"],))
+        swapped, is_file = False, bool(pend.get("body_file"))
         try:
-            res = call(s, dict(cred[0]), d["method"], d["url"], pend["body"], pend.get("content_type", "")) if cred else \
-                {"status": None, "error": "credential removed"}
+            data = _file_body(pend["body_file"]) if pend.get("body_file") else None
+            swapped = data is not None and hashlib.sha256(data).hexdigest() != pend["body_hash"]
+            res = {"status": None, "error": "credential removed"} if not cred else \
+                {"status": None, "error": f"{pend['body_file']} changed after the user was asked: nothing was sent, "
+                                          "ask again"} if swapped else \
+                call(s, dict(cred[0]), d["method"], d["url"], pend["body"], pend.get("content_type", ""), data=data)
         except Exception as e:  # noqa: BLE001 - tell the agent rather than lose the approval
             res = {"status": None, "error": str(e)[:300]}
         pend["result"] = res
         s.x("UPDATE vault_decisions SET pending=? WHERE id=?", (json.dumps(pend), d["id"]))
-        if not 0 < (res.get("status") or 0) < 500:  # the service never really answered: allow one retry of this call
+        # the service never really answered: allow one retry of this call. Never for a file: a grant is for a method
+        # and a URL, not for bytes, so it would let any other file through; the agent asks again instead
+        if not is_file and not 0 < (res.get("status") or 0) < 500:
             s.x("INSERT INTO vault_grants(id,agent_id,cred,scope,method,url,decision_id,expires_at) VALUES(?,?,?,?,?,?,?,?)",
                 (new_id("vgr"), d["agent_id"], d["cred"], d["scope"], d["method"], d["url"], d["id"], now() + 3600))
     if d.get("agent_id"):

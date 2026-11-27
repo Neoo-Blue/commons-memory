@@ -257,10 +257,11 @@ def register_v8(mcp, store, who):
 
     @mcp.tool()
     def use_credential(credential: str, url: str, justification: str, method: str = "GET", body: str = "",
-                       content_type: str = "", agent: str = "", api_key: str = "") -> str:
-        """Call a service with one of the user's keys without seeing it: Commons makes the request and returns the response. justification = what you need it for; the decision agent allows sound reads, writes need the user's request, risky ones wait for the user: show them approve_url (a 'yes' in your chat can't approve), then approval_status(question_id, wait=120) returns the result once they approve. verdict running = approved and being run now: wait on approval_status, don't resend."""
+                       content_type: str = "", body_file: str = "", agent: str = "", api_key: str = "") -> str:
+        """Call a service with one of the user's keys without seeing it: Commons makes the request and returns the response. body_file = send a file as the body (a package, an image): copy it into the hub's upload folder first and give its bare name. justification = what you need it for; the decision agent allows sound reads, writes need the user's request, risky ones wait for the user: show them approve_url (a 'yes' in your chat can't approve), then approval_status(question_id, wait=120) returns the result once they approve. verdict running = approved and being run now: wait on approval_status, don't resend."""
         from . import vault as V
-        return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type))
+        return _js(V.use(store, me(agent, api_key), credential, method, url, justification, body, content_type,
+                         body_file))
 
     @mcp.tool()
     def approval_status(question_id: str, wait: float = 0, agent: str = "", api_key: str = "") -> str:
@@ -384,6 +385,13 @@ def register_v8(mcp, store, who):
         """Say where a key you deposited may be sent (its API's base URLs), for a key deposited without them."""
         from . import vault as V
         return _js(V.set_hosts(store, me(agent, api_key), name, base_urls))
+
+    @mcp.tool()
+    def vault_headers(name: str, extra_headers: list[str], agent: str = "", api_key: str = "") -> str:
+        """Set the fixed headers a key you deposited sends on every call, e.g. ["X-Ether-Request: 1"], without
+        handing the value over again. Replaces the stored list; [] clears it."""
+        from . import vault as V
+        return _js(V.set_headers(store, me(agent, api_key), name, extra_headers))
 
     @mcp.tool()
     def handover_status(agent: str = "", api_key: str = "") -> str:
