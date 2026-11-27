@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.44.1: a repeating task can hand its split back to the planner
+- `POST /api/recurring/update` takes `pattern`; the Orchestration page shows a task pinned to a fixed split ("Always
+  split as plan execute verify") with a link that hands it to the planner.
+
 ## v0.44.0: orchestration you can read and adjust
 - **Why.** The owner: "the orchestrator is not doing super smart, it's not straightforward and easy to understand from
   the dashboard, and it's hard to adjust." On the live hub 162 of 169 jobs in 30 days had used the fixed

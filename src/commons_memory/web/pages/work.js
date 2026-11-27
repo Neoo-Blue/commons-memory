@@ -697,7 +697,8 @@
           <label class="or-switch" title="${r.enabled ? "On" : "Off"}"><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="orRec(${J(r.id)},{enabled:this.checked})"><span></span></label>
           <div class="or-rec-main"><b>${E(r.name)}</b>
             <small>${r.last ? `Last run ${E(fmtAgo(r.last.created_at))}, ${E(r.last.status)}` : "Never run"} · ${r.runs_7d} run${r.runs_7d === 1 ? "" : "s"} this week${r.failed_7d ? `, <span class="or-bad">${r.failed_7d} failed</span>` : ""}${r.cost_7d ? " · " + fmtMoney(r.cost_7d) : ""}</small>
-            ${r.last && r.last.planned && r.last.planned.why ? `<small class="or-rec-why">${E(r.last.planned.why)}</small>` : ""}</div>
+            ${r.last && r.last.planned && r.last.planned.why ? `<small class="or-rec-why">${E(r.last.planned.why)}</small>` : ""}
+            ${r.pattern && r.pattern !== "auto" ? `<small>Always split as <b>${E(r.pattern.replace(/_/g, " "))}</b> · <a href="#" onclick="orRec(${J(r.id)},{pattern:'auto'});return false">let the planner decide</a></small>` : ""}</div>
           <select class="or-rec-when" aria-label="Schedule for ${E(r.name)}" onchange="orRecCron(${J(r.id)},this)">
             ${OR_PRESETS.some(p => p[0] === r.cron) ? "" : `<option value="${E(r.cron)}" selected>${E(r.when)}</option>`}
             ${OR_PRESETS.map(p => `<option value="${p[0]}" ${p[0] === r.cron ? "selected" : ""}>${p[1]}</option>`).join("")}

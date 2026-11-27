@@ -291,6 +291,7 @@ class API:
             last = self.s.q("SELECT id, status, created_at FROM jobs WHERE recurring_id=? ORDER BY created_at DESC LIMIT 1",
                             (r["id"],))
             rec.append({"id": r["id"], "name": r["name"], "cron": r["cron"], "when": cron_words(r["cron"]),
+                        "pattern": r["pattern"],
                         "enabled": bool(r["enabled"]), "next_run": r["next_run"], "task": (r["task"] or "")[:400],
                         "runs_7d": len(runs), "failed_7d": sum(x["status"] == "failed" for x in runs),
                         "cost_7d": round(sum(json.loads(x["used"] or "{}").get("cost", 0) for x in runs), 4),
@@ -690,9 +691,14 @@ class API:
             cron = (body.get("cron") or r[0]["cron"]).strip()
             nxt = next_cron(cron, datetime.now()).timestamp()  # raises on a bad schedule
             enabled = int(bool(body["enabled"])) if "enabled" in body else r[0]["enabled"]
-            self.s.x("UPDATE recurring SET cron=?, enabled=?, next_run=? WHERE id=?", (cron, enabled, nxt, r[0]["id"]))
-            self.s.audit(None, "recurring.update", r[0]["id"], {"cron": cron, "enabled": enabled})
-            return {"ok": True, "cron": cron, "enabled": bool(enabled), "next_run": nxt}
+            pattern = body.get("pattern") or r[0]["pattern"]
+            if pattern not in ("auto", "llm", "single", "plan_execute_verify", "cross_review", "debate", "consensus",
+                               "parallel", "sdlc"):
+                raise CommonsError(f"unknown pattern {pattern!r}")
+            self.s.x("UPDATE recurring SET cron=?, enabled=?, next_run=?, pattern=? WHERE id=?",
+                     (cron, enabled, nxt, pattern, r[0]["id"]))
+            self.s.audit(None, "recurring.update", r[0]["id"], {"cron": cron, "enabled": enabled, "pattern": pattern})
+            return {"ok": True, "cron": cron, "enabled": bool(enabled), "pattern": pattern, "next_run": nxt}
         if path == "/api/recurring/run":
             return {"ran": self.o.run_due(force=body.get("id") or "")}
         if path == "/api/killswitch":

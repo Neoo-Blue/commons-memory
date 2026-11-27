@@ -221,3 +221,20 @@ def test_a_planner_reason_line_is_kept():
     from commons_memory import planning as P
     text = 'WHY: two independent parts, so they run side by side.\n[{"key": "a", "title": "A"}, {"key": "b", "title": "B"}]'
     assert P.why(text) == "two independent parts, so they run side by side." and len(P.parse(text)) == 2
+
+
+def test_the_orchestration_page_reads_and_adjusts_repeating_tasks(store):
+    import pytest
+    from commons_memory.dashboard import API as Api
+    o = Orchestrator(store)
+    o.schedule("proactive", "34 * * * *", "Look for useful work", pattern="plan_execute_verify")
+    api = Api(store)
+    v = api.orchestration_view({})
+    r = next(x for x in v["recurring"] if x["name"] == "proactive")
+    assert r["when"] == "every hour, at :34" and r["pattern"] == "plan_execute_verify"
+    out = api.post("/api/recurring/update", {"id": r["id"], "cron": "34 */4 * * *", "pattern": "auto"})
+    assert out["cron"] == "34 */4 * * *" and out["pattern"] == "auto"
+    r = next(x for x in api.orchestration_view({})["recurring"] if x["name"] == "proactive")
+    assert r["when"] == "every 4 hours, at :34"
+    with pytest.raises(Exception):
+        api.post("/api/recurring/update", {"id": r["id"], "cron": "not a schedule"})
