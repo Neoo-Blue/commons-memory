@@ -39,3 +39,32 @@ function shellMore(btn){
 }
 if(window.K&&K.action){K.action({id:"pause",label:"Pause all work",keywords:"kill switch stop",run:()=>post("killswitch",{paused:true,reason:"command palette"})});
   K.action({id:"resume",label:"Resume all work",keywords:"kill switch start",run:()=>post("killswitch",{paused:false})});}
+
+/* ---------- notification bell (top bar): unread count, live from /events; the list opens below it ---------- */
+function bellBadge(n){const b=document.getElementById("bellN");if(!b)return;n=+n||0;b.hidden=!n;b.textContent=n>99?"99+":String(n);
+  const bt=document.getElementById("bell");if(bt)bt.setAttribute("aria-label",n?n+" unread notifications":"Notifications")}
+function bellLoad(){return fetch("/api/notifications",{credentials:"same-origin"}).then(r=>r.json()).then(d=>{bellBadge(d.unread);return d})}
+function bellClose(){const p=document.getElementById("bellp");if(p){p.remove();document.removeEventListener("pointerdown",bellAway,true);document.removeEventListener("keydown",bellKey,true)}}
+function bellAway(e){const p=document.getElementById("bellp");if(p&&!p.contains(e.target)&&!document.getElementById("bell").contains(e.target))bellClose()}
+function bellKey(e){if(e.key==="Escape"){bellClose();document.getElementById("bell").focus()}}
+function bellOpen(btn){
+  if(document.getElementById("bellp")){bellClose();return}
+  const p=document.createElement("div");p.id="bellp";p.className="menu bellp";p.setAttribute("role","dialog");p.setAttribute("aria-label","Notifications");
+  p.innerHTML='<div class="bellp-head"><b>Notifications</b><button type="button" class="btn sm" data-all>Mark all read</button></div><div class="bellp-list"><div class="bellp-empty">Loading…</div></div><button type="button" class="bellp-foot">Open System</button>';
+  document.body.appendChild(p);
+  const r=btn.getBoundingClientRect();p.style.top=(r.bottom+6)+"px";p.style.right=Math.max(8,innerWidth-r.right)+"px";
+  document.addEventListener("pointerdown",bellAway,true);document.addEventListener("keydown",bellKey,true);
+  p.querySelector(".bellp-foot").onclick=()=>{bellClose();go("System")};
+  p.querySelector("[data-all]").onclick=()=>postRaw("notifications/read",{}).then(()=>fill());
+  const fill=()=>bellLoad().then(d=>{
+    const L=p.querySelector(".bellp-list");L.textContent="";
+    if(!(d.items||[]).length){L.innerHTML='<div class="bellp-empty">Nothing yet</div>';return}
+    d.items.forEach(n=>{const it=document.createElement("button");it.type="button";it.className="bellp-item"+(n.read?"":" unread")+" lv-"+(n.level||"info");
+      it.innerHTML='<span class="bellp-dot"></span><span class="bellp-txt"><span class="bellp-t"></span><span class="bellp-b"></span></span><span class="bellp-ago"></span>';
+      it.querySelector(".bellp-t").textContent=n.title||"";it.querySelector(".bellp-b").textContent=n.body||"";
+      it.querySelector(".bellp-ago").textContent=window.K&&K.fmt&&K.fmt.ago?K.fmt.ago(n.ts):"";
+      it.onclick=()=>{if(!n.read)postRaw("notifications/read",{id:n.id}).then(()=>fill());it.classList.toggle("open")};
+      L.appendChild(it)})}).catch(e=>{p.querySelector(".bellp-list").innerHTML='<div class="bellp-empty">Could not load</div>'});
+  fill();
+}
+bellLoad().catch(()=>{});
