@@ -2,7 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
-## Unreleased
+## v0.43.0: vault headers and file uploads, and a notification bell
+- **Notification bell in the top bar.** Every page shows a bell with the unread count, kept live by the /events stream
+  (which now also sends the count). It opens the latest 20; a click marks one read, and Mark all read clears them.
+  `GET /api/notifications` returns `{unread, items}`.
 - **Vault: fixed headers on a key you already deposited.** `vault_headers(name, extra_headers)` sets the headers a
   service wants on every call (a CSRF marker such as `X-Ether-Request: 1`, a client id) without handing the value over
   again. Only the agent that deposited the key can change them, and a header that carries the key or that the request
@@ -11,6 +14,10 @@ All notable changes, newest first. The README describes the current release only
   folder (`COMMONS_VAULT_UPLOADS`, off until set) byte for byte, so a plugin package or an image can be uploaded with a
   key no agent sees. Only a bare file name is taken and links are refused. The decision agent and the user see the
   name, size and SHA-256; an approval covers those exact bytes, and a file swapped after the question is not sent.
+- **Review follow-up.** Fixed headers also refuse the ones proxies use to retarget a call (`Forwarded`,
+  `X-Forwarded-Host/Proto/Prefix/Port`, `X-Original-URL`, `X-Rewrite-URL`, `X-Original-Host`), and a file body always
+  goes to the user unless they chose "always allow this key" or approve-everything: the judge sees only a name, a size
+  and a hash.
 
 ## v0.42.0: one line installs everything, agents make themselves wakeable, and a full review with a second model family
 - **Why.** The owner asked for three things: a one click install after which everything is automatic unless you want
