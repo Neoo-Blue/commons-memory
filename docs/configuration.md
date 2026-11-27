@@ -149,6 +149,7 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_URL` | `http://127.0.0.1:8770` | Commons server base URL for hooks/clients (empty = local DB) | canoncache.py, capture.py, cli.py, cli_v8.py, infra_collect.py, wakeclient.py |
 | `COMMONS_VAULT_KEY` | — | Master key of the credential vault (base64 of 32 random bytes); keep it in a root-only env file, never in the database | vault.py |
 | `COMMONS_VAULT_KEY_FILE` | — | File holding the vault master key when COMMONS_VAULT_KEY is unset (default vault.key next to the database, created 0600 on first use; a Docker secret path keeps it off the data volume) | vault.py |
+| `COMMONS_VAULT_UPLOADS` | — | Folder on the hub whose files use_credential may send as a request body (body_file: a plugin package, an image); unset turns file bodies off. Only bare file names are read and links are refused; make it writable by whoever copies files in | vault.py |
 | `COMMONS_WAKE_BACKOFF_SCALE` | `1` | Multiplier for wake-delivery retry backoff | messaging.py |
 | `COMMONS_WAKE_DEBOUNCE` | `2` | Seconds a queued push wake (webhook etc.) absorbs further events for the same channel (burst = one wake) | messaging.py |
 | `COMMONS_WAKE_PER_MIN` | `30` | Wake deliveries per agent per minute (excess coalesced) | messaging.py |

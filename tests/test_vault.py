@@ -401,3 +401,163 @@ def test_scope_stops_at_a_path_boundary():
     bad = ["https://api.example.com/v1-admin/keys", "https://api.example.com/v10", "https://b.example.com/xy",
            "https://api.example.com/v1/../v2"]
     assert all(V._in_scope(c, u) for u in ok) and not any(V._in_scope(c, u) for u in bad)
+
+
+@pytest.fixture()
+def upsvc(monkeypatch, tmp_path):
+    """A service that records the headers and raw body of each POST, plus a hub upload folder."""
+    monkeypatch.setenv("COMMONS_VAULT_KEY", base64.b64encode(os.urandom(32)).decode())
+    up = tmp_path / "uploads"
+    up.mkdir()
+    monkeypatch.setenv("COMMONS_VAULT_UPLOADS", str(up))
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            seen.append((dict(self.headers), raw))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}", seen, up
+    srv.shutdown()
+
+
+def test_the_depositor_sets_fixed_headers_without_handing_the_value_over_again(store, upsvc, monkeypatch):
+    base, seen, _ = upsvc
+    a, other = store.ensure_agent("claude"), store.ensure_agent("grok")
+    V.deposit(store, a, "ether", SECRET, "ether", [base], auth="header:X-Plex-Token", risk="always",
+              purpose="owner calls to the Ether console", scope="full owner")
+    with pytest.raises(CommonsError, match="only the agent that deposited"):
+        V.set_headers(store, other, "ether", ["X-Ether-Request: 1"])
+    for bad in (["X-Ether-Request"], ["X-A: 1\r\nX-B: 2"], ["Authorization: Bearer x"], ["Host: evil.example"],
+                ["x-plex-token: other"], ["Bad Name: 1"], ["X-Empty:  "], ["X-HTTP-Method-Override: DELETE"],
+                ["X-Method-Override: PUT"], ["Expect: 100-continue"], ["Transfer-Encoding: chunked"],
+                ["X-A: v\r\n"]):
+        with pytest.raises(CommonsError):
+            V.set_headers(store, a, "ether", bad)
+    assert V.set_headers(store, a, "ether", ["X-Ether-Request: 1"])["extra_headers"] == {"X-Ether-Request": "1"}
+    assert V._value(store, "ether") == SECRET                                     # the value was not touched
+    r = V.use(store, a, "ether", "POST", base + "/api/config/quality", "the user asked to change a quality rule",
+              body='{"a": 1}', content_type="application/json")
+    assert r["verdict"] == "allowed" and r["status"] == 200
+    h, raw = seen[-1]
+    assert h["X-Ether-Request"] == "1" and h["X-Plex-Token"] == SECRET and raw == b'{"a": 1}'
+    assert V.set_headers(store, a, "ether", [])["extra_headers"] == {}             # an empty list clears them
+    V.use(store, a, "ether", "POST", base + "/api/config/x", "the user asked to change another rule", body="{}")
+    assert "X-Ether-Request" not in seen[-1][0]
+
+
+def test_a_file_from_the_upload_folder_is_sent_as_the_body(store, upsvc, monkeypatch):
+    base, seen, up = upsvc
+    a = store.ensure_agent("builder")
+    V.add(store, "ether", SECRET, "ether", [base], {"header": "X-Plex-Token", "extra_headers": {"X-Ether-Request": "1"}},
+          risk="always")
+    blob = bytes(range(256)) * 40 + b"\xff\x00\xfe"                                # not text: must arrive byte for byte
+    (up / "music-24.etherpkg").write_bytes(blob)
+    r = V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install build 24",
+              body_file="music-24.etherpkg")
+    assert r["verdict"] == "allowed" and r["status"] == 200
+    h, raw = seen[-1]
+    assert raw == blob and h["Content-Type"] == "application/octet-stream" and h["X-Ether-Request"] == "1"
+    with pytest.raises(CommonsError, match="not both"):
+        V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install build 24",
+              body="x", body_file="music-24.etherpkg")
+    n = len(seen)
+    secret = up.parent / "vault.key"
+    secret.write_text("hub secret")
+    os.symlink(secret, up / "link.pkg")
+    (up / "adir").mkdir()
+    os.mkfifo(up / "pipe")
+    os.link(secret, up / "hard.pkg")                                               # a second name for a hub file
+    (up / "empty.pkg").write_bytes(b"")
+    for bad in ("../vault.key", str(secret), "sub/x", "link.pkg", "missing.pkg", ".hidden", "adir", "pipe", "hard.pkg",
+                "empty.pkg"):
+        with pytest.raises(CommonsError):
+            V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install build 24",
+                  body_file=bad)
+    assert len(seen) == n                                                          # nothing was sent for any of them
+    monkeypatch.delenv("COMMONS_VAULT_UPLOADS")
+    with pytest.raises(CommonsError, match="file bodies are off"):
+        V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install build 24",
+              body_file="music-24.etherpkg")
+
+
+def test_an_approval_covers_the_exact_bytes_of_a_file(store, upsvc, monkeypatch):
+    base, seen, up = upsvc
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)                          # no judge: the user decides
+    from commons_memory import board as B
+    a = store.ensure_agent("builder")
+    V.add(store, "ether", SECRET, "ether", [base], {"header": "X-Plex-Token"})
+    f = up / "plugin.etherpkg"
+    f.write_bytes(b"\x00good build\xff")
+    w = V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install the plugin",
+              body_file="plugin.etherpkg")
+    q = B.get(store, w["question_id"])
+    assert w["verdict"] == "waiting_for_user" and "plugin.etherpkg" in q["text"] and "sha256" in q["text"]
+    B.answer(store, w["question_id"], "yes")
+    assert seen[-1][1] == b"\x00good build\xff"                                    # approving sent the file itself
+    f.write_bytes(b"\x00second build\xff")                                         # new bytes are a new request
+    w2 = V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install the plugin",
+               body_file="plugin.etherpkg")
+    assert w2["verdict"] == "waiting_for_user" and w2["question_id"] != w["question_id"]
+    f.write_bytes(b"\x00swapped after asking\xff")
+    n = len(seen)
+    B.answer(store, w2["question_id"], "yes")
+    assert len(seen) == n                                                          # the swapped file was not sent
+    res = json.loads(store.q("SELECT pending FROM vault_decisions WHERE id=?", (w2["decision_id"],))[0]["pending"])["result"]
+    assert "changed after the user was asked" in res["error"]
+    w3 = V.use(store, a, "ether", "POST", base + "/api/plugins/install", "the user asked to install the plugin",
+               body_file="plugin.etherpkg")
+    assert w3["verdict"] == "waiting_for_user" and len(seen) == n                  # and no retry grant slipped it through
+
+
+def test_a_failed_file_upload_leaves_no_grant_for_other_files(store, upsvc, monkeypatch):
+    base, seen, up = upsvc
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    from commons_memory import board as B
+    a = store.ensure_agent("builder")
+    V.add(store, "ether", SECRET, "ether", [base], {"header": "X-Plex-Token"})
+    (up / "evil.pkg").write_bytes(b"EVIL")
+    why = "the user asked to install the plugin"
+    # the approved file is gone when the user says yes
+    (up / "good.pkg").write_bytes(b"GOOD")
+    w = V.use(store, a, "ether", "POST", base + "/api/plugins/install", why, body_file="good.pkg")
+    (up / "good.pkg").unlink()
+    B.answer(store, w["question_id"], "yes")
+    # the service is down when the user says yes (the old code granted a retry of this method and URL)
+    (up / "good2.pkg").write_bytes(b"GOOD2")
+    w = V.use(store, a, "ether", "POST", base + "/api/plugins/install", why, body_file="good2.pkg")
+    monkeypatch.setattr(V, "call", lambda *x, **k: {"status": 0, "error": "connection refused"})
+    B.answer(store, w["question_id"], "yes")
+    monkeypatch.undo()
+    monkeypatch.setenv("COMMONS_VAULT_UPLOADS", str(up))
+    assert not seen and not store.q("SELECT 1 FROM vault_grants")
+    r = V.use(store, a, "ether", "POST", base + "/api/plugins/install", why, body_file="evil.pkg")
+    assert r["verdict"] == "waiting_for_user" and not seen                         # another file needs its own yes
+
+
+def test_no_grant_ever_carries_another_file(store, upsvc, monkeypatch):
+    base, seen, up = upsvc
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    from commons_memory import board as B
+    a = store.ensure_agent("builder")
+    V.add(store, "ether", SECRET, "ether", [base], {"header": "X-Plex-Token"})
+    (up / "a.pkg").write_bytes(b"AAA")
+    (up / "b.pkg").write_bytes(b"BBB")
+    why = "the user asked to install the plugin"
+    with pytest.raises(CommonsError, match="goes with a write"):
+        V.use(store, a, "ether", "GET", base + "/api/plugins", why, body_file="a.pkg")
+    w = V.use(store, a, "ether", "POST", base + "/api/plugins/install", why, body_file="a.pkg")
+    B.answer(store, w["question_id"], "yes, approve all similar")                  # an hour of POSTs to this service
+    assert [raw for _, raw in seen] == [b"AAA"]
+    r = V.use(store, a, "ether", "POST", base + "/api/plugins/other", why, body_file="b.pkg")
+    assert r["verdict"] == "waiting_for_user" and [raw for _, raw in seen] == [b"AAA"]   # but not of other files
+    t = V.use(store, a, "ether", "POST", base + "/api/config/x", why, body="{}")
+    assert t["verdict"] == "allowed"                                               # text calls still ride the grant

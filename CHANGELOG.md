@@ -2,6 +2,16 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## Unreleased
+- **Vault: fixed headers on a key you already deposited.** `vault_headers(name, extra_headers)` sets the headers a
+  service wants on every call (a CSRF marker such as `X-Ether-Request: 1`, a client id) without handing the value over
+  again. Only the agent that deposited the key can change them, and a header that carries the key or that the request
+  sets itself (Authorization, Host, Content-Length) is refused.
+- **Vault: a file as the request body.** `use_credential(..., body_file="name")` sends a file from the hub's upload
+  folder (`COMMONS_VAULT_UPLOADS`, off until set) byte for byte, so a plugin package or an image can be uploaded with a
+  key no agent sees. Only a bare file name is taken and links are refused. The decision agent and the user see the
+  name, size and SHA-256; an approval covers those exact bytes, and a file swapped after the question is not sent.
+
 ## v0.42.0: one line installs everything, agents make themselves wakeable, and a full review with a second model family
 - **Why.** The owner asked for three things: a one click install after which everything is automatic unless you want
   to look at the dashboard; that an agent Commons can't wake fixes that itself instead of the owner carrying a
