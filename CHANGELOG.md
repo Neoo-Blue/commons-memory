@@ -2,6 +2,13 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.44.2: takeovers follow the schedule's split
+- A missed external run's takeover used the fixed plan, execute, verify split whatever the schedule said; it now uses
+  the schedule's pattern (still plan, execute, verify unless the owner handed it to the planner). On the live hub that
+  template was 147 of 169 jobs in 30 days, all hourly takeovers of one schedule.
+- The Orchestration page says when a repeating task runs on an agent's own scheduler, and drops Run now there (the hub
+  only covers missed runs of those).
+
 ## v0.44.1: a repeating task can hand its split back to the planner
 - `POST /api/recurring/update` takes `pattern`; the Orchestration page shows a task pinned to a fixed split ("Always
   split as plan execute verify") with a link that hands it to the planner.

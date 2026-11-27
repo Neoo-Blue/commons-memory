@@ -698,12 +698,13 @@
           <div class="or-rec-main"><b>${E(r.name)}</b>
             <small>${r.last ? `Last run ${E(fmtAgo(r.last.created_at))}, ${E(r.last.status)}` : "Never run"} · ${r.runs_7d} run${r.runs_7d === 1 ? "" : "s"} this week${r.failed_7d ? `, <span class="or-bad">${r.failed_7d} failed</span>` : ""}${r.cost_7d ? " · " + fmtMoney(r.cost_7d) : ""}</small>
             ${r.last && r.last.planned && r.last.planned.why ? `<small class="or-rec-why">${E(r.last.planned.why)}</small>` : ""}
+            ${r.external ? `<small>Runs on ${E(r.owner || "an agent")}'s own scheduler; Commons steps in when a run is missed</small>` : ""}
             ${r.pattern && r.pattern !== "auto" ? `<small>Always split as <b>${E(r.pattern.replace(/_/g, " "))}</b> · <a href="#" onclick="orRec(${J(r.id)},{pattern:'auto'});return false">let the planner decide</a></small>` : ""}</div>
           <select class="or-rec-when" aria-label="Schedule for ${E(r.name)}" onchange="orRecCron(${J(r.id)},this)">
             ${OR_PRESETS.some(p => p[0] === r.cron) ? "" : `<option value="${E(r.cron)}" selected>${E(r.when)}</option>`}
             ${OR_PRESETS.map(p => `<option value="${p[0]}" ${p[0] === r.cron ? "selected" : ""}>${p[1]}</option>`).join("")}
             <option value="custom">Custom…</option></select>
-          <button type="button" class="btn sm" onclick="orRunNow(${J(r.id)})">Run now</button>
+          ${r.external ? "" : `<button type="button" class="btn sm" onclick="orRunNow(${J(r.id)})">Run now</button>`}
         </div>`).join("") || `<p class="or-empty">No repeating tasks.</p>`}
         <p class="or-foot">Times follow the hub's clock (UTC).</p></div>
       </section>

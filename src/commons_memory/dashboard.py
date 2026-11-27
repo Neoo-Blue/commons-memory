@@ -291,7 +291,9 @@ class API:
             last = self.s.q("SELECT id, status, created_at FROM jobs WHERE recurring_id=? ORDER BY created_at DESC LIMIT 1",
                             (r["id"],))
             rec.append({"id": r["id"], "name": r["name"], "cron": r["cron"], "when": cron_words(r["cron"]),
-                        "pattern": r["pattern"],
+                        "pattern": r["pattern"], "external": bool(r["external"]) if "external" in r.keys() else False,
+                        "owner": self.s.label(r["owner_agent"] or r["created_by"])[1]
+                        if ("owner_agent" in r.keys() and r["owner_agent"]) or r["created_by"] else "",
                         "enabled": bool(r["enabled"]), "next_run": r["next_run"], "task": (r["task"] or "")[:400],
                         "runs_7d": len(runs), "failed_7d": sum(x["status"] == "failed" for x in runs),
                         "cost_7d": round(sum(json.loads(x["used"] or "{}").get("cost", 0) for x in runs), 4),

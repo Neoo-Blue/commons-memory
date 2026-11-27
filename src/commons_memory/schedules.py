@@ -160,7 +160,8 @@ def watch(s: Store, t: float | None = None) -> list[dict]:
         else:
             continue
         o = Orchestrator(s)
-        job = o.submit(_brief(r, s.label(owner)[1] if owner else "-", slot, reason), pattern="plan_execute_verify",
+        # the schedule's own split: plan -> execute -> verify unless the owner handed it to the planner (auto)
+        job = o.submit(_brief(r, s.label(owner)[1] if owner else "-", slot, reason), pattern=r["pattern"] or "plan_execute_verify",
                        project=s.project_name(r["project_id"]) if r["project_id"] else None,
                        title=f"{r['name']} @ {iso(slot)} (takeover)", recurring_id=r["id"])
         if owner:  # someone other than the owner, who can't deliver right now
