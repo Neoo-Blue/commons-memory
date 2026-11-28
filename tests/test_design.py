@@ -41,3 +41,34 @@ def test_rules_profile_capture_and_pickup(store):
     ev = d.evidence()["text"]
     assert "unreadable" in ev and "cartoonish" in ev
     assert d.rebuild()["needs_agent"]  # no distiller model configured
+
+
+def test_owner_adds_rules_and_edits_the_profile_on_the_page(tmp_path):
+    import json
+    import threading
+    import urllib.request
+
+    from commons_memory.dashboard import PAGE, make_server
+    from conftest import make_store
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+                                     headers={"X-Commons": "1", "Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read())
+
+    store = make_store(tmp_path, "design.db")
+    srv = make_server(store, port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        r = post("/api/design/add", {"text": "Headlines heavier", "section": "liked", "surface": "marketing"})
+        assert r["confidence"] == 1.0 and r["section"] == "liked"
+        assert post("/api/design/profile", {"body": "# Mine\nElegant."})["version"] == 1
+        with urllib.request.urlopen(base + "/api/design", timeout=8) as g:
+            d = json.loads(g.read())
+        assert d["profile"]["body"].startswith("# Mine")
+        assert [x["statement"] for x in d["rules"]] == ["Headlines heavier"]
+        assert "design/add" in PAGE and "design/profile" in PAGE
+    finally:
+        srv.shutdown()

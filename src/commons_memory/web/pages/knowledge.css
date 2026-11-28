@@ -334,3 +334,5 @@
 .kn-dh { margin: var(--space-5, 24px) 0 var(--space-2, 8px); font-size: var(--text-md, 16px); }
 .kn-design { padding: var(--space-4, 16px); }
 .kn-md { white-space: pre-wrap; font-size: var(--text-sm, 15px); line-height: 1.6; max-height: 60vh; overflow: auto; margin-top: var(--space-3, 12px); }
+.kn-design textarea { width: 100%; font: inherit; font-size: var(--text-sm, 15px); line-height: 1.55; padding: 10px; box-sizing: border-box; }
+.kn-design .kn-controls { margin-top: var(--space-3, 12px); display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }

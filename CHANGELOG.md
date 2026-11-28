@@ -2,6 +2,10 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.45.1: add and edit your own design rules
+- The Design page takes your own rules and suggestions (kind and where it applies), saved at full confidence, and lets
+  you edit the ideology itself, saved as a new version. `POST /api/design/add`, `POST /api/design/profile`.
+
 ## v0.45.0: a design ideology every agent reads
 - **Why.** The owner: "a dedicated design ideology memory ... what user liked, what user did not like, what style user
   usually prefer, what is a hard no ... to deliver a better, more consistent design style", captured from every agent.

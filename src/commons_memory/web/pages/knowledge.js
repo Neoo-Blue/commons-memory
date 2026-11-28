@@ -792,9 +792,25 @@ V["Design"] = async function () {
       '<div class="row"><div class="row-content"><div>' + E(f.text || "") + '</div><div class="kn-sub"><span>' + E((f.at || "").slice(0, 10))
       + "</span><span>" + E(f.project || "") + "</span><span>" + E(f.agent || "") + "</span></div></div></div>").join("") + "</div>"
     : "";
+  const opt = (v, label) => '<option value="' + E(v) + '">' + E(label) + "</option>";
+  const add = '<div class="card kn-design"><h3 class="kn-dh" style="margin-top:0">Add your own rule or suggestion</h3>'
+    + '<textarea id="dz-text" rows="3" placeholder="For example: headlines heavier, never pastel on finance products" aria-label="Your rule"></textarea>'
+    + '<div class="kn-controls"><label>Kind<select id="dz-sec" aria-label="Kind">'
+    + Object.keys(secs).map(k => opt(k, secs[k])).join("") + "</select></label>"
+    + '<label>Where<select id="dz-surf" aria-label="Where">' + opt("", "Everywhere")
+    + ["marketing", "dashboard", "app", "tool", "email", "mobile", "brand"].map(s => opt(s, s[0].toUpperCase() + s.slice(1))).join("")
+    + "</select></label>"
+    + '<button type="button" class="pri" onclick="const t=document.getElementById(\'dz-text\').value.trim();if(t)post(\'design/add\',{text:t,section:document.getElementById(\'dz-sec\').value,surface:document.getElementById(\'dz-surf\').value})">Add</button></div></div>';
+  const edit = window.dz_edit
+    ? '<div class="card kn-design"><h3 class="kn-dh" style="margin-top:0">Edit the ideology</h3>'
+      + '<textarea id="dz-body" rows="24" aria-label="Design ideology">' + E((p && p.body) || "") + "</textarea>"
+      + '<div class="kn-controls"><button type="button" class="pri" onclick="const b=document.getElementById(\'dz-body\').value.trim();if(b){window.dz_edit=0;post(\'design/profile\',{body:b})}">Save as a new version</button>'
+      + '<button type="button" onclick="window.dz_edit=0;render()">Cancel</button></div></div>'
+    : "";
   return '<div class="kn">' + knLead("How you like things to look. Every agent reads this before visual work, and your reactions to designs are added from every agent automatically.")
-    + '<p><button type="button" class="pri" onclick="post(\'design/rebuild\',{})">Rebuild from feedback</button></p>'
-    + prof + groups + said + "</div>";
+    + '<p class="kn-controls"><button type="button" class="pri" onclick="window.dz_edit=1;render()">Edit the ideology</button>'
+    + '<button type="button" onclick="post(\'design/rebuild\',{})">Rebuild from feedback</button></p>'
+    + add + edit + (window.dz_edit ? "" : prof) + groups + said + "</div>";
 };
 
 function knOcOpen(kind, id, agentName) {
