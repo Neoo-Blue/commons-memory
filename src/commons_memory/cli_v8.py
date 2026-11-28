@@ -40,7 +40,7 @@ def add_parsers(sub) -> None:
     i.add_argument("--agent", help="agent name to mention (omit with 'all': each AI's MCP config identifies it)")
     v = sub.add_parser("vault", help="the credential vault: store keys (value on stdin, encrypted), list, remove, "
                                      "and see the decision agent's log")
-    v.add_argument("action", choices=["set", "list", "rm", "decisions"])
+    v.add_argument("action", choices=["set", "link", "export", "list", "rm", "decisions"])
     v.add_argument("name", nargs="?")
     v.add_argument("--service", help="service name shown to agents and the judge, e.g. plex")
     v.add_argument("--base-url", action="append", default=[], help="URL prefix the key may be sent to (repeatable)")
@@ -49,6 +49,13 @@ def add_parsers(sub) -> None:
     v.add_argument("--risk", default="normal", choices=["low", "normal", "high"],
                    help="high = every write goes to the user; low = reads need no judgment")
     v.add_argument("--description", default="")
+    v.add_argument("--ref", help="link: the Bitwarden item to read at use time, bw://<item-uuid>/<field> (password, username, "
+                                 "totp, notes, uri or a custom field); needs COMMONS_BW_FOLDER, see docs/configuration.md")
+    v.add_argument("--to", choices=["bitwarden"], help="export: where to copy the stored credentials. This copies DECRYPTED "
+                   "secrets out of Commons: the Bitwarden account becomes as sensitive as the vault key, so use a dedicated "
+                   "account or a folder other than COMMONS_BW_FOLDER")
+    v.add_argument("--folder", default="Commons backup", help="export: the Bitwarden folder to write into (default %(default)s)")
+    v.add_argument("--dry-run", action="store_true", help="export: report what would change, write nothing")
     q = sub.add_parser("quota", help="agent usage windows: sync them into a hub, install the 10-minute job, or print them")
     q.add_argument("action", choices=["sync", "status", "install"])
     q.add_argument("--url", help="Commons MCP url (http://host:8770/mcp)")
@@ -540,6 +547,21 @@ def handle(args, store) -> int:
             print(json.dumps(V.decisions(store), indent=2))
         elif args.action == "rm":
             print(json.dumps(V.remove(store, args.name)))
+        elif args.action == "link":
+            if not args.name or not args.ref:
+                print("vault link NAME --ref bw://<item-uuid>/<field> --base-url URL ...", file=sys.stderr)
+                return 2
+            auth = V.parse_auth(args.auth, args.extra_header)
+            print(json.dumps(V.link(store, args.name, args.ref, args.service or args.name, args.base_url, auth,
+                                    args.description, args.risk)))
+        elif args.action == "export":
+            if args.to != "bitwarden":
+                print("vault export --to bitwarden [--folder NAME] [--dry-run]", file=sys.stderr)
+                return 2
+            from . import bitwarden
+            r = bitwarden.export(store, args.folder, args.dry_run)
+            print(json.dumps(r, indent=2))
+            return 1 if r["failed"] or r["skipped_too_large"] else 0
         else:
             auth = V.parse_auth(args.auth, args.extra_header)
             print(json.dumps(V.add(store, args.name, sys.stdin.read(), args.service or args.name, args.base_url, auth,

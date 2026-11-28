@@ -59,7 +59,7 @@ def migrate(db) -> None:
     from .facts import add_columns
     add_columns(db, [("vault_creds", "deposited_by", "TEXT"), ("vault_creds", "username", "TEXT"),
                      ("vault_creds", "kind", "TEXT"), ("vault_decisions", "pending", "TEXT"),
-                     ("vault_creds", "purpose", "TEXT"), ("vault_creds", "scope", "TEXT")])
+                     ("vault_creds", "purpose", "TEXT"), ("vault_creds", "scope", "TEXT"), ("vault_creds", "ref", "TEXT")])
 
 
 def parse_auth(spec: str, extra_headers: list[str] | None = None) -> dict:
@@ -305,7 +305,10 @@ def _seal(s: Store, name: str, value: str) -> bytes:
 
 
 def _value(s: Store, name: str) -> str:
-    r = s.q("SELECT secret FROM vault_creds WHERE name=?", (name,))
+    r = s.q("SELECT secret, ref FROM vault_creds WHERE name=?", (name,))
+    if r and r[0]["ref"]:  # linked to a Bitwarden item: read at the moment of use, nothing is stored here
+        from . import bitwarden
+        return bitwarden.resolve(r[0]["ref"])
     if not r or not r[0]["secret"]:
         raise CommonsError(f"credential {name} has no value stored (commons vault set {name} on the hub)")
     blob = bytes(r[0]["secret"])
@@ -323,6 +326,8 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     optional "extra_headers"."""
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,39}", name or ""):
         raise CommonsError("name: 2-40 chars of a-z, 0-9, _ or -, starting with a letter or digit")
+    if s.q("SELECT 1 FROM vault_creds WHERE name=? AND ref IS NOT NULL", (name,)):  # no value may land beside a link
+        raise CommonsError(f"{name} is linked to Bitwarden: `commons vault rm {name}` first to store a value instead")
     value = (value or "").strip()
     if not value:
         raise CommonsError("empty value (pipe it on stdin)")
@@ -343,6 +348,46 @@ def add(s: Store, name: str, value: str, service: str, base_urls: list[str], aut
     return {"name": name, "service": service, "base_urls": urls, "risk": risk, "stored": True} | (
         {} if urls else {"next": f"Stored. It can't be sent anywhere until you give the hosts it belongs to: "
                                   f"vault_hosts(name='{name}', base_urls=['https://api.example.com'])."})
+
+
+def link(s: Store, name: str, ref: str, service: str, base_urls: list[str], auth: dict, description: str = "",
+         risk: str = "normal") -> dict:
+    """Owner only (CLI on the hub): make a credential out of a Bitwarden item. Nothing secret is stored: the value is read
+    through bw:// each time it is used. Never reachable from an MCP tool or the dashboard, so no agent can point a
+    credential at a Bitwarden item."""
+    from . import bitwarden
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,39}", name or ""):
+        raise CommonsError("name: 2-40 chars of a-z, 0-9, _ or -, starting with a letter or digit")
+    item, field = bitwarden.parse_ref(ref)
+    urls = [u.rstrip("/") + "/" for u in base_urls or [] if urllib.parse.urlparse(u).scheme in ("http", "https")]
+    if not urls:
+        raise CommonsError("give at least one http(s) base URL the key may be sent to")
+    if not any(k in auth for k in ("header", "query", "bearer", "basic")):
+        raise CommonsError("auth needs header, query, bearer or basic")
+    if risk not in ("low", "normal", "high", "always"):
+        raise CommonsError("risk is low, normal, high or always (always: every use allowed without asking)")
+    old = s.q("SELECT ref, base_urls, auth FROM vault_creds WHERE name=?", (name,))
+    if old and not old[0]["ref"]:
+        raise CommonsError(f"{name} holds a stored value: `commons vault rm {name}` first to link it instead")
+    new_ref = f"bw://{item}/{urllib.parse.quote(field)}"
+    bitwarden.resolve(ref)  # the item must be readable now (same refusals as at use time); the value is dropped here
+    s.x("INSERT INTO vault_creds(name,service,description,base_urls,auth,risk,secret,ref,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,NULL,?,?,?) ON CONFLICT(name) DO UPDATE SET service=excluded.service, "
+        "description=COALESCE(NULLIF(excluded.description,''),vault_creds.description), base_urls=excluded.base_urls, "
+        "auth=excluded.auth, risk=excluded.risk, ref=excluded.ref, updated_at=excluded.updated_at",
+        (name, service, description, json.dumps(urls), json.dumps(auth), risk, new_ref, now(), now()))
+    if old and (old[0]["ref"], old[0]["base_urls"], old[0]["auth"]) != (new_ref, json.dumps(urls), json.dumps(auth)):
+        # another item, host or auth: what was approved (or is waiting for the owner) for the old one must not carry over
+        s.x("DELETE FROM vault_grants WHERE cred=?", (name,))
+        waiting = [r["question_id"] for r in s.q("SELECT question_id FROM vault_decisions WHERE cred=? AND verdict='ask_user'",
+                                                 (name,)) if r["question_id"]]
+        s.x("UPDATE vault_decisions SET verdict='superseded', reason='the credential was re-linked', pending=NULL "
+            "WHERE cred=? AND verdict='ask_user'", (name,))
+        for q in waiting:  # the question goes with it, so an agent asking again gets a fresh one
+            s.x("UPDATE board SET status='dropped', evidence='the credential was re-linked', closed_at=?, updated_at=? "
+                "WHERE id=? AND status IN ('open','doing','blocked')", (now(), now(), q))
+    s.audit(None, "vault.link", name, {"service": service, "base_urls": urls, "risk": risk, "field": field})
+    return {"name": name, "service": service, "base_urls": urls, "risk": risk, "linked": "bitwarden"}
 
 
 SYMBOLS = "-_.!@#%^*+="
@@ -396,6 +441,8 @@ def reveal(s: Store, agent_id: str, name: str, justification: str) -> dict:
     if not r:
         raise CommonsError(f"unknown credential {name!r}")
     cred = dict(r[0])
+    if cred.get("ref"):
+        raise CommonsError("a credential linked to Bitwarden is never revealed; it is used through use_credential")
     if cred.get("kind") != "login":
         raise CommonsError("only logins can be revealed; API keys are used through use_credential and never shown")
     if len((justification or "").strip()) < 15:
@@ -438,9 +485,10 @@ def remove(s: Store, name: str) -> dict:
 def listing(s: Store) -> list[dict]:
     return [{"credential": r["name"], "service": r["service"], "description": r["description"],
              "base_urls": json.loads(r["base_urls"]), "risk": r["risk"], "stored": bool(r["secret"]),
+             **({"source": "bitwarden"} if r["ref"] else {}),
              "kind": r["kind"] or "api_key", "from": s.label(r["deposited_by"])[1] if r["deposited_by"] else "the user",
              **({"username": r["username"]} if r["username"] else {}), **notes_of(s, r["name"])}
-            for r in s.q("SELECT name, service, description, base_urls, risk, secret, kind, username, deposited_by "
+            for r in s.q("SELECT name, service, description, base_urls, risk, secret, ref, kind, username, deposited_by "
                          "FROM vault_creds ORDER BY name")]
 
 
