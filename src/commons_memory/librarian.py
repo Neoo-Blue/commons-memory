@@ -108,8 +108,11 @@ class Librarian:
 
     # ------------------------------------------------------------------ proposals
     def _propose(self, kind, target, payload, reason) -> str | None:
-        if self.s.q("SELECT 1 FROM librarian_proposals WHERE kind=? AND target=? AND status='proposed'", (kind, target)):
+        if self.s.q("SELECT 1 FROM librarian_proposals WHERE kind=? AND target=? AND status IN ('proposed','waits_owner')",
+                    (kind, target)):
             return None
+        if kind == "flag_stale" and self.auto_approve():
+            return None  # nothing anyone would do with it: in auto mode an old note just stays searchable
         pid = new_id("lbp")
         self.s.x("INSERT INTO librarian_proposals VALUES(?,?,?,?,?,?,?,?)",
                  (pid, kind, target, json.dumps(payload), reason, "proposed", now(), None))
@@ -135,6 +138,69 @@ class Librarian:
             out["status"] = "applied"
         self.s.x("UPDATE librarian_proposals SET status=?, decided_at=? WHERE id=?", (out["status"], now(), proposal_id))
         return out
+
+    def settle(self) -> dict:
+        """Auto mode: decide every queued proposal and open conflict without the owner. Merges apply; stale flags are
+        dismissed; a contradiction keeps the newer note (the older is superseded, undoable); a skill version with a
+        clean scan is approved when it is the newest pending one, any other is rejected (a high-severity scan is never
+        approved). Only what Canon reserves for the owner (owner-only facts) is left, marked waits_owner."""
+        done = {"merged": 0, "dismissed": 0, "resolved": 0, "skills_approved": 0, "skills_rejected": 0, "waits_owner": 0}
+        aid = self.agent_id
+
+        def close(pid, status):
+            self.s.x("UPDATE librarian_proposals SET status=?, decided_at=? WHERE id=?", (status, now(), pid))
+
+        for c in self.s.list_conflicts():
+            a, b = self.s.get_item(c["a"]), self.s.get_item(c["b"])
+            if not a or not b:
+                continue
+            keep = b["id"] if (b.get("created_at") or "") >= (a.get("created_at") or "") else a["id"]
+            try:
+                self.s.resolve_conflict(c["id"], keep, agent_id=aid)
+                done["resolved"] += 1
+            except CommonsError:
+                pass  # owner-only Canon, or not ours to change: stays open for the owner
+        for p in self.proposals():
+            pay = p["payload"]
+            if p["kind"] == "merge":
+                try:
+                    self._merge(new_id("run"), pay["keep"], pay["dup"])
+                    close(p["id"], "applied")
+                    done["merged"] += 1
+                except CommonsError:
+                    close(p["id"], "rejected")
+                    done["dismissed"] += 1
+            elif p["kind"] == "flag_conflict":
+                still = self.s.q("SELECT 1 FROM conflicts WHERE id=? AND status='open'", (pay.get("conflict"),))
+                close(p["id"], "waits_owner" if still else "applied")
+                done["waits_owner" if still else "dismissed"] += 1
+            elif p["kind"] == "skill_review":
+                close(p["id"], self._settle_skill(p["target"], done))
+            else:
+                close(p["id"], "dismissed")
+                done["dismissed"] += 1
+        return done
+
+    def _settle_skill(self, vid, done) -> str:
+        r = self.s.q("SELECT sv.*, s.name, s.active_version FROM skill_versions sv JOIN skills s ON s.id=sv.skill_id "
+                     "WHERE sv.id=?", (vid,))
+        if not r or r[0]["status"] not in ("pending", "flagged"):
+            return "dismissed"
+        v = r[0]
+        newest = self.s.q("SELECT MAX(version) m FROM skill_versions WHERE skill_id=? AND status IN ('pending','flagged')",
+                          (v["skill_id"],))[0]["m"]
+        risky = [f for f in json.loads(v["findings"] or "[]") if f.get("severity")]  # injection hits; a redacted key is not
+        from .skillpool import SkillPool
+        ok = (v["status"] == "pending" and not risky and v["version"] == newest
+              and (v["active_version"] or 0) < v["version"])
+        try:
+            SkillPool(self.s).review(v["name"], v["version"], ok, notes="librarian auto mode: " +
+                                     ("clean scan, newest version" if ok else "flagged, has findings, or superseded"),
+                                     by_user=True)
+        except CommonsError:
+            return "dismissed"
+        done["skills_approved" if ok else "skills_rejected"] += 1
+        return "applied" if ok else "rejected"
 
     def _merge(self, run_id, keep, dup) -> str:
         """dup is superseded by keep. Never a Canon fact or the decision that set one, whatever proposed it (a proposal
@@ -176,6 +242,8 @@ class Librarian:
         report["contradictions"] = self._contradictions(run_id, items)
         report["flags"] = self._flags(run_id)
         report["skills_tidied"] = self._skills(run_id)
+        if self.auto_approve():
+            report["settled"] = self.settle()
         from .kb import KB
         report["kb_rebuilt"] = KB(self.s).refresh_dirty(force=True)
         report["summaries"] = self._summaries(run_id)

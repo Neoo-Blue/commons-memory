@@ -2,6 +2,15 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.46.0: the librarian settles its own queue
+- **Why.** The owner: "There are so many things ... that need to be manually approved. I want it to be fully
+  automated." With auto-approve on, the hub still held 492 proposals (238 conflict flags, 104 merges, 81 stale flags,
+  69 skill reviews) and 43 open contradictions, because auto-approve covered only new merges.
+- In auto mode every librarian run now decides the whole queue: merges apply; stale flags are no longer raised and old
+  ones are dismissed; a contradiction keeps the newer note (the older is superseded and can be undone); a skill version
+  with a clean scan is approved when it is the newest pending one, others are rejected (a high-severity scan is never
+  approved). What Canon reserves for the owner (owner-only facts) still waits for the owner, marked `waits_owner`.
+
 ## v0.45.1: add and edit your own design rules
 - The Design page takes your own rules and suggestions (kind and where it applies), saved at full confidence, and lets
   you edit the ideology itself, saved as a new version. `POST /api/design/add`, `POST /api/design/profile`.
