@@ -2,6 +2,21 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## v0.45.0: a design ideology every agent reads
+- **Why.** The owner: "a dedicated design ideology memory ... what user liked, what user did not like, what style user
+  usually prefer, what is a hard no ... to deliver a better, more consistent design style", captured from every agent.
+- **Captured from every agent.** Each user prompt that reacts to a design (hooks and `turn()`, so every connected AI)
+  is kept as design feedback, in the user's own words.
+- **Rules.** `design_feedback(text, section, surface)` records a rule as a design preference (hard_no, strong,
+  tendency, liked, rejected, vocabulary, process; surface marketing, dashboard, app, tool, email, mobile, brand).
+  They decay and reinforce like every preference and appear on the Preferences page too.
+- **The ideology.** `design_profile(surface)` returns the distilled profile, the live rules (hard nos first) and the
+  feedback newer than the profile. `design_evidence()` gathers everything for a rewrite and `design_profile_set(body)`
+  saves a new version; `design_rebuild()` does both on the `design_distiller` model role when one is set.
+- Pickup names the tool when a profile or rules exist; the playbook tells agents to read it before visual work.
+- **A Design page** under Knowledge: the current version, the rules by section with confirm and forget, and your
+  captured words with the agent that heard them. `GET /api/design`, `POST /api/design/rebuild`.
+
 ## v0.44.2: takeovers follow the schedule's split
 - A missed external run's takeover used the fixed plan, execute, verify split whatever the schedule said; it now uses
   the schedule's pattern (still plan, execute, verify unless the owner handed it to the planner). On the live hub that

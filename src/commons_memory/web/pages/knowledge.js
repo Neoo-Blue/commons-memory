@@ -765,6 +765,38 @@ V["Preferences"] = async function () {
     + "</div>";
 };
 
+V["Design"] = async function () {
+  knBegin("Design");
+  const d = knNeed(await api("design")) || {};
+  const secs = d.sections || {};
+  const rules = Array.isArray(d.rules) ? d.rules : [];
+  const fb = Array.isArray(d.feedback) ? d.feedback : [];
+  const p = d.profile;
+  const groups = Object.keys(secs).map(k => {
+    const rs = rules.filter(r => r.section === k);
+    if (!rs.length) return "";
+    return '<h3 class="kn-dh">' + E(secs[k]) + '</h3><div class="list">' + rs.map(x =>
+      '<div class="row kn-pref"><div class="row-content"><input value="' + E(x.statement || "") + '" aria-label="Design rule">'
+      + '<div class="kn-sub"><span>' + E(x.surface || "every surface") + "</span><span>" + Math.round((x.confidence || 0) * 100) + "%"
+      + (x.observations ? " · " + x.observations + " seen" : "") + "</span><span>" + E(x.source || "") + "</span></div></div>"
+      + '<div class="row-actions kn-always"><button type="button" class="pri" data-kn="pref-save" data-id="' + E(x.id) + '">Confirm</button>'
+      + '<button type="button" class="bad" data-kn="pref-forget" data-id="' + E(x.id) + '">Forget</button></div></div>').join("") + "</div>";
+  }).join("");
+  const prof = p
+    ? '<div class="card kn-design"><div class="kn-sub"><span>Version ' + E(String(p.version)) + "</span><span>" + E((p.updated || "").slice(0, 10))
+      + "</span><span>" + E(p.agent || "") + "</span>" + (d.since_profile ? "<span>" + d.since_profile + " new reactions since</span>" : "")
+      + '</div><div class="kn-md">' + E(p.body || "") + "</div></div>"
+    : K.empty({ icon: "Design", title: "No design ideology yet", hint: "Any agent can write one from your design feedback (design_evidence, then design_profile_set)." });
+  const said = fb.length
+    ? '<h3 class="kn-dh">Your words, captured from every agent</h3><div class="list">' + fb.map(f =>
+      '<div class="row"><div class="row-content"><div>' + E(f.text || "") + '</div><div class="kn-sub"><span>' + E((f.at || "").slice(0, 10))
+      + "</span><span>" + E(f.project || "") + "</span><span>" + E(f.agent || "") + "</span></div></div></div>").join("") + "</div>"
+    : "";
+  return '<div class="kn">' + knLead("How you like things to look. Every agent reads this before visual work, and your reactions to designs are added from every agent automatically.")
+    + '<p><button type="button" class="pri" onclick="post(\'design/rebuild\',{})">Rebuild from feedback</button></p>'
+    + prof + groups + said + "</div>";
+};
+
 function knOcOpen(kind, id, agentName) {
   if (kind === "agent" && agentName && window.K && K.drawer) { K.drawer.openId("agent:" + agentName); return true; }
   if (kind === "job" && id && window.K && K.drawer) { K.drawer.openId("job:" + id); return true; }

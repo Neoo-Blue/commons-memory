@@ -224,6 +224,46 @@ def register_v2(mcp, store, who):
             who(agent, api_key)
         return _js(orch.prefs.forget(pref_id or None, everything))
 
+    # ------------------------------------------------------------ design ideology
+    from .design import Design as _Design
+    design = _Design(store, orch.prefs)
+
+    @mcp.tool()
+    def design_profile(surface: str = "", project: str = "", max_tokens: int = 2500) -> str:
+        """READ BEFORE ANY VISUAL OR UI WORK: how this user wants things to look. The distilled design ideology, the
+        live design rules (hard nos first) and the user's newest design feedback. surface narrows it: marketing |
+        dashboard | app | tool | email | mobile | brand."""
+        return design.profile(surface, project or None, max_tokens)["text"]
+
+    @mcp.tool()
+    def design_feedback(text: str, section: str = "strong", surface: str = "", project: str = "", evidence: str = "",
+                        agent: str = "", api_key: str = "") -> str:
+        """Record the user's reaction to a design as a rule, in their terms. section: hard_no | strong | tendency |
+        liked | rejected | vocabulary | process. evidence: the user's own words and date. Repeats reinforce."""
+        aid = me(agent, api_key)
+        return _js(design.feedback(text, section=section, surface=surface, project=project or None, evidence=evidence,
+                                   source=f"agent:{store.label(aid)[1]}"))
+
+    @mcp.tool()
+    def design_evidence(max_chars: int = 200000) -> str:
+        """Everything Commons holds about the user's design taste (their own words, rules, agent notes), for
+        writing or revising the design ideology with design_profile_set."""
+        from .design import DISTILL_PROMPT
+        ev = design.evidence(max_chars=max_chars)
+        return "INSTRUCTIONS:\n" + DISTILL_PROMPT + "\n\n" + ev["text"]
+
+    @mcp.tool()
+    def design_profile_set(body: str, sources: str = "", agent: str = "", api_key: str = "") -> str:
+        """Save a new version of the design ideology (markdown, written from design_evidence). Old versions stay."""
+        aid = me(agent, api_key)
+        return _js(design.profile_set(body, agent_id=aid, sources=sources))
+
+    @mcp.tool()
+    def design_rebuild(agent: str = "", api_key: str = "") -> str:
+        """Re-distill the design ideology from all evidence on the design_distiller model role (or say how to)."""
+        aid = me(agent, api_key)
+        return _js(design.rebuild(aid))
+
     # ------------------------------------------------------------ knowledge base & graph views
     from .graphexport import export as _export
     from .graphlinks import rebuild as _rebuild
