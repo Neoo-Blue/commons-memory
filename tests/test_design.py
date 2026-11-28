@@ -72,3 +72,42 @@ def test_owner_adds_rules_and_edits_the_profile_on_the_page(tmp_path):
         assert "design/add" in PAGE and "design/profile" in PAGE
     finally:
         srv.shutdown()
+
+
+def test_librarian_auto_mode_settles_the_queue_without_the_owner(store):
+    from commons_memory.librarian import Librarian
+    lib = Librarian(store)
+    lib.configure(auto_approve=True)
+    a = store.add_item("memory", "the hub runs on port 8770", project="p")
+    b = store.add_item("memory", "the hub runs on port 9000", project="p")
+    store.x("INSERT INTO conflicts VALUES(?,?,?,?,?,?,?)", ("cfl_t1", a["id"], b["id"], "text", "contradicts", "open", 1.0))
+    d1 = store.add_item("memory", "dup one", project="p")
+    d2 = store.add_item("memory", "dup one again", project="p")
+    store.x("INSERT INTO librarian_proposals VALUES(?,?,?,?,?,?,?,?)",
+            ("lbp_m", "merge", d1["id"], '{"keep": "%s", "dup": "%s"}' % (d2["id"], d1["id"]), "dup", "proposed", 1.0, None))
+    store.x("INSERT INTO librarian_proposals VALUES(?,?,?,?,?,?,?,?)",
+            ("lbp_s", "flag_stale", a["id"], "{}", "old", "proposed", 1.0, None))
+    got = lib.settle()
+    assert got["resolved"] == 1 and got["merged"] == 1 and got["dismissed"] >= 1
+    assert store.get_item(a["id"])["superseded_by"] == b["id"]  # the newer note wins
+    assert store.get_item(d1["id"])["superseded_by"] == d2["id"]
+    assert lib.proposals() == [] and store.list_conflicts() == []
+    assert lib._propose("flag_stale", d2["id"], {}, "old") is None  # auto mode queues no stale flags
+
+
+def test_librarian_auto_mode_reviews_pending_skills(store):
+    from commons_memory.librarian import Librarian
+    from commons_memory.skillpool import SkillPool
+    sp = SkillPool(store)
+    a = store.ensure_agent("ada")
+    sp.publish("tidy", "---\nname: tidy\n---\nSort the files by date.", agent_id=a)
+    sp.update("tidy", "---\nname: tidy\n---\nSort the files by date, newest first.", agent_id=a)
+    vs = store.q("SELECT id, version, status FROM skill_versions ORDER BY version")
+    assert [v["status"] for v in vs] == ["pending", "pending"]
+    lib = Librarian(store)
+    lib.configure(auto_approve=True)
+    for v in vs:
+        lib._propose("skill_review", v["id"], {}, "pending")
+    got = lib.settle()
+    assert got["skills_approved"] == 1 and got["skills_rejected"] == 1
+    assert [r["status"] for r in store.q("SELECT status FROM skill_versions ORDER BY version")] == ["rejected", "active"]
