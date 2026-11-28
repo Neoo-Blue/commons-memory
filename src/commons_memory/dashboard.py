@@ -241,6 +241,14 @@ class API:
     def prefs(self, q):
         return self.o.prefs.get(include_all=True, max_tokens=100000)["preferences"]
 
+    def design(self, q):
+        from .design import SECTIONS, Design
+        d = Design(self.s, self.o.prefs)
+        p = d.latest()
+        return {"profile": p and {k: p[k] for k in ("id", "version", "body", "agent", "updated")},
+                "rules": d.rules(), "feedback": d.recent_feedback(0, 40), "sections": SECTIONS,
+                "since_profile": len(d.recent_feedback(p["ts"], 200)) if p else None}
+
     def capacity(self, q):
         from . import quota as Q
         from . import schedules as SC
@@ -683,6 +691,9 @@ class API:
             return self.o.prefs.forget(body.get("id"), bool(body.get("everything")))
         if path == "/api/prefs/confirm":
             return self.o.prefs.confirm(body["id"], body.get("statement") or None)
+        if path == "/api/design/rebuild":
+            from .design import Design
+            return Design(self.s, self.o.prefs).rebuild()
         if path == "/api/conflicts/resolve":
             return self.s.resolve_conflict(body["id"], body["keep"])
         if path == "/api/recurring/update":

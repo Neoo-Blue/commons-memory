@@ -45,6 +45,7 @@ Commons is the shared memory and task hub for all of the user's AIs. Follow this
 5) board_add(kind=ask) every user request verbatim (+ targets/actions); board_update(done) only with evidence.
    A decision only the user can make: board_add(kind=question); the answer arrives in msg_recv.
    remember() durable facts, record_decision(what, why), observe_preference() when the user corrects you.
+   Visual or UI work: design_profile(surface) first; the user reacts to a design: design_feedback(text, section).
 6) Limits: quota_report your usage windows; near a limit subtask_pause(checkpoint) or quota_exhausted(), never
    abandon work. Scheduled tasks: schedule_report them and schedule_ran after every run.
 7) Other agents: summon() wakes them and says who is ready; who(name) shows anyone's card, checked by the hub, and

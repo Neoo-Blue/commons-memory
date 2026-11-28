@@ -1648,6 +1648,13 @@ class Orchestrator:
         text = "\n".join(lines) or "Nothing pending."
         if prefs["text"]:
             text += "\n\n" + prefs["text"]
+        try:
+            from .design import Design
+            dp = Design(self.s, self.prefs).pointer()
+        except Exception:  # noqa: BLE001 - never cost a check-in
+            dp = ""
+        if dp:
+            text += "\n" + dp
         if digest:
             text += "\n\n" + digest
         while estimate_tokens(text) > max_tokens and "\n" in text:

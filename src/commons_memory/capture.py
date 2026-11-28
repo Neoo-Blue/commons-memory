@@ -212,6 +212,11 @@ class Capture:
             if st["prompts"] and text.strip():
                 self._raw(agent_id, pid, skey, harness, event, "prompt", _clip(text, 4000), {})
                 self.verbatim(agent_id, project, skey, harness, "user", text)
+                try:  # the user's words about a design reach the design ideology, whichever agent heard them
+                    from .design import Design
+                    Design(self.s).capture(strip_private(text), project=project, agent_id=agent_id, session_id=skey)
+                except Exception:  # noqa: BLE001 - never cost the prompt its capture
+                    pass
             return {"ok": True, "context": ctx}
         if event == "tool":
             if st["tools"]:
