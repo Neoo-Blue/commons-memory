@@ -694,6 +694,16 @@ class API:
         if path == "/api/design/rebuild":
             from .design import Design
             return Design(self.s, self.o.prefs).rebuild()
+        if path == "/api/design/add":  # the owner's own rule: full confidence from the start
+            from .design import Design
+            return Design(self.s, self.o.prefs).feedback(
+                body.get("text", ""), section=body.get("section", "strong"), surface=body.get("surface", ""),
+                evidence=body.get("evidence", "") or "added by the owner on the Design page",
+                source="owner:dashboard", confidence=1.0)
+        if path == "/api/design/profile":  # the owner edits the ideology: saved as a new version
+            from .design import Design
+            return Design(self.s, self.o.prefs).profile_set(body.get("body", ""),
+                                                            sources="edited by the owner on the Design page")
         if path == "/api/conflicts/resolve":
             return self.s.resolve_conflict(body["id"], body["keep"])
         if path == "/api/recurring/update":
