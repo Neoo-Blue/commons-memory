@@ -12,6 +12,11 @@ COMMONS_BACKUP_DIR	Backup directory (default `~/.commons/backups`)
 COMMONS_BACKUP_KEEP	Number of backups to keep
 COMMONS_BACKUP_KEY	Secret ref used to encrypt backups
 COMMONS_BG_POLL	Background loop tick in seconds
+COMMONS_BW_BIN	The Bitwarden CLI for credentials linked to Bitwarden (`commons vault link`) and `commons vault export --to bitwarden` (default `bw` on PATH)
+COMMONS_BW_FOLDER	The one Bitwarden folder (by name) Commons may read for credentials linked to Bitwarden; an item outside it is refused (limits what a mistaken or malicious link could reach), and unset refuses every read. `*` allows the whole vault (not recommended: a personal API key plus master password opens everything and Bitwarden has no per-item scoping). `commons vault export` refuses to write into this folder, so backups and linked items stay apart
+COMMONS_BW_PASSWORD_FILE	File holding the Bitwarden master password: when BW_SESSION is not set, Commons runs `bw unlock --passwordfile` itself and keeps the session key in process memory only (`bw login` must have been done once on the hub)
+COMMONS_BW_SYNC_S	Seconds between `bw sync` runs before a linked credential is read (default 300; 0 = never sync, and then reads never go stale-refused). If syncs keep failing, bw's local copy is served for at most an hour after the last good sync, then reads are refused
+COMMONS_BW_WRITE_PAUSE_S	Seconds `commons vault export --to bitwarden` waits between writes to stay under Bitwarden's rate limits (default 0.2)
 COMMONS_CF_ACCESS_AS_AUTH	Treat a valid Cloudflare Access identity as an agent principal (`1`)
 COMMONS_CF_ACCESS_AUD	Cloudflare Access application audience tag to verify
 COMMONS_CF_ACCESS_CERTS	Cloudflare Access certs URL override

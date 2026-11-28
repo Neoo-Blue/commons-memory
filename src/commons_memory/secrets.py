@@ -142,7 +142,10 @@ class CommonsVaultBackend:
 
     def resolve(self, ref: str) -> str:
         from .vault import _value
-        return _value(self.store, ref.split("://", 1)[1])
+        name = ref.split("://", 1)[1]
+        if self.store.q("SELECT 1 FROM vault_creds WHERE name=? AND ref IS NOT NULL", (name,)):
+            raise CommonsError(f"{name} is linked to Bitwarden: it is used through use_credential only")  # a lease hands the value to an agent's process
+        return _value(self.store, name)
 
 
 class OnePasswordBackend:

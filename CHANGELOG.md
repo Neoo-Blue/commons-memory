@@ -2,6 +2,29 @@
 
 All notable changes, newest first. The README describes the current release only; deep dives live in [docs/](docs/).
 
+## Unreleased
+- **Bitwarden: link an item into the vault.** `commons vault link NAME --ref bw://<item-uuid>/<field> --base-url ...`
+  (field: password, username, totp, notes, uri or a custom field's name) makes a credential with no stored value:
+  `use_credential` reads it from Bitwarden through the `bw` CLI at the moment of use, with the same base URLs, auth, risk,
+  judges, approvals and scrubbing. This is the only route to Bitwarden: there is no `bw://` secret-broker scheme, because
+  an agent can register any reference and lease it. Only the owner CLI creates a link (checked readable at link time); no
+  agent tool or dashboard route can set or change one, `vault_reveal` refuses it, a `commons://NAME` lease refuses a
+  linked name, and re-linking a name to a different item, host or auth drops its grants and voids requests waiting for approval.
+- **Bitwarden scope.** Commons reads only the one folder `COMMONS_BW_FOLDER` names (unset refuses every read; `*` allows
+  the whole vault and is not recommended). An item outside it is refused with the words used for one that does not
+  exist. Item ids must be UUIDs (`bw get item` treats anything else as a name search). `BW_SESSION`, or
+  `COMMONS_BW_PASSWORD_FILE` to have Commons unlock `bw` itself, supplies the session; it reaches `bw` through the
+  environment only, never argv. `bw sync` runs at most every `COMMONS_BW_SYNC_S` seconds; after a failed sync Commons
+  waits a minute, serving from `bw`'s local copy if it has synced before, for at most an hour.
+- **Bitwarden: `commons vault export --to bitwarden`.** Copies every stored credential into a Bitwarden folder (default
+  `Commons backup`) as a login item matched by a `commons_name` field, creating or updating in place and never
+  deleting. Each run overwrites the item's name, notes, username, password, URIs and `commons_*` fields; other fields
+  and a TOTP you added are kept. `--dry-run` writes nothing; values Bitwarden's limits would refuse are
+  `skipped_too_large`; one failed write does not stop the run; the summary and audit row hold counts and names, never a
+  value. It copies decrypted secrets out of Commons: use a dedicated Bitwarden account. It refuses the
+  `COMMONS_BW_FOLDER` folder, so backups and linked items stay apart. See [docs/bitwarden.md](docs/bitwarden.md).
+- **Tested against a fake `bw`** and checked against the CLI source (2026.11.1), not run against a live Bitwarden account.
+
 ## v0.45.0: a design ideology every agent reads
 - **Why.** The owner: "a dedicated design ideology memory ... what user liked, what user did not like, what style user
   usually prefer, what is a hard no ... to deliver a better, more consistent design style", captured from every agent.

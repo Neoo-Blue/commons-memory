@@ -20,6 +20,11 @@ All settings are environment variables; CLI flags override them where both exist
 | `COMMONS_BACKUP_KEEP` | `7` | Number of backups to keep | retention.py |
 | `COMMONS_BACKUP_KEY` | — | Secret ref used to encrypt backups | retention.py |
 | `COMMONS_BG_POLL` | `2` | Background loop tick in seconds | background.py |
+| `COMMONS_BW_BIN` | — | The Bitwarden CLI for credentials linked to Bitwarden (`commons vault link`) and `commons vault export --to bitwarden` (default `bw` on PATH) | bitwarden.py |
+| `COMMONS_BW_FOLDER` | — | The one Bitwarden folder (by name) Commons may read for credentials linked to Bitwarden; an item outside it is refused (limits what a mistaken or malicious link could reach), and unset refuses every read. `*` allows the whole vault (not recommended: a personal API key plus master password opens everything and Bitwarden has no per-item scoping). `commons vault export` refuses to write into this folder, so backups and linked items stay apart | bitwarden.py |
+| `COMMONS_BW_PASSWORD_FILE` | — | File holding the Bitwarden master password: when BW_SESSION is not set, Commons runs `bw unlock --passwordfile` itself and keeps the session key in process memory only (`bw login` must have been done once on the hub) | bitwarden.py |
+| `COMMONS_BW_SYNC_S` | `300` | Seconds between `bw sync` runs before a linked credential is read (default 300; 0 = never sync, and then reads never go stale-refused). If syncs keep failing, bw's local copy is served for at most an hour after the last good sync, then reads are refused | bitwarden.py |
+| `COMMONS_BW_WRITE_PAUSE_S` | `0.2` | Seconds `commons vault export --to bitwarden` waits between writes to stay under Bitwarden's rate limits (default 0.2) | bitwarden.py |
 | `COMMONS_CALL_TIMEOUT` | `300` | Seconds a remote CLI/worker call to the hub may take before it fails and is retried by the caller (default 300) | worker.py |
 | `COMMONS_CAPTURE` | `1` | Global switch for hook auto-capture (0 disables everywhere) | capture.py |
 | `COMMONS_CF_ACCESS_AS_AUTH` | — | Treat a valid Cloudflare Access identity as an agent principal (`1`) | auth.py |
